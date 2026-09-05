@@ -10,6 +10,7 @@ import { createDesktop } from './backend/desktop.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from './backend/audio.mjs';
 import { ApiError } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
+import { createTerminals } from './backend/terminals.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
 import { message, publicErrorParameters, requestLocale } from './backend/i18n.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
@@ -146,6 +147,7 @@ export async function createApp(options = {}) {
   const audio = options.audio || await createAudioStore(initialized.dataDir, { env });
   const limits = createLimits();
   const live = createLiveStreaming(desktop);
+  const terminals = options.terminals || createTerminals(initialized.dataDir, { env });
   const activeRequests = new Set();
   let shuttingDown = false, closingPromise;
 
@@ -213,8 +215,22 @@ export async function createApp(options = {}) {
           json(res, 200, await limits.action(() => desktop.action(value)));
         }); return;
       }
+      if (pathname === '/api/terminals' && req.method === 'GET') { json(res, 200, await terminals.list()); return; }
+      const terminalRoute = pathname.match(/^\/api\/terminals\/([^/]+)(?:\/(input|resize))?$/);
+      if (req.method === 'POST' && (pathname === '/api/terminals' || terminalRoute?.[2])) {
+        if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
+        await limits.only('body', 8, async () => {
+          const body = await readBody(req, 24 * 1024);
+          let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
+          const result = terminalRoute ? await terminals[terminalRoute[2]](terminalRoute[1], value) : await terminals.create(value);
+          json(res, terminalRoute ? 200 : 201, result);
+        }); return;
+      }
+      if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { json(res, 200, await terminals.read(terminalRoute[1])); return; }
+      if (terminalRoute && !terminalRoute[2] && req.method === 'DELETE') { json(res, 200, await terminals.remove(terminalRoute[1])); return; }
       if (pathname === '/api/screenshot' && req.method === 'GET') {
-        const bytes = await limits.only('screenshot', 1, () => desktop.screenshot(query.get('monitor') ?? undefined));
+        if (query.getAll('scale').length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
+        const bytes = await limits.only('screenshot', 1, () => desktop.screenshot(query.get('monitor') ?? undefined, query.has('scale') ? Number(query.get('scale')) : undefined));
         res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': bytes.length, 'Cache-Control': 'no-store' }); res.end(bytes); return;
       }
       if (pathname === '/api/stream' && req.method === 'GET') {
@@ -281,6 +297,7 @@ export async function createApp(options = {}) {
     shuttingDown = true;
     limits.stop();
     live.close();
+    const terminalsClosed = Promise.resolve(terminals.close?.());
     closingPromise = (async () => {
       const closed = Promise.all(servers.map(listener => new Promise(resolve => listener.close(() => resolve()))));
       // Abort unfinished bodies/downloads; their handlers still join the drain.
@@ -291,6 +308,7 @@ export async function createApp(options = {}) {
       for (const socket of sockets) socket.destroy();
       await Promise.allSettled([...activeRequests]);
       await limits.drain();
+      await terminalsClosed;
       await Promise.resolve(desktop.close?.()).catch(() => {});
       await audio.close?.();
       await closed;

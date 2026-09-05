@@ -21,16 +21,19 @@ These English previews show the running app connected to a read-only review inst
 | Touchpad | Pointer movement, tap to click, two-finger scrolling, drag and right click |
 | Keyboard | Send text and common shortcuts to the current PC window |
 | Windows | Browse windows and workspaces, then focus the one you want |
-| Monitor view | Select a monitor, watch live frames, pause, zoom or use fullscreen |
+| Monitor view | Opens first. Watch live, rotate, pinch, or freeze a full-resolution frame to read |
+| Terminals | Read and type in dedicated text sessions, with explicit Enter and desktop attachment |
 | Media | Volume, mute, playback and track controls |
 | Voice | Record, review, send to the PC and play back. Android recording verification is still in progress |
 | Pairing | Pair once. The app remembers the connection across restarts |
 
 Live view uses authenticated MJPEG with profiles up to 10 frames per second. It does not stream system audio. This is intended for desktop control and checking progress, not gaming or high-frame-rate remote video.
 
+See the [screen and terminal guide](docs/screen-and-terminals.md) for the new navigation and session behavior. These changes target the next alpha; physical Redmi verification of this revision is pending.
+
 ## Try it
 
-You need an active Omarchy/Hyprland graphical session, Node.js 22+, Python 3.12+, OpenSSL 3, and Tailscale connected on both devices. Desktop capabilities use `hyprctl`, `ydotool`/`ydotoold`, `wtype`, `grim`, `wpctl`, `ffmpeg` and `ffplay`. The input service needs your user's existing access to `/dev/uinput`.
+You need an active Omarchy/Hyprland graphical session, Node.js 22+, Python 3.12+, OpenSSL 3, and Tailscale connected on both devices. Desktop capabilities use `hyprctl`, `ydotool`/`ydotoold`, `wtype`, `grim`, `wpctl`, `ffmpeg` and `ffplay`. Text sessions also require `tmux`. The input service needs your user's existing access to `/dev/uinput`.
 
 ```sh
 git clone https://github.com/LucasOl1337/ponte.git

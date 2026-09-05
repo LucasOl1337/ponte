@@ -113,6 +113,7 @@ test('Android permission dialog keeps the pending microphone request, while back
   const calls = [];
   const context = vm.createContext({
     window: {addEventListener: (_event, callback) => { listener = callback; }},
+    nativePaused: false, terminalTimer: null, terminalGeneration: 0, clearTimeout() {},
     leaveScreen: () => calls.push('screen'), stopDrag: () => calls.push('drag'),
     cancelPendingRecording: () => calls.push('pending'), stopRecording: () => calls.push('recording'), closeMicrophone: () => calls.push('microphone'),
   });

@@ -1,4 +1,32 @@
 export const messages = {
+  "TERMINAL_IN_COPY_MODE": {
+    "en": "This terminal is in copy mode. Exit that mode in the PC terminal before sending input.",
+    "pt": "Este terminal está no modo de cópia. Saia desse modo no terminal do PC antes de enviar comandos."
+  },
+  "TERMINAL_UNAVAILABLE": {
+    "en": "Terminals are unavailable. Check that tmux is installed and private terminal storage is accessible.",
+    "pt": "Terminais indisponíveis. Verifique se o tmux está instalado e se o armazenamento privado está acessível."
+  },
+  "TERMINAL_NOT_FOUND": {
+    "en": "This terminal session is no longer available.",
+    "pt": "Esta sessão de terminal não está mais disponível."
+  },
+  "TERMINAL_CHANGED": {
+    "en": "This terminal was changed outside Ponte and cannot be controlled here.",
+    "pt": "Este terminal foi alterado fora do Ponte e não pode ser controlado aqui."
+  },
+  "TERMINAL_LIMIT_REACHED": {
+    "en": "Four terminals are already open. Close one to create another.",
+    "pt": "Já existem quatro terminais abertos. Feche um para criar outro."
+  },
+  "INVALID_TERMINAL_SIZE": {
+    "en": "Terminal size must be 20–240 columns and 8–100 rows.",
+    "pt": "O terminal deve ter de 20 a 240 colunas e de 8 a 100 linhas."
+  },
+  "INVALID_TERMINAL_INPUT": {
+    "en": "Send either text or one terminal key.",
+    "pt": "Envie texto ou uma tecla do terminal."
+  },
   "HOST_NOT_ALLOWED": {
     "en": "This host is not allowed.",
     "pt": "Host não autorizado."

@@ -301,9 +301,11 @@ public final class LoopbackProxy implements Closeable {
                     || uri.getRawPath() == null || uri.getRawPath().contains("%") || !target.matches("[\\x21-\\x7e]+")) throw new ProxyError(400, "proxy_path");
             String path = uri.getRawPath();
             boolean staticGet = STATIC_PATHS.contains(path) && (method.equals("GET") || method.equals("HEAD"));
-            boolean apiGet = method.equals("GET") && (path.matches("/api/(health|state|screenshot|stream|audio)") || path.matches("/api/audio/[A-Za-z0-9_-]{1,100}"));
-            boolean apiPost = method.equals("POST") && (path.matches("/api/(action|audio)") || path.equals("/api/audio/stop") || path.matches("/api/audio/[A-Za-z0-9_-]{1,100}/play"));
-            if (!(staticGet || apiGet || apiPost)) throw new ProxyError(404, "proxy_path_denied");
+            boolean terminalItem = path.matches("/api/terminals/[a-f0-9]{24}");
+            boolean apiGet = method.equals("GET") && (path.matches("/api/(health|state|screenshot|stream|audio|terminals)") || path.matches("/api/audio/[A-Za-z0-9_-]{1,100}") || terminalItem);
+            boolean apiPost = method.equals("POST") && (path.matches("/api/(action|audio|terminals)") || path.equals("/api/audio/stop") || path.matches("/api/audio/[A-Za-z0-9_-]{1,100}/play") || path.matches("/api/terminals/[a-f0-9]{24}/(input|resize)"));
+            boolean apiDelete = method.equals("DELETE") && terminalItem;
+            if (!(staticGet || apiGet || apiPost || apiDelete)) throw new ProxyError(404, "proxy_path_denied");
             Map<String, String> headers = new LinkedHashMap<>();
             for (int index = 1; index < lines.length; index++) {
                 if (lines[index].isEmpty()) continue;

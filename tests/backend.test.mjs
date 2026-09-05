@@ -133,7 +133,7 @@ test('state normalizes live desktop output and marks degraded integrations', asy
   const response = await f.request('/api/state');
   assert.equal(response.status, 200);
   const state = await response.json();
-  assert.deepEqual(state.activeWindow, window);
+  assert.deepEqual(state.activeWindow, {...window,monitor:null});
   assert.deepEqual(state.volume, { value: 0.67, muted: true });
   assert.deepEqual(state.monitors, [{ name: 'DP-1', width: 1920, height: 1080, focused: true }]);
   assert.deepEqual(state.workspaces, [{ id: 3, name: '3', windows: 1 }]);
@@ -183,6 +183,18 @@ test('focus and screenshot require a monitor/window in live state', async t => {
   assert.equal(screenshot.headers.get('cache-control'), 'no-store');
   assert.deepEqual(f.calls.at(-1).args, ['-t', 'jpeg', '-q', '72', '-s', '0.65', '-o', 'DP-1', '-']);
   assert.equal((await f.request('/api/screenshot?monitor=DP-1%3Bexec%20sh')).status, 400);
+  assert.equal(f.calls.filter(call => call.command === 'grim').length, 1);
+});
+
+test('reading at original resolution uses a bounded full-size screenshot without increasing live-stream limits', async t => {
+  const f = await fixture(t);
+  for (const query of ['scale=1.01', 'scale=0', 'scale=', 'scale=NaN', 'scale=1&scale=0.5']) {
+    assert.equal((await f.request(`/api/screenshot?monitor=DP-1&${query}`)).status, 400, query);
+  }
+  assert.equal(f.calls.filter(call => call.command === 'grim').length, 0);
+  assert.equal((await f.request('/api/screenshot?monitor=DP-1&scale=1')).status, 200);
+  assert.deepEqual(f.calls.at(-1).args, ['-t', 'jpeg', '-q', '90', '-s', '1', '-o', 'DP-1', '-']);
+  assert.equal((await f.request('/api/stream?monitor=DP-1&scale=1')).status, 400);
   assert.equal(f.calls.filter(call => call.command === 'grim').length, 1);
 });
 

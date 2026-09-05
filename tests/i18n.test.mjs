@@ -31,7 +31,7 @@ test('Locale handles plurals, decimal sizes, parameterized feedback and escaped 
 
 test('Every app page works in English, including internal Windows navigation and safe dynamic workspace labels',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();assert.equal(h.el('#hostname').textContent,'test-desktop');assert.equal(h.el('#window-count').textContent,'1 WINDOW');assert.equal(h.el('[data-window]').getAttribute('aria-label'),'Focus Notes <private>, workspace 1');assert.equal(h.el('#home-workspaces').querySelectorAll('button').length,1);
- for(const page of ['inicio','controle','janelas','voz']){h.run(`navigate('${page}')`);assert.equal(h.el('#page-'+page).hidden,false);assert.equal(h.el(`.nav-item[data-nav="${page}"]`).getAttribute('aria-current'),'page');}await flush();assert.match(h.el('#recording-list').textContent,/No recordings yet/);assert.ok(h.calls.every(call=>call.options.headers['Accept-Language']==='en'));assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
+ h.run("navigate('inicio')");assert.equal(h.el('#page-inicio').hidden,false);for(const page of ['tela','controle','terminais','janelas','voz']){h.run(`navigate('${page}')`);assert.equal(h.el('#page-'+page).hidden,false);assert.equal(h.el(`.nav-item[data-nav="${page}"]`).getAttribute('aria-current'),'page');}await flush();assert.match(h.el('#recording-list').textContent,/No recordings yet/);assert.ok(h.calls.every(call=>call.options.headers['Accept-Language']==='en'));assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
 });
 
 test('Changing language preserves drafted text, selection, active controls, preview and live session without sending actions',async()=>{
@@ -77,4 +77,33 @@ test('Network failures are localized for both ordinary API requests and monitor 
 
 test('Saved recording dates and sizes relocalize in place without restarting browser playback or replacing its title',async()=>{
  const createdAt='2026-09-05T12:34:00.000Z';const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async path=>({ok:true,json:async()=>path==='/api/audio'?{recordings:[{id:'synthetic',name:'My own recording <title>',createdAt,size:1.5*1024*1024}]}:fixture})});await flush();h.run("navigate('voz')");await flush();const card=h.el('[data-recording="synthetic"]'),player=card.querySelector('audio'),date=card.querySelector('[data-i18n-date]');player.src='blob:already-loaded';player.currentTime=24.5;player.paused=false;assert.equal(date.textContent,new Date(createdAt).toLocaleString('en',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}));h.i18n.setLanguage('pt');await flush();assert.equal(card.querySelector('audio'),player);assert.equal(player.src,'blob:already-loaded');assert.equal(player.currentTime,24.5);assert.equal(player.paused,false);assert.equal(card.querySelector('strong').textContent,'My own recording <title>');assert.equal(date.textContent,new Date(createdAt).toLocaleString('pt-BR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}));assert.match(card.textContent,/1,5 MB/);assert.match(card.textContent,/Tocar no PC/);
+});
+
+test('Screen is the first destination and native pause prevents polling from restarting capture',async()=>{
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
+ assert.equal(h.run('currentPage'),'tela');assert.equal(h.el('#page-tela').hidden,false);
+ h.window.dispatchEvent({type:'ponte-native-pause'});await flush();
+ const before=h.calls.filter(call=>call.path.startsWith('/api/stream')).length;
+ await h.run('pollState()');await flush();
+ assert.equal(h.calls.filter(call=>call.path.startsWith('/api/stream')).length,before);
+ assert.equal(h.run('screenIsVisible()'),false);
+ h.window.dispatchEvent({type:'ponte-native-resume'});await flush();
+ assert.equal(h.run('screenIsVisible()'),true);
+ assert.ok(h.calls.filter(call=>call.path.startsWith('/api/stream')).length>before);
+});
+
+test('Terminal text remains readable above empty pane rows and relocalizes without losing input or pause',async()=>{
+ const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'synthetic attachment'};
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async path=>({ok:true,json:async()=>path==='/api/terminals'?{available:true,sessions:[session],limit:4}:path.startsWith('/api/terminals/')?{...session,text:'Output belongs to the session\n$ '+ '\n'.repeat(23)}:fixture})});await flush();
+ h.run("navigate('terminais')");await flush();await flush();
+ assert.equal(h.el('#terminal-output').textContent,'Output belongs to the session\n$ ');
+ h.el('#terminal-input').value='Unsent terminal draft';h.run('terminalPaused=true;terminalControls()');
+ h.i18n.setLanguage('pt');await flush();
+ assert.equal(h.el('#terminal-pause').textContent,'Retomar leitura');
+ assert.equal(h.el('#terminal-status').textContent,'Conectado à sessão de texto.');
+ h.i18n.setLanguage('en');await flush();
+ assert.equal(h.el('#terminal-pause').textContent,'Resume output');
+ assert.equal(h.el('#terminal-status').textContent,'Connected to the text session.');
+ assert.equal(h.el('#terminal-input').value,'Unsent terminal draft');
+ assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
 });

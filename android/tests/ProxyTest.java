@@ -21,6 +21,8 @@ public final class ProxyTest {
         final AtomicReference<String> origin = new AtomicReference<>();
         final AtomicReference<String> referer = new AtomicReference<>();
         final AtomicReference<String> language = new AtomicReference<>();
+        final AtomicReference<String> method = new AtomicReference<>();
+        final AtomicReference<String> target = new AtomicReference<>();
         final AtomicReference<byte[]> body = new AtomicReference<>();
         final AtomicBoolean redirect = new AtomicBoolean();
         final CountDownLatch streamOpened = new CountDownLatch(1);
@@ -37,6 +39,7 @@ public final class ProxyTest {
                 hits.incrementAndGet(); auth.set(exchange.getRequestHeaders().getFirst("Authorization"));
                 origin.set(exchange.getRequestHeaders().getFirst("Origin")); referer.set(exchange.getRequestHeaders().getFirst("Referer"));
                 language.set(exchange.getRequestHeaders().getFirst("Accept-Language"));
+                method.set(exchange.getRequestMethod()); target.set(exchange.getRequestURI().toString());
                 body.set(exchange.getRequestBody().readAllBytes());
                 if (redirect.get()) { exchange.getResponseHeaders().set("Location", "/api/audio"); exchange.sendResponseHeaders(302, -1); exchange.close(); return; }
                 if (exchange.getRequestURI().getPath().equals("/api/stream")) {
@@ -74,6 +77,54 @@ public final class ProxyTest {
     static LoopbackProxy proxy(Remote remote, Path cert, String host) throws Exception {
         try (InputStream input = Files.newInputStream(cert)) { return new LoopbackProxy(remote.uri(host), input, 0); }
     }
+    static void terminalRoutes(LoopbackProxy proxy, Remote remote) throws Exception {
+        String item = "/api/terminals/0123456789abcdef01234567";
+        String[][] allowed = {
+            {"GET", "/api/terminals", ""}, {"GET", item + "?lang=pt", ""},
+            {"POST", "/api/terminals", "{\"cols\":80,\"rows\":24}"},
+            {"POST", item + "/input", "{\"text\":\"printf hello;\"}"},
+            {"POST", item + "/resize", "{\"cols\":40,\"rows\":16}"}, {"DELETE", item, ""}
+        };
+        for (String[] route : allowed) {
+            int before = remote.hits.get();
+            String headers = "Authorization: Bearer terminal-test-only\r\nOrigin: " + proxy.origin() + "\r\nContent-Type: application/json\r\nContent-Length: " + route[2].length() + "\r\n";
+            String response = raw(proxy, request(proxy, route[0], route[1], headers) + route[2]);
+            check(response.startsWith("HTTP/1.1 200"), "terminal route forwarded: " + route[0] + " " + route[1]);
+            check(remote.hits.get() == before + 1 && route[0].equals(remote.method.get()) && route[1].equals(remote.target.get()), "terminal method and target preserved");
+            check(Arrays.equals(route[2].getBytes(StandardCharsets.UTF_8), remote.body.get()), "terminal request bytes preserved, DELETE remains empty");
+            check("Bearer terminal-test-only".equals(remote.auth.get()) && remote.origin.get() == null, "terminal bearer preserved and loopback Origin removed");
+        }
+        int before = remote.hits.get();
+        String[][] denied = {
+            {"HEAD", "/api/terminals"}, {"PUT", "/api/terminals"}, {"DELETE", "/api/terminals"},
+            {"POST", item}, {"PATCH", item}, {"HEAD", item}, {"OPTIONS", item},
+            {"GET", item + "/input"}, {"GET", item + "/resize"}, {"DELETE", item + "/input"},
+            {"POST", item + "/play"}, {"POST", item + "/input/"},
+            {"GET", "/api/terminals/"}, {"GET", item + "/"}, {"GET", "/api/terminals-extra"},
+            {"GET", "/api/terminals/0123456789ABCDEF01234567"},
+            {"GET", "/api/terminals/0123456789abcdef0123456"},
+            {"GET", "/api/terminals/0123456789abcdef012345678"},
+            {"POST", "/api/terminals/gggggggggggggggggggggggg/input"},
+            {"DELETE", "/api/terminals/not-a-managed-id"},
+            {"GET", item + ";kill-server"}, {"GET", "/api/terminals/../state"}
+        };
+        for (String[] route : denied) check(raw(proxy, request(proxy, route[0], route[1], "")).startsWith("HTTP/1.1 404"), "unlisted terminal method/path/ID denied: " + route[0] + " " + route[1]);
+        for (String path : new String[]{"/api/terminals/%30" + "1".repeat(23), item + "%2finput", item + "#fragment"}) {
+            check(raw(proxy, request(proxy, "GET", path, "")).startsWith("HTTP/1.1 400"), "encoded or fragmented terminal path denied");
+        }
+        check(raw(proxy, request(proxy, "DELETE", item, "Content-Length: 1\r\n") + "x").startsWith("HTTP/1.1 400"), "DELETE terminal with a body is rejected");
+        check(raw(proxy, request(proxy, "DELETE", item, "Transfer-Encoding: chunked\r\n") + "0\r\n\r\n").startsWith("HTTP/1.1 400"), "DELETE terminal with transfer encoding is rejected");
+        check(raw(proxy, request(proxy, "POST", item + "/input", "Origin: https://evil.example\r\n")).startsWith("HTTP/1.1 403"), "terminal Origin guard still applies");
+        check(remote.hits.get() == before, "denied terminal requests never reach upstream");
+
+        HttpURLConnection unicode = (HttpURLConnection) new URL(proxy.origin() + item + "/input").openConnection();
+        byte[] text = "{\"text\":\"ação; $(literal)\"}".getBytes(StandardCharsets.UTF_8);
+        unicode.setRequestMethod("POST"); unicode.setDoOutput(true); unicode.setFixedLengthStreamingMode(text.length);
+        unicode.setRequestProperty("Content-Type", "application/json"); unicode.setReadTimeout(5000);
+        try (OutputStream output = unicode.getOutputStream()) { output.write(text); }
+        check(unicode.getResponseCode() == 200 && Arrays.equals(text, remote.body.get()), "terminal Unicode JSON bytes stream unchanged");
+        unicode.disconnect();
+    }
     public static void main(String[] args) throws Exception {
         Path fixtures = Paths.get(args[0]);
         try (Remote remote = new Remote(fixtures.resolve("good.p12")); LoopbackProxy proxy = proxy(remote, fixtures.resolve("good.crt"), "127.0.0.1")) {
@@ -85,6 +136,7 @@ public final class ProxyTest {
             check(response.startsWith("HTTP/1.1 200"), "same-origin request accepted");
             check("Bearer test-only".equals(remote.auth.get()), "bearer preserved exactly");
             check(remote.origin.get() == null && remote.referer.get() == null, "local Origin and Referer removed upstream");
+            terminalRoutes(proxy, remote);
             check(raw(proxy, request(proxy, "GET", "/api/state", "Origin: https://evil.example\r\n")).startsWith("HTTP/1.1 403"), "foreign Origin denied");
             check(raw(proxy, "GET /api/state HTTP/1.1\r\nHost: evil.example\r\n\r\n").startsWith("HTTP/1.1 403"), "foreign Host denied");
             check(raw(proxy, request(proxy, "GET", "https://evil.example/", "")).startsWith("HTTP/1.1 400"), "absolute URL denied");

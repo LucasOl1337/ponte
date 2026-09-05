@@ -251,7 +251,11 @@ public final class MainActivity extends Activity {
         super.onResume(); paused = false; ++pauseGeneration;
         microphonePermission.resume();
         if (proxy != null) proxy.setPaused(false);
-        if (browser != null) { browser.onResume(); if (reloadOnResume) loadHome(); }
+        if (browser != null) {
+            browser.onResume();
+            if (reloadOnResume) loadHome();
+            else browser.evaluateJavascript("window.dispatchEvent(new Event('ponte-native-resume'));", null);
+        }
         resolveMicrophonePermission();
     }
     @Override public void onBackPressed() {

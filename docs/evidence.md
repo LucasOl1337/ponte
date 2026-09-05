@@ -49,3 +49,9 @@ MJPEG profiles top out at 10 fps and carry no system audio. Recording verificati
 The global release defaults to English and offers a persistent Portuguese preference. Browser previews use a separate local review instance connected to the PC, with desktop actions disabled for the review. They document the actual interface at a 390-pixel mobile viewport. They are not Android device captures.
 
 Original English browser captures: [touchpad](assets/app-en-control.png), [monitor controls](assets/app-en-screen.png), [voice interface](assets/app-en-voice.png). The original physical Redmi captures above remain unedited in Portuguese.
+
+## Next alpha: direct screen access and text terminals
+
+The [new screen and terminal guide](screen-and-terminals.md) records this revision separately. Its Chromium captures use a synthetic monitor and a real shell on a temporary private tmux socket. They demonstrate the running interface without using a person's desktop or terminal.
+
+The source passed 67 Node tests. The native adapter passed 98 proxy checks, 17 microphone lifecycle checks and seven configuration tests. These automated microphone checks do not complete the pending physical recording test. The updated personal APK compiled and passed package, signature, certificate and permission checks; it has not yet been installed on the Redmi.
