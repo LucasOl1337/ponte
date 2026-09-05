@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Set up and manage a private Ponte installation for the current Linux user."""
+import argparse
+import fcntl
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent
+SERVICE = 'ponte-remote.service'
+TAILNET = ipaddress.ip_network('100.64.0.0/10')
+
+
+def absolute(value, label):
+    result = Path(value)
+    if not result.is_absolute() or any(ord(char) < 32 for char in str(result)):
+        raise ValueError(f'{label} must be an absolute path without control characters.')
+    return result
+
+
+def paths():
+    home = absolute(os.environ.get('HOME', str(Path.home())), 'HOME')
+    config_home = absolute(os.environ.get('XDG_CONFIG_HOME', str(home / '.config')), 'XDG_CONFIG_HOME')
+    state_home = absolute(os.environ.get('XDG_STATE_HOME', str(home / '.local/state')), 'XDG_STATE_HOME')
+    config = absolute(os.environ.get('PONTE_CONFIG', str(config_home / 'ponte/config.json')), 'PONTE_CONFIG')
+    data = absolute(os.environ.get('OMARCHY_REMOTE_DATA', str(state_home / 'ponte')), 'OMARCHY_REMOTE_DATA')
+    return config, data, config_home
+
+
+def outside_repo(target):
+    if target.resolve().is_relative_to(ROOT):
+        raise ValueError('Private configuration, keys and state must stay outside the repository.')
+
+
+def private_dir(target):
+    outside_repo(target)
+    target.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if target.is_symlink() or not target.is_dir() or target.stat().st_uid != os.getuid():
+        raise ValueError(f'Private directory must be owned by this user and not a symlink: {target}')
+    target.chmod(0o700)
+
+
+def private_json(target, value):
+    private_dir(target.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix='.ponte-', dir=target.parent)
+    try:
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream, indent=2)
+            stream.write('\n')
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def load_config(target):
+    info = target.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid() or info.st_size > 65536:
+        raise ValueError('Ponte config must be a regular private file owned by this user, mode 0600.')
+    value = json.loads(target.read_text())
+    if not isinstance(value, dict) or value.get('schemaVersion') != 1:
+        raise ValueError('Unsupported Ponte configuration schema.')
+    return value
+
+
+def run(*args, capture=False):
+    return subprocess.run(args, check=True, text=True, capture_output=capture, timeout=30)
+
+
+def tailscale_ip(value):
+    try:
+        parsed = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as error:
+        raise ValueError('Use a canonical Tailscale IPv4 address.') from error
+    if parsed not in TAILNET or str(parsed) != value:
+        raise ValueError('Use a canonical Tailscale IPv4 address in 100.64.0.0/10.')
+    return str(parsed)
+
+
+def detect_tailscale():
+    addresses = run('tailscale', 'ip', '-4', capture=True).stdout.split()
+    if len(addresses) != 1:
+        raise ValueError('Could not detect one Tailscale IPv4 address. Connect Tailscale or use --local-only.')
+    return tailscale_ip(addresses[0])
+
+
+def dns_name():
+    try:
+        name = json.loads(run('tailscale', 'status', '--json', capture=True).stdout).get('Self', {}).get('DNSName', '').rstrip('.').lower()
+        return name if re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,252}', name) else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def make_tls(directory, host):
+    private_dir(directory)
+    ca_key, ca_cert = directory / 'ca.key', directory / 'ca.crt'
+    server_key, server_cert = directory / 'server.key', directory / 'server.crt'
+    request, extensions = directory / 'server.csr', directory / 'server.ext'
+    if any(directory.iterdir()):
+        raise ValueError(f'TLS directory is not empty; refusing to overwrite keys: {directory}')
+    extensions.write_text('\n'.join([
+        'basicConstraints=critical,CA:FALSE', 'keyUsage=critical,digitalSignature,keyEncipherment',
+        'extendedKeyUsage=serverAuth', f'subjectAltName=IP:{host}', '',
+    ]))
+    try:
+        run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '3650',
+            '-keyout', str(ca_key), '-out', str(ca_cert), '-subj', '/CN=Ponte installation CA',
+            '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign', capture=True)
+        run('openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-sha256',
+            '-keyout', str(server_key), '-out', str(request), '-subj', '/CN=Ponte server', capture=True)
+        run('openssl', 'x509', '-req', '-in', str(request), '-CA', str(ca_cert), '-CAkey', str(ca_key),
+            '-set_serial', str(secrets.randbits(128)), '-days', '365', '-sha256', '-extfile', str(extensions), '-out', str(server_cert), capture=True)
+        for target in [ca_key, ca_cert, server_key, server_cert]:
+            target.chmod(0o600)
+        run('openssl', 'verify', '-CAfile', str(ca_cert), '-verify_ip', host, str(server_cert), capture=True)
+    finally:
+        request.unlink(missing_ok=True)
+        extensions.unlink(missing_ok=True)
+    return {'host': host, 'certFile': str(server_cert), 'keyFile': str(server_key), 'caFile': str(ca_cert)}
+
+
+def setup(args):
+    config_file, data, _ = paths()
+    private_dir(config_file.parent)
+    with (config_file.parent / '.setup.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if config_file.exists() or config_file.is_symlink():
+            load_config(config_file)
+            print(f'Existing configuration preserved: {config_file}')
+            return
+        host = None if args.local_only else tailscale_ip(args.tailscale_ip) if args.tailscale_ip else detect_tailscale()
+        private_dir(data)
+        token_file = data / 'token'
+        if not token_file.exists():
+            with token_file.open('x') as stream:
+                stream.write(secrets.token_urlsafe(32) + '\n')
+        if token_file.is_symlink() or not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}\n?', token_file.read_text()):
+            raise ValueError('Invalid existing token file; refusing to replace it.')
+        token_file.chmod(0o600)
+        config = {'schemaVersion': 1, 'dataDir': str(data), 'http': {'host': '127.0.0.1', 'port': args.http_port}, 'trustedHosts': [], 'nativeTls': None}
+        if host:
+            tls = make_tls(config_file.parent / 'tls' / secrets.token_hex(8), host)
+            tls['port'] = args.native_port
+            config['nativeTls'] = tls
+            config['trustedHosts'].append(f'{host}:{args.native_port}')
+            if not args.tailscale_ip:
+                name = dns_name()
+                if name:
+                    config['trustedHosts'].append(name)
+        private_json(config_file, config)
+        print(f'Configuration created: {config_file}')
+        print('No service was started. Run ./ponte install or ./start.sh when ready.')
+
+
+def quoted_unit(value):
+    return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
+
+
+def install(config_file, config_home):
+    load_config(config_file)
+    commands = {name: shutil.which(name) for name in ['bash', 'node', 'ydotoold']}
+    missing = [name for name, value in commands.items() if not value]
+    if missing:
+        raise ValueError('Install these commands first: ' + ', '.join(missing))
+    units = config_home / 'systemd/user'
+    units.mkdir(parents=True, exist_ok=True)
+    input_unit = '\n'.join([
+        '# Managed by Ponte', '[Unit]', 'Description=Ponte private input daemon', f'PartOf={SERVICE}', '', '[Service]', 'Type=simple',
+        'UMask=0077', 'ExecStart=' + quoted_unit(commands['ydotoold']) + ' -p %t/ponte-input.sock -P 0600',
+        'Restart=on-failure', 'RestartSec=3', 'TimeoutStopSec=5', '',
+    ])
+    unit = '\n'.join([
+        '# Managed by Ponte', '[Unit]', 'Description=Ponte remote desktop control', 'After=graphical-session.target', 'PartOf=graphical-session.target',
+        'Wants=ponte-input.service', 'After=ponte-input.service', '', '[Service]', 'Type=simple', 'UMask=0077',
+        'Environment=' + quoted_unit('PONTE_CONFIG=' + str(config_file)),
+        'Environment=' + quoted_unit('PONTE_NODE=' + commands['node']),
+        'Environment=' + quoted_unit('PATH=' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')),
+        'ExecStart=' + quoted_unit(commands['bash']) + ' ' + quoted_unit(ROOT / 'start.sh'),
+        'Restart=on-failure', 'RestartSec=3', 'TimeoutStopSec=20', '', '[Install]', 'WantedBy=graphical-session.target', '',
+    ])
+    files = [(units / 'ponte-input.service', input_unit), (units / SERVICE, unit)]
+    for target, content in files:
+        if target.is_symlink() or (target.exists() and target.read_text() != content):
+            raise ValueError(f'Existing service differs; refusing to replace it: {target}')
+    for target, content in files:
+        target.write_text(content)
+    run('systemctl', '--user', 'daemon-reload')
+    run('systemctl', '--user', 'enable', '--now', SERVICE)
+    print('Ponte installed for this user’s graphical session.')
+
+
+def uninstall(config_home):
+    units = config_home / 'systemd/user'
+    targets = [units / SERVICE, units / 'ponte-input.service']
+    present = [target for target in targets if target.exists() or target.is_symlink()]
+    if not present:
+        print('No Ponte services are installed. Private data was preserved.')
+        return
+    for target in present:
+        if target.is_symlink() or not target.is_file() or not target.read_text().startswith('# Managed by Ponte\n'):
+            raise ValueError(f'Refusing to remove an unmanaged service: {target}')
+    if targets[0] in present:
+        run('systemctl', '--user', 'disable', '--now', SERVICE)
+    if targets[1] in present:
+        run('systemctl', '--user', 'stop', 'ponte-input.service')
+    for target in present:
+        target.unlink()
+    run('systemctl', '--user', 'daemon-reload')
+    print('Ponte services removed. Configuration, certificates, token and recordings were preserved.')
+
+
+def port(value):
+    value = int(value)
+    if not 1 <= value <= 65535:
+        raise argparse.ArgumentTypeError('Port must be between 1 and 65535.')
+    return value
+
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'pair', 'serve', 'android-config'])
+    parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')
+    parser.add_argument('--tailscale-ip', help='Explicit canonical Tailscale IPv4 instead of automatic detection.')
+    parser.add_argument('--http-port', type=port, default=8787)
+    parser.add_argument('--native-port', type=port, default=8788)
+    parser.add_argument('--url', help='App URL for an explicitly requested pairing link.')
+    args = parser.parse_args()
+    config_file, data, config_home = paths()
+    if args.command == 'setup':
+        if args.local_only and args.tailscale_ip:
+            parser.error('--local-only and --tailscale-ip cannot be combined.')
+        setup(args)
+    elif args.command == 'install':
+        install(config_file, config_home)
+    elif args.command == 'uninstall':
+        uninstall(config_home)
+    elif args.command in ['start', 'stop', 'restart', 'status']:
+        run('systemctl', '--user', args.command, SERVICE)
+    elif args.command == 'logs':
+        run('journalctl', '--user', '-u', SERVICE, '-n', '40', '--no-pager')
+    else:
+        config = load_config(config_file)
+        if args.command == 'pair':
+            from urllib.parse import urlsplit
+            data = absolute(os.environ.get('OMARCHY_REMOTE_DATA', config['dataDir']), 'dataDir')
+            token = (data / 'token').read_text().strip()
+            if not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', token):
+                raise ValueError('Invalid pairing token.')
+            if not args.url:
+                print(token)
+                return
+            url = args.url
+            parsed = urlsplit(url)
+            if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ['', '/'] or parsed.scheme not in ['http', 'https']:
+                raise ValueError('Use an HTTP(S) origin without credentials, a path, query or fragment.')
+            if parsed.scheme == 'http' and parsed.hostname not in ['127.0.0.1', 'localhost', '::1']:
+                raise ValueError('Remote pairing links require HTTPS.')
+            print(url.rstrip('/') + '/#pair=' + token)
+        elif args.command == 'android-config':
+            tls = config.get('nativeTls')
+            if not tls:
+                raise ValueError('This installation is local-only; native TLS is not configured.')
+            print(json.dumps({'schemaVersion': 1, 'upstream': f"https://{tls['host']}:{tls['port']}", 'certificatePath': tls['certFile'], 'caPath': tls['caFile']}))
+        elif args.command == 'serve':
+            name = dns_name()
+            if not name or name not in config.get('trustedHosts', []):
+                raise ValueError('Add this device’s Tailscale DNS name to trustedHosts and restart Ponte before enabling Serve.')
+            host = config['http']['host']
+            authority = f'[{host}]' if ':' in host else host
+            run('tailscale', 'serve', '--bg', f"http://{authority}:{config['http']['port']}")
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

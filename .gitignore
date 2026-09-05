@@ -1,0 +1,16 @@
+node_modules/
+.work/
+work/
+dist/
+.env
+.env.*
+*.apk
+*.aab
+*.pem
+*.crt
+*.key
+*.p12
+*.jks
+*.keystore
+__pycache__/
+*.pyc

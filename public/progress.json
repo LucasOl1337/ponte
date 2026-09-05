@@ -1,0 +1,42 @@
+{
+  "status": {
+    "en": "Experimental alpha",
+    "pt": "Alfa experimental"
+  },
+  "summary": {
+    "en": "Ponte for Omarchy",
+    "pt": "Ponte para Omarchy"
+  },
+  "phases": [
+    {
+      "title": {
+        "en": "Controls and live monitors",
+        "pt": "Controle e monitores ao vivo"
+      },
+      "status": {
+        "en": "Available",
+        "pt": "Disponível"
+      }
+    },
+    {
+      "title": {
+        "en": "Android recording",
+        "pt": "Gravação no Android"
+      },
+      "status": {
+        "en": "Verification in progress",
+        "pt": "Validação em andamento"
+      }
+    },
+    {
+      "title": {
+        "en": "Simpler first pairing",
+        "pt": "Pareamento inicial mais simples"
+      },
+      "status": {
+        "en": "Planned",
+        "pt": "Planejado"
+      }
+    }
+  ]
+}
