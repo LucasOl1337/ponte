@@ -1,6 +1,6 @@
 # Screen and terminals
 
-This revision makes the monitor the first page after pairing or reopening Ponte. Screen and Terminals each have a permanent bottom navigation button. The home icon opens the PC dashboard.
+This revision makes the monitor the first page after pairing or reopening Ponte. Screen and Terminals each have a permanent bottom navigation button. Control opens the touchpad or keyboard beside the same monitor. The home icon opens the PC dashboard.
 
 ## Read a monitor
 
@@ -11,6 +11,20 @@ Rotate your phone and tap fullscreen to give the monitor more room. Hide control
 **Freeze & read** requests one JPEG at the monitor's original resolution, then opens it at 1:1. This helps with small text that the live stream's reduced resolution cannot preserve. The timestamp identifies it as a still image. Use play to return to live view. Freeze is also available through the camera button in fullscreen.
 
 Live profiles remain capped at 10 fps and scale 0.65. A snapshot does not increase those limits. Full-resolution screenshots are bounded to 12 MiB and an eight-second capture timeout.
+
+## Control while watching
+
+Use **View**, **Touchpad** and **Keyboard** directly beneath the monitor. View gives the image more room. Touchpad keeps a live preview above the original pad in portrait, or beside it on a sideways phone. Keyboard keeps the image visible above or beside the text field, including when the Android keyboard reduces the available height. These modes are also available inside fullscreen.
+
+The same stream continues across mode changes. A manual pause stays paused, with the still-image timestamp visible. The monitor capture includes the PC cursor. Pan and pinch on the image change your phone view; the separate touchpad moves the PC pointer. One finger moves or taps, two fingers scroll or right-click, and Drag holds the left mouse button until Release. Hiding the input controls clears pending movement and releases a drag, including a press whose response arrives late.
+
+Keyboard text goes to the PC's focused window shown above the field. **Send text** sends the draft; Enter remains a separate action. The shortcuts scroll horizontally on narrow screens. Changing mode preserves unsent text.
+
+<img src="assets/live-controls-portrait.png" width="300" alt="Live monitor above the original touchpad in portrait">
+
+![Monitor beside the touchpad in landscape fullscreen](assets/live-controls-landscape.png)
+
+These are browser captures with a synthetic monitor. Browser checks cover pointer movement, taps, two-finger scrolling, uninterrupted streaming, keyboard viewport changes, explicit text sending, fullscreen input, draft preservation and releasing a delayed drag. The latest combined layout still needs its physical Redmi keyboard check.
 
 ## Work in a terminal
 

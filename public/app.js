@@ -17,7 +17,10 @@ let liveWanted = true;
 let nativePaused = false;
 const savedPreference = (key, fallback = '') => { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } };
 const savePreference = (key,value) => { try { localStorage.setItem(key,value); } catch {} };
-let controlMode = 'mouse';
+let controlMode = 'view';
+let lastInputMode = 'mouse';
+let remoteInputGeneration = 0;
+let viewportBaseline = {width:0,height:0};
 let chosenWorkspace = 'all';
 let windowSignature = '';
 let workspaceSignature = '';
@@ -240,15 +243,25 @@ async function pollState() {
   finally { polling = false; }
 }
 
-function navigate(page) {
-  if (!['inicio','tela','controle','terminais','janelas','voz'].includes(page)) return;
-  if (currentPage !== page) { stopDrag(); if (currentPage === 'tela') leaveScreen(); }
-  if (page === 'tela' && currentPage !== page) liveWanted = true;
+function isScreenPage(page) { return page === 'tela' || page === 'controle'; }
+
+function setPageLocation(page) {
   currentPage = page;
   document.body.setAttribute('data-current-page',page);
-  $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
   $$('.nav-item').forEach(element => { const active = element.dataset.nav === page; element.classList.toggle('active', active); if (active) element.setAttribute('aria-current','page'); else element.removeAttribute('aria-current'); });
   if (location.hash !== `#${page}`) history.replaceState(null,'',`${location.pathname}${location.search}#${page}`);
+}
+
+function navigate(page) {
+  if (!['inicio','tela','controle','terminais','janelas','voz'].includes(page)) return;
+  const wasScreen = isScreenPage(currentPage), nextScreen = isScreenPage(page);
+  if (currentPage !== page) resetRemoteInput();
+  if (wasScreen && !nextScreen) leaveScreen();
+  if (nextScreen && !wasScreen) liveWanted = true;
+  setPageLocation(page);
+  const visiblePage = page === 'controle' ? 'tela' : page;
+  $$('.page').forEach(element => { element.hidden = element.dataset.page !== visiblePage; });
+  if (nextScreen) selectControlMode(page === 'tela' ? 'view' : lastInputMode);
   window.scrollTo({top:0,behavior:'instant'});
   if (page === 'voz' && connected) loadAudio();
   reconcileLive();
@@ -256,22 +269,51 @@ function navigate(page) {
 }
 
 function selectControlMode(mode, focusTab = false) {
-  if (!['mouse','keyboard'].includes(mode)) return;
-  if (mode !== controlMode) stopDrag();
+  if (!['view','mouse','keyboard'].includes(mode)) return;
+  if (mode !== controlMode) resetRemoteInput();
+  if (mode !== 'keyboard' && document.activeElement === $('#keyboard-text')) $('#keyboard-text').blur();
   controlMode = mode;
+  if (mode !== 'view') lastInputMode = mode;
+  $('#screen-stage').setAttribute('data-input-mode',mode);
+  $('#screen-stage').classList.remove('controls-hidden');
+  $('#remote-controls').hidden = mode === 'view';
   $$('[data-control-panel]').forEach(panel => { panel.hidden = panel.dataset.controlPanel !== mode; });
   $$('[data-control-mode]').forEach(tab => {
     const active = tab.dataset.controlMode === mode;
     tab.classList.toggle('active',active);
-    tab.setAttribute('aria-selected',String(active));
+    tab.setAttribute('aria-pressed',String(active));
     tab.tabIndex = active ? 0 : -1;
     if (active && focusTab) tab.focus({preventScroll:true});
   });
+  if (isScreenPage(currentPage)) setPageLocation(mode === 'view' ? 'tela' : 'controle');
+  syncRemoteViewport();
+  applyScreenZoom();
   window.scrollTo({top:0,behavior:'instant'});
 }
 
+function syncRemoteViewport() {
+  const width = window.visualViewport?.width || window.innerWidth;
+  const height = window.visualViewport?.height || window.innerHeight;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+  if (Math.abs(width - viewportBaseline.width) > 100) viewportBaseline = {width,height};
+  else viewportBaseline.height = Math.max(viewportBaseline.height,height);
+  const keyboardOpen = controlMode === 'keyboard' && viewportBaseline.height - height > 100;
+  document.body.setAttribute('data-keyboard-open',String(keyboardOpen));
+  document.documentElement.style.setProperty('--remote-viewport-height',`${height}px`);
+  document.documentElement.style.setProperty('--remote-viewport-top',`${window.visualViewport?.offsetTop || 0}px`);
+  applyScreenZoom();
+}
+window.visualViewport?.addEventListener('resize',syncRemoteViewport);
+window.visualViewport?.addEventListener('scroll',syncRemoteViewport);
+window.addEventListener('resize',syncRemoteViewport);
+$('#keyboard-text').addEventListener('focus',syncRemoteViewport);
+$('#keyboard-text').addEventListener('blur',syncRemoteViewport);
+document.addEventListener('pointerdown',event => {
+  if (document.activeElement === $('#keyboard-text') && event.target.closest('#send-text,[data-key]')) event.preventDefault();
+});
+
 $('.control-tabs').addEventListener('keydown', event => {
-  const modes = ['mouse','keyboard'];
+  const modes = ['view','mouse','keyboard'];
   const current = modes.indexOf(controlMode);
   let next;
   if (event.key === 'ArrowRight') next = (current+1)%modes.length;
@@ -284,7 +326,10 @@ $('.control-tabs').addEventListener('keydown', event => {
 
 document.addEventListener('click', event => {
   const controlTab = event.target.closest('[data-control-mode]');
-  if (controlTab) selectControlMode(controlTab.dataset.controlMode);
+  if (controlTab) {
+    selectControlMode(controlTab.dataset.controlMode);
+    if (controlMode === 'keyboard') $('#keyboard-text').focus({preventScroll:true});
+  }
   const nav = event.target.closest('[data-nav]');
   if (nav) navigate(nav.dataset.nav);
   const app = event.target.closest('[data-app]');
@@ -396,7 +441,7 @@ class MjpegParser {
   }
 }
 
-function screenIsVisible() { return currentPage === 'tela' && !document.hidden && !nativePaused && !!token; }
+function screenIsVisible() { return isScreenPage(currentPage) && !document.hidden && !nativePaused && !!token; }
 function reconcileLive() { if (liveWanted && !liveSession && screenIsVisible() && connected && state?.capabilities?.live && $('#monitor-select').value) startLive(); }
 function sessionIsCurrent(session) { return liveSession === session && screenIsVisible(); }
 function updateScreenButtons() {
@@ -497,7 +542,7 @@ function exitScreenFullscreen() {
   $('#fullscreen-button').setAttribute('aria-label',t("Abrir tela cheia"));
   $('#fullscreen-button').innerHTML = icon('expand');
 }
-function leaveScreen() { stopLive(); cancelSnapshot(); exitScreenFullscreen(); }
+function leaveScreen() { resetRemoteInput(); stopLive(); cancelSnapshot(); exitScreenFullscreen(); }
 async function screenResponse(path,controller) {
   const requestToken = token;
   let response;
@@ -628,9 +673,10 @@ $('#fullscreen-button').addEventListener('click',async () => {
   $('#fullscreen-button').innerHTML = icon('close');
   applyScreenZoom();
 });
-$('#hide-screen-controls').addEventListener('click',() => { $('#screen-stage').classList.add('controls-hidden'); applyScreenZoom(); });
+$('#hide-screen-controls').addEventListener('click',() => { selectControlMode('view'); $('#screen-stage').classList.add('controls-hidden'); applyScreenZoom(); });
 $('#show-screen-controls').addEventListener('click',() => { $('#screen-stage').classList.remove('controls-hidden'); applyScreenZoom(); });
 window.addEventListener('resize',applyScreenZoom);
+if (window.ResizeObserver) new window.ResizeObserver(applyScreenZoom).observe($('#screen-preview'));
 window.addEventListener('keydown',event => { if (event.key === 'Escape') exitScreenFullscreen(); });
 document.addEventListener('fullscreenchange',() => {
   if (!document.fullscreenElement) { $('#screen-stage').classList.remove('controls-hidden'); $('#fullscreen-button').setAttribute('aria-label',t("Abrir tela cheia")); $('#fullscreen-button').innerHTML = icon('expand'); }
@@ -853,6 +899,17 @@ let movementTimer = null;
 let dragging = false;
 let dragTimer = null;
 
+function resetRemoteInput() {
+  remoteInputGeneration++;
+  const ids = [...pointers.keys()];
+  pointers.clear();
+  for (const id of ids) { if (touchpad.hasPointerCapture?.(id)) touchpad.releasePointerCapture(id); }
+  touchpad.classList.remove('touched');
+  clearInterval(movementTimer); movementTimer = null;
+  moveQueue = {dx:0,dy:0,scroll:0};
+  stopDrag();
+}
+
 async function flushMovement() {
   if (moving || !connected || !state?.capabilities?.mouse) return;
   const dx = Math.max(-1000,Math.min(1000,Math.round(moveQueue.dx)));
@@ -924,7 +981,9 @@ async function stopDrag() {
 }
 $('#drag-button').addEventListener('click', async () => {
   if (dragging) { stopDrag(); return; }
+  const generation = remoteInputGeneration;
   if (await action('mouse.drag',{pressed:true})) {
+    if (generation !== remoteInputGeneration) { action('mouse.drag',{pressed:false}); return; }
     dragging = true; updateDragButton(); toast(t("Arraste no touchpad. Toque em Soltar ao terminar."));
     dragTimer = setInterval(async () => {
       if (!connected || document.hidden) { stopDrag(); return; }

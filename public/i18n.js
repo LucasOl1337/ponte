@@ -2,6 +2,9 @@
 (() => {
   // Portuguese source messages are stable translation keys. English is the global default.
   const english = {
+  "Ver": "View",
+  "Ver e controlar": "View and control",
+  "Abra o touchpad ou teclado sem perder a imagem. Use Ver para expandir o monitor.": "Open the touchpad or keyboard while keeping the screen in view. Choose View to expand the monitor.",
   "Seu Omarchy ao alcance da mão. Controle seu PC, organize janelas e envie áudio pelo celular.": "Your Omarchy within reach. Control your PC, manage windows and send audio from your phone.",
   "Ponte — seu Omarchy, por perto": "Ponte — your Omarchy, within reach",
   "Ponte, início": "Ponte, home",

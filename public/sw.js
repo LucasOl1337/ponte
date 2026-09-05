@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'ponte-static-v6-screen-terminals';
+const CACHE = 'ponte-static-v7-live-controls';
 const FILES = ['/', '/index.html', '/styles.css', '/app.js', '/i18n.js', '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest', '/progress.html', '/progress.js'];
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener('activate', event => { event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('ponte-static-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())); });

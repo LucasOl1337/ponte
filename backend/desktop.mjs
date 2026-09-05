@@ -188,7 +188,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     const monitors = await readHypr('monitors');
     const monitor = requestedMonitor ?? monitors.find(m => m.focused)?.name ?? monitors[0]?.name;
     if (typeof monitor !== 'string' || monitor.length > 150 || !monitors.some(m => m.name === monitor)) throw new ApiError(400, 'INVALID_MONITOR');
-    return run('grim', ['-t', 'jpeg', '-q', scale === 1 ? '90' : '72', '-s', String(scale), '-o', monitor, '-'], { binary: true, timeout: 8000, maxBuffer: 12 * 1024 * 1024 });
+    return run('grim', ['-c', '-t', 'jpeg', '-q', scale === 1 ? '90' : '72', '-s', String(scale), '-o', monitor, '-'], { binary: true, timeout: 8000, maxBuffer: 12 * 1024 * 1024 });
   }
 
   async function prepareLive({ monitor: requestedMonitor, scale, signal }) {
@@ -198,7 +198,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     if (typeof monitor !== 'string' || monitor.length > 150 || !monitors.some(m => m.name === monitor)) throw new ApiError(400, 'INVALID_MONITOR');
     return {
       monitor,
-      capture: (captureSignal) => run('grim', ['-t', 'jpeg', '-q', '65', '-s', scale.toFixed(2), '-o', monitor, '-'], {
+      capture: (captureSignal) => run('grim', ['-c', '-t', 'jpeg', '-q', '65', '-s', scale.toFixed(2), '-o', monitor, '-'], {
         binary: true, signal: captureSignal, timeout: 4000, maxBuffer: 8 * 1024 * 1024,
       }),
     };
