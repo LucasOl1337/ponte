@@ -46,4 +46,6 @@ Browser checks cover initial live entry, manual pause during polling, return to 
 
 The backend suite covers private storage and socket ownership, exact targets, input validation, copy-mode races, interrupted creation cleanup, resource limits and HTTP authentication. Android proxy tests use real local synthetic HTTPS servers to check each terminal method/path, token forwarding, exact certificate pinning and request rejection. The personalized Android update compiles with the existing signing key.
 
-Physical Redmi testing of this revision remains pending. Earlier physical observations in [Evidence](evidence.md) belong to the previous development build.
+The personalized alpha.2 update (Android version code5) was installed over the previous app on the physical Redmi with its existing signing key. Pairing survived, reopening went directly to live Screen, landscape fullscreen displayed the real monitor, and terminal text was observed before pressing Enter and then executing. The Android soft keyboard opened, but its complete layout and input flow were not verified before the phone returned to other use. Physical microphone recording is still pending.
+
+Activity recreation exposed a loopback port-reuse failure during this test. A regression reproduced it before the fix; the updated proxy can immediately reopen its closed port while rejecting a second live listener. All 101 native proxy checks pass. Personal monitor captures remain private; the public previews above are synthetic.

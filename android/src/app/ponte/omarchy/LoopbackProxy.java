@@ -71,7 +71,7 @@ public final class LoopbackProxy implements Closeable {
         context.init(null, new TrustManager[]{pinnedTrust}, new SecureRandom());
         tls = context.getSocketFactory();
         server = new ServerSocket();
-        server.setReuseAddress(false);
+        server.setReuseAddress(true);
         try { server.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 12); }
         catch (IOException error) { closeQuietly(server); throw error; }
         host = "127.0.0.1:" + server.getLocalPort();

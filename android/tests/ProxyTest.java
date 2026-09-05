@@ -127,6 +127,23 @@ public final class ProxyTest {
     }
     public static void main(String[] args) throws Exception {
         Path fixtures = Paths.get(args[0]);
+        try (Remote remote = new Remote(fixtures.resolve("good.p12"))) {
+            int port;
+            try (LoopbackProxy first = proxy(remote, fixtures.resolve("good.crt"), "127.0.0.1")) {
+                port = URI.create(first.origin()).getPort();
+                check(raw(first, request(first, "GET", "/api/state", "")).startsWith("HTTP/1.1 200"), "first Activity serves a request before recreation");
+                boolean occupied = false;
+                try (InputStream cert = Files.newInputStream(fixtures.resolve("good.crt"));
+                     LoopbackProxy duplicate = new LoopbackProxy(remote.uri("127.0.0.1"), cert, port)) {
+                    throw new AssertionError("a live listener must keep exclusive ownership of its port");
+                } catch (BindException expected) { occupied = true; }
+                check(occupied, "another listener cannot share the live loopback port");
+            }
+            try (InputStream cert = Files.newInputStream(fixtures.resolve("good.crt"));
+                 LoopbackProxy recreated = new LoopbackProxy(remote.uri("127.0.0.1"), cert, port)) {
+                check(raw(recreated, request(recreated, "GET", "/api/state", "")).startsWith("HTTP/1.1 200"), "recreated Activity immediately serves the same origin after a completed request");
+            }
+        }
         try (Remote remote = new Remote(fixtures.resolve("good.p12")); LoopbackProxy proxy = proxy(remote, fixtures.resolve("good.crt"), "127.0.0.1")) {
             check(proxy.isLoopbackBound(), "listener must bind loopback only");
             String response = raw(proxy, request(proxy, "GET", "/api/state", ""));
