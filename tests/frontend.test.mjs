@@ -121,6 +121,7 @@ function mappingContext() {
     globalThis.classifyScreenGesture = classifyScreenGesture;
     globalThis.scaleMonitorRegion = scaleMonitorRegion;
     globalThis.regionsClose = regionsClose;
+    globalThis.nativePreviewRegion = nativePreviewRegion;
   `, context);
   return context;
 }
@@ -151,6 +152,15 @@ test('touch mapping converts zoom and pan into monitor pixels', () => {
   assert.equal(m.classifyScreenGesture({ pointerCount: 2, moved: false, durationMs: 20 }), 'pinch');
   assert.equal(m.scaleMonitorRegion({ x: 100, y: 100, w: 800, h: 600 }, 4, null, 1920, 1080), null);
   assert.equal(m.regionsClose({ x: 10, y: 10, w: 100, h: 100 }, { x: 12, y: 11, w: 101, h: 99 }), true);
+  const oneToOne = plain(m.nativePreviewRegion(390, 220, 1920, 1080, { x: 960, y: 540 }));
+  assert.deepEqual(oneToOne, { x: 765, y: 430, w: 390, h: 220 });
+  assert.equal(m.isFullMonitorRegion(oneToOne, 1920, 1080), false);
+  assert.ok(Math.abs(oneToOne.w / oneToOne.h - 390 / 220) < 0.02);
+  assert.equal(m.nativePreviewRegion(1920, 1080, 1920, 1080, { x: 960, y: 540 }), null);
+  const fitted = plain(m.nativePreviewRegion(2000, 2000, 1920, 1080, { x: 960, y: 540 }));
+  assert.deepEqual(fitted, { x: 420, y: 0, w: 1080, h: 1080 });
+  const pinched = plain(m.scaleMonitorRegion(null, 0.5, { x: 960, y: 540 }, 1920, 1080));
+  assert.deepEqual(pinched, { x: 480, y: 270, w: 960, h: 540 });
 });
 
 

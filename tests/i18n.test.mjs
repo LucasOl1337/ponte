@@ -98,13 +98,27 @@ test('Screen is the first destination and native pause prevents polling from res
 
 test('Direct touch maps taps to monitor pixels and keeps pan and pinch from clicking',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
+ assert.equal(h.el('#direct-touch-indicator').hidden,true);
  h.run("selectControlMode('touch')");
  assert.equal(h.run('controlMode'),'touch');
  assert.equal(h.el('#remote-controls').hidden,true);
  assert.equal(h.el('[data-control-mode="touch"]').getAttribute('aria-pressed'),'true');
  assert.equal(h.el('[data-control-mode="view"]').getAttribute('aria-pressed'),'false');
+ assert.equal(h.el('#screen-stage').getAttribute('data-input-mode'),'touch');
+ assert.equal(h.el('#direct-touch-indicator').hidden,false);
+ assert.match(h.el('#direct-touch-indicator').textContent,/Direct touch on/);
+ assert.match(h.el('.viewer-tip').textContent,/Tap = click/);
+ assert.match(h.el('#toast').textContent,/A tap now clicks the PC/);
+ assert.equal(h.el('#toast').hidden,false);
+ assert.equal(h.saved.get('ponte-direct-touch-seen'),'1');
  assert.match(h.el('#screen-preview').getAttribute('aria-label'),/Tap to click/);
  assert.equal(h.run('currentPage'),'tela');
+ h.run("$('#toast').hidden=true;selectControlMode('view')");
+ assert.equal(h.el('#direct-touch-indicator').hidden,true);
+ assert.match(h.el('.viewer-tip').textContent,/Open Direct touch/);
+ h.run("selectControlMode('touch')");
+ assert.equal(h.el('#toast').hidden,true);
+ assert.equal(h.el('#direct-touch-indicator').hidden,false);
  h.run("selectControlMode('mouse')");
  assert.equal(h.el('#touchpad').closest('[data-control-panel]').hidden,false);
  assert.equal(h.run('lastInputMode'),'mouse');
@@ -125,6 +139,23 @@ test('Direct touch maps taps to monitor pixels and keeps pan and pinch from clic
  assert.equal(h.run('liveSession.refreshing'),true);
  h.run("viewRegion=null;screenZoom=1;syncLiveRegion()");
  assert.equal(h.run('liveSession.region'),null);
+});
+
+test('native live zoom requests a preview-matched region without CSS zoom',async()=>{
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
+ h.run("screenshotURL='blob:screen';screenMode='live';liveSession={monitor:'TEST-1',fps:10,scale:0.5,region:null,refreshing:false};$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=960;$('#screen-image').naturalHeight=540;$('#zoom-button').click()");
+ assert.equal(h.run('screenZoom'),1);
+ assert.equal(h.run('JSON.stringify(viewRegion)'),'{"x":765,"y":430,"w":390,"h":220}');
+ assert.equal(h.run('JSON.stringify(liveSession.region)'),'{"x":765,"y":430,"w":390,"h":220}');
+ assert.equal(h.run('liveSession.refreshing'),true);
+ assert.equal(h.el('#zoom-button').getAttribute('aria-pressed'),'true');
+ assert.ok(h.el('#screen-stage').classList.contains('region-zoom'));
+ assert.equal(h.el('#screen-stage').classList.contains('zoomed'),false);
+ h.run("$('#zoom-button').click()");
+ assert.equal(h.run('viewRegion'),null);
+ assert.equal(h.run('liveSession.region'),null);
+ assert.equal(h.el('#zoom-button').getAttribute('aria-pressed'),'false');
+ assert.equal(h.el('#screen-stage').classList.contains('region-zoom'),false);
 });
 
 test('View, touchpad and keyboard keep one monitor stream and preserve a manual pause',async()=>{

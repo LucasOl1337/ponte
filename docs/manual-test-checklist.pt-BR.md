@@ -14,13 +14,13 @@ Teste no Redmi Note 13 Pro+ (Android 14) com a Tailscale ligada e o PC acordado.
 
 ## 3. Zoom por região
 
-- Faça: dê pinça para ler um texto pequeno, arraste para outra área e volte o zoom.
-- Espere: o recorte com zoom fica nítido (captura em resolução real, sem esticar); ao voltar, a tela inteira retorna.
+- Faça: dê pinça para ler um texto pequeno, arraste para outra área, toque em 1:1 e volte o zoom.
+- Espere: o recorte com zoom fica nítido (captura em resolução real, sem esticar) e preenche a prévia sem barras pretas; 1:1 mostra pixels nativos de um recorte que dá para arrastar; ao voltar, a tela inteira retorna.
 
 ## 4. Toque direto
 
 - Faça: mude para Toque direto, toque num ícone, segure para botão direito, arraste com um dedo, pinça com dois.
-- Espere: toque clica na posição, segurar clica com direito, um dedo move a imagem, dois dão pinça; o mouse do PC só mexe no Toque direto.
+- Espere: o monitor ganha uma borda lima e um selo de Toque direto; o texto de ajuda explica toque/toque longo/arraste/pinça; na primeira vez, um aviso curto diz que o toque clica no PC. Toque clica na posição, segurar clica com direito, um dedo move a imagem, dois dão pinça; o mouse do PC só mexe no Toque direto.
 
 ## 5. Card Energia (um monitor só)
 
