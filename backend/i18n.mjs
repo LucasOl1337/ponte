@@ -258,6 +258,14 @@ export const messages = {
   "COMMAND_FAILED": {
     "en": "Could not run {command}.",
     "pt": "Não foi possível executar {command}."
+  },
+  "INVALID_POWER_STATE": {
+    "en": "Power state must be either on or off.",
+    "pt": "O estado de energia deve ser ligado ou desligado."
+  },
+  "WOL_INSTRUCTIONS": {
+    "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",
+    "pt": "Habilite Wake-on-LAN na BIOS/UEFI (Power On By PCI-E) e no Linux com sudo ethtool -s {interface} wol g. Acorde com Magic Packet para {mac} na porta UDP 9."
   }
 };
 

@@ -215,6 +215,18 @@ export async function createApp(options = {}) {
           json(res, 200, await limits.action(() => desktop.action(value)));
         }); return;
       }
+      if (pathname === '/api/power' && req.method === 'GET') {
+        const state = await limits.only('state', 2, () => desktop.getState({ locale }));
+        json(res, 200, { monitors: state.monitors, wakeOnLan: state.wakeOnLan, power: state.power }); return;
+      }
+      if (pathname === '/api/power' && req.method === 'POST') {
+        if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
+        await limits.only('body', 8, async () => {
+          const body = await readBody(req, 24 * 1024);
+          let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
+          json(res, 200, await limits.action(() => desktop.action(value)));
+        }); return;
+      }
       if (pathname === '/api/terminals' && req.method === 'GET') { json(res, 200, await terminals.list()); return; }
       const terminalRoute = pathname.match(/^\/api\/terminals\/([^/]+)(?:\/(input|resize))?$/);
       if (req.method === 'POST' && (pathname === '/api/terminals' || terminalRoute?.[2])) {
