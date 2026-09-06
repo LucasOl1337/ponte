@@ -24,6 +24,7 @@ These English previews show the running app connected to a read-only review inst
 | Monitor view | Opens first. Watch live, rotate, pinch a real-resolution crop, tap the image in Direct touch, or freeze a full-resolution frame to read |
 | Terminals | Read and type in dedicated text sessions, with explicit Enter and desktop attachment |
 | Media | Volume, mute, playback and track controls |
+| Power | Per-monitor on/off toggles, Smart sleep and Wake up superbuttons, double-confirmed power off; WoL metadata exposed for remote wake |
 | Voice | Record, review, send to the PC and play back. Android recording verification is still in progress |
 | Pairing | Pair once. The app remembers the connection across restarts |
 
@@ -88,7 +89,7 @@ Tests use temporary data and synthetic servers. They do not need a real phone or
 
 ## What comes next
 
-The first priorities are a simpler pairing flow, completion of recording verification on physical Android devices, additional translations, and measurements over cellular or geographically remote Tailscale connections. Contributions that include a reproducible test are welcome. The [PC-controls-phone spec](docs/pc-controls-phone.md) evaluates the reverse direction: operating the paired phone from the PC over the same Tailscale network.
+The first priorities are a simpler pairing flow, completion of recording verification on physical Android devices, additional translations, and measurements over cellular or geographically remote Tailscale connections. Contributions that include a reproducible test are welcome. The [PC-controls-phone spec](docs/pc-controls-phone.md) evaluates the reverse direction: operating the paired phone from the PC over the same Tailscale network. Validate new builds on the device with the [manual test checklist](docs/manual-test-checklist.md).
 
 This project is independent of Omarchy. Any upstream integration is a proposal until Omarchy's maintainers accept it. [Omarchy](https://github.com/omacom/omarchy) is created by [DHH](https://dhh.dk/).
 

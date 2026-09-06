@@ -55,6 +55,6 @@ O Ponte inclui controles de energia no painel inicial do celular:
 
 A imagem usa MJPEG autenticado, com perfis de até 10 quadros por segundo. Não transmite o áudio do sistema. O teste local com três monitores ficou entre 7,1 e 7,3 quadros por segundo por transmissão. Ainda não medimos a experiência por rede celular ou fora de casa.
 
-Leia o [guia de configuração](docs/setup.md), o [guia Android](android/README.md) e o [modelo de segurança](SECURITY.md). Um celular pareado pode operar sua sessão real do PC. A [especificação do caminho inverso](docs/pc-controls-phone.pt-BR.md) avalia operar o celular a partir do PC pela mesma rede Tailscale.
+Leia o [guia de configuração](docs/setup.md), o [guia Android](android/README.md) e o [modelo de segurança](SECURITY.md). Um celular pareado pode operar sua sessão real do PC. A [especificação do caminho inverso](docs/pc-controls-phone.pt-BR.md) avalia operar o celular a partir do PC pela mesma rede Tailscale. Valide as novidades no aparelho com o [roteiro de teste manual](docs/manual-test-checklist.pt-BR.md).
 
 O código é aberto sob a [licença MIT](LICENSE). Sugestões e contribuições são bem-vindas.
