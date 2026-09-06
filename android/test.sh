@@ -23,7 +23,8 @@ if [[ ! -f "$fixtures/child.p12" ]]; then
   openssl x509 -req -in "$fixtures/child.csr" -CA "$fixtures/good.crt" -CAkey "$fixtures/good.key" -CAcreateserial -out "$fixtures/child.crt" -days 3 -extfile "$fixtures/child.ext" >/dev/null 2>&1
   openssl pkcs12 -export -out "$fixtures/child.p12" -inkey "$fixtures/child.key" -in "$fixtures/child.crt" -certfile "$fixtures/good.crt" -passout pass:test-only
 fi
-"$jdk/bin/javac" -encoding UTF-8 -d "$build_root/test-classes" "$android_dir/src/app/ponte/omarchy/LoopbackProxy.java" "$android_dir/src/app/ponte/omarchy/ProxyMessages.java" "$android_dir/src/app/ponte/omarchy/MicrophonePermissionGate.java" "$android_dir/tests/ProxyTest.java" "$android_dir/tests/MicrophonePermissionGateTest.java"
+"$jdk/bin/javac" -encoding UTF-8 -d "$build_root/test-classes" "$android_dir/src/app/ponte/omarchy/WakeOnLan.java" "$android_dir/src/app/ponte/omarchy/LoopbackProxy.java" "$android_dir/src/app/ponte/omarchy/ProxyMessages.java" "$android_dir/src/app/ponte/omarchy/MicrophonePermissionGate.java" "$android_dir/tests/ProxyTest.java" "$android_dir/tests/MicrophonePermissionGateTest.java" "$android_dir/tests/WakeOnLanTest.java"
 "$jdk/bin/java" -cp "$build_root/test-classes" app.ponte.omarchy.ProxyTest "$fixtures"
 "$jdk/bin/java" -cp "$build_root/test-classes" app.ponte.omarchy.MicrophonePermissionGateTest
+"$jdk/bin/java" -cp "$build_root/test-classes" app.ponte.omarchy.WakeOnLanTest "$fixtures"
 python3 "$android_dir/tests/configure_test.py"

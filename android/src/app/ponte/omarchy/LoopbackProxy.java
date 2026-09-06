@@ -36,16 +36,26 @@ public final class LoopbackProxy implements Closeable {
         new ArrayBlockingQueue<>(16), runnable -> { Thread t = new Thread(runnable, "ponte-proxy-cancel"); t.setDaemon(true); return t; });
     private final ExecutorService workers = new ThreadPoolExecutor(0, 8, 30, TimeUnit.SECONDS,
         new SynchronousQueue<>(), runnable -> { Thread t = new Thread(runnable, "ponte-proxy-request"); t.setDaemon(true); return t; });
+    public interface StateListener {
+        void onWakeOnLanMac(String mac);
+    }
+
+    private final StateListener stateListener;
     private volatile boolean closed;
     private volatile boolean paused;
 
     public LoopbackProxy(URI upstream, InputStream certificatePem, int port) throws Exception {
+        this(upstream, certificatePem, port, null);
+    }
+
+    public LoopbackProxy(URI upstream, InputStream certificatePem, int port, StateListener stateListener) throws Exception {
         if (!"https".equals(upstream.getScheme()) || upstream.getHost() == null || upstream.getUserInfo() != null
                 || upstream.getQuery() != null || upstream.getFragment() != null
                 || !(upstream.getPath().isEmpty() || upstream.getPath().equals("/"))) {
             throw new IllegalArgumentException("An HTTPS origin is required");
         }
         this.upstream = upstream;
+        this.stateListener = stateListener;
         X509Certificate certificate = (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(certificatePem);
         certificate.checkValidity();
         pinnedCertificate = certificate.getEncoded();
@@ -160,14 +170,28 @@ public final class LoopbackProxy implements Closeable {
                     try (InputStream body = response) {
                         byte[] buffer = new byte[16384];
                         int count;
+                        ByteArrayOutputStream stateBytes = (status == 200 && (request.target.equals("/api/state") || request.target.startsWith("/api/state?")))
+                            ? new ByteArrayOutputStream() : null;
                         while (exchange.active() && (count = body.read(buffer)) != -1) {
                             exchange.requireActive();
                             if (count == 0) continue;
+                            if (stateBytes != null && stateBytes.size() < 65536) {
+                                stateBytes.write(buffer, 0, count);
+                            }
                             output.write(Integer.toHexString(count).getBytes(StandardCharsets.US_ASCII));
                             output.write(new byte[]{13, 10});
                             output.write(buffer, 0, count);
                             output.write(new byte[]{13, 10});
                             output.flush();
+                        }
+                        if (stateBytes != null && stateListener != null) {
+                            try {
+                                String json = stateBytes.toString("UTF-8");
+                                String mac = WakeOnLan.extractMac(json);
+                                if (mac != null && !mac.isEmpty()) {
+                                    stateListener.onWakeOnLanMac(mac);
+                                }
+                            } catch (Exception ignored) { }
                         }
                     }
                 }

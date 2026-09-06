@@ -52,8 +52,12 @@ O Ponte inclui controles de energia no painel inicial do celular:
 - **Superbotão "Dormir inteligente":** Apaga todos os monitores e desliga as luzes RGB via Magma Lights (`controller.py sleep`). **Não é suspensão (suspend) nem desligamento**: o computador continua ligado rodando seus agentes e processos em segundo plano, acessível remotamente pela Tailscale.
 - **Superbotão "Acordar":** Acende todos os monitores e restaura a iluminação RGB (`controller.py restore`).
 - **Desligar com confirmação dupla:** Desliga o sistema por completo (`systemctl poweroff`), exigindo confirmação na interface para evitar toques acidentais.
-- **Pré-requisitos de Wake-on-LAN (WoL):** Com a máquina desligada, o Ponte não roda e a Tailscale desconecta. Para religar o computador remotamente, envie um Magic Packet para a interface Ethernet física. O MAC (`d8:43:ae:8b:e8:a8`) e a interface (`enp12s0`) ficam expostos em `/api/state` e `/api/power`. Habilite "Power On By PCI-E" na BIOS/UEFI e confirme `Wake-on: g` com `ethtool`.
-- **APK no celular:** o card de energia usa `/api/power`. Instale o APK alpha.3 (version code 6) por cima do app atual, com a mesma chave de assinatura, para o proxy nativo encaminhar essa rota.
+- **Wake-on-LAN (WoL) e botão "Ligar PC" no Android:** Com a máquina desligada, o Ponte não roda e a Tailscale desconecta. Para religar o computador remotamente:
+  - **No BIOS/UEFI:** Habilite "Power On By PCI-E" (ou "Wake on LAN") nas opções de energia ACPI/APM.
+  - **No Linux / NetworkManager:** Habilite com `sudo ethtool -s <iface> wol g`. Para persistir no NetworkManager, use `nmcli connection modify <conexão> 802-3-ethernet.wake-on-lan magic`. Verifique com `ethtool <iface> | grep Wake-on`, que deve exibir `Wake-on: g`.
+  - **No app Android:** O app salva o MAC da Ethernet (`wakeOnLan` de `/api/state`) enquanto conectado. Se o PC estiver desligado, a tela de conexão exibe o botão **"Ligar PC"**, que envia 3 Magic Packets via UDP (porta 9) para `255.255.255.255` e o broadcast da sub-rede Wi-Fi local.
+  - **Limitação da Tailscale:** O Magic Packet é um broadcast de rede local (camada 2 / UDP broadcast) e **não atravessa a Tailscale** (que opera em camada 3 por roteamento unicast). O celular precisa estar conectado ao Wi-Fi local de casa (na mesma rede que o cabo Ethernet do PC) para acordar a máquina.
+- **APK no celular:** O app atualizado (versionCode 7, alpha.4) inclui suporte a WoL e rotas de energia. Instale por cima do app atual, com a mesma chave de assinatura.
 
 A imagem usa MJPEG autenticado, com perfis de até 10 quadros por segundo. Não transmite o áudio do sistema. O teste local com três monitores ficou entre 7,1 e 7,3 quadros por segundo por transmissão. Ainda não medimos a experiência por rede celular ou fora de casa.
 
