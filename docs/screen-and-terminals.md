@@ -6,17 +6,17 @@ This revision makes the monitor the first page after pairing or reopening Ponte.
 
 Choose a monitor once. Ponte remembers it along with your quality preference. Live view starts while the Screen page is visible and stops when you leave or background the app. A manual pause survives connection polling and backgrounding. Opening Screen again from another page starts live view.
 
-Rotate your phone and tap fullscreen to give the monitor more room. Hide controls to use the full height; the floating Controls button brings them back. Pinch to zoom, then drag the image to read another area. These gestures move the image on your phone; they do not move the PC pointer. The minus button reduces zoom and the 1:1 button toggles between fitting the whole image and displaying its original pixel size.
+Rotate your phone and tap fullscreen to give the monitor more room. Hide controls to use the full height; the floating Controls button brings them back. Pinch to zoom, then drag to read another area. After you zoom, Ponte tells the PC the visible monitor rectangle (x, y, w, h) and captures only that region at scale 1 with `grim -g`. The live JPEG is that crop, not a stretched full-frame image. Zooming back out returns to the whole monitor at the selected quality. The minus button reduces zoom and the 1:1 button toggles between the whole monitor and a readable crop.
 
-**Freeze & read** requests one JPEG at the monitor's original resolution, then opens it at 1:1. This helps with small text that the live stream's reduced resolution cannot preserve. The timestamp identifies it as a still image. Use play to return to live view. Freeze is also available through the camera button in fullscreen.
+**Freeze & read** still requests one JPEG at the monitor's original resolution, then opens it at 1:1. This helps when you want a still frame you can pan without changing the live crop. The timestamp identifies it as a still image. Use play to return to live view. Freeze is also available through the camera button in fullscreen.
 
-Live profiles remain capped at 10 fps and scale 0.65. A snapshot does not increase those limits. Full-resolution screenshots are bounded to 12 MiB and an eight-second capture timeout.
+Live profiles remain capped at 10 fps. Full-frame live view still uses scale 0.50 or 0.65. A zoomed region is captured at scale 1 without raising the frame-size cap (8 MiB) or the fps ceiling. A snapshot does not increase those limits. Full-resolution screenshots are bounded to 12 MiB and an eight-second capture timeout.
 
 ## Control while watching
 
-Use **View**, **Touchpad** and **Keyboard** directly beneath the monitor. View gives the image more room. Touchpad keeps a live preview above the original pad in portrait, or beside it on a sideways phone. Keyboard keeps the image visible above or beside the text field, including when the Android keyboard reduces the available height. These modes are also available inside fullscreen.
+Use **View**, **Direct touch**, **Touchpad** and **Keyboard** directly beneath the monitor. View gives the image more room. Direct touch treats the image as the pointing surface: a tap is a left click at the matching monitor pixel (including the current zoom and pan), a long press is a right click, one-finger drag pans the image, and two fingers pinch. Touchpad keeps a live preview above the original pad in portrait, or beside it on a sideways phone. Keyboard keeps the image visible above or beside the text field, including when the Android keyboard reduces the available height. These modes are also available inside fullscreen.
 
-The same stream continues across mode changes. A manual pause stays paused, with the still-image timestamp visible. The monitor capture includes the PC cursor. Pan and pinch on the image change your phone view; the separate touchpad moves the PC pointer. One finger moves or taps, two fingers scroll or right-click, and Drag holds the left mouse button until Release. Hiding the input controls clears pending movement and releases a drag, including a press whose response arrives late.
+The same stream continues across mode changes. A manual pause stays paused, with the still-image timestamp visible. The monitor capture includes the PC cursor. Monitor and quality choices persist. Pan and pinch on the image change which region you see; they do not move the PC pointer unless Direct touch is active. The separate touchpad still moves the pointer: one finger moves or taps, two fingers scroll or right-click, and Drag holds the left mouse button until Release. Hiding the input controls clears pending movement and releases a drag, including a press whose response arrives late.
 
 Keyboard text goes to the PC's focused window shown above the field. **Send text** sends the draft; Enter remains a separate action. The shortcuts scroll horizontally on narrow screens. Changing mode preserves unsent text.
 
@@ -24,7 +24,7 @@ Keyboard text goes to the PC's focused window shown above the field. **Send text
 
 ![Monitor beside the touchpad in landscape fullscreen](assets/live-controls-landscape.png)
 
-These are browser captures with a synthetic monitor. Browser checks cover pointer movement, taps, two-finger scrolling, uninterrupted streaming, keyboard viewport changes, explicit text sending, fullscreen input, draft preservation and releasing a delayed drag. The latest combined layout still needs its physical Redmi keyboard check.
+These are browser captures with a synthetic monitor. Browser checks cover pointer movement, taps, two-finger scrolling, uninterrupted streaming, keyboard viewport changes, explicit text sending, fullscreen input, draft preservation and releasing a delayed drag. Backend tests cover valid live regions, clamping, full-frame fallback and absolute clicks through a synthetic desktop adapter. Frontend tests cover touch-to-pixel mapping with zoom and pan, Direct touch versus Touchpad, and live region updates. The latest combined layout still needs its physical Redmi keyboard check.
 
 ## Work in a terminal
 
