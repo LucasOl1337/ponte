@@ -39,7 +39,18 @@ Cada instalação gera configuração e certificado próprios. O APK é personal
 - A imagem do PC abre primeiro, com zoom por pinça, rotação, tela cheia e captura em resolução original para ler.
 - Terminais de texto com sessões próprias, edição com setas e Enter separado. A mesma sessão pode ser aberta no PC.
 - Volume e controles de mídia.
+- Gerenciamento de energia: ligar/desligar cada monitor individualmente, superbotões "Dormir inteligente" e "Acordar", e desligamento completo com confirmação dupla.
 - Interface para gravar, revisar e enviar áudio ao PC, com validação final no Android em andamento.
+
+## Gerenciamento de energia e dormir inteligente
+
+O Ponte inclui controles de energia no painel inicial do celular:
+
+- **Controle individual de telas:** Ligue ou desligue cada monitor separadamente via DPMS (`hyprctl dispatch dpms off/on <nome>`).
+- **Superbotão "Dormir inteligente":** Apaga todos os monitores e desliga as luzes RGB via Magma Lights (`controller.py sleep`). **Não é suspensão (suspend) nem desligamento**: o computador continua ligado rodando seus agentes e processos em segundo plano, acessível remotamente pela Tailscale.
+- **Superbotão "Acordar":** Acende todos os monitores e restaura a iluminação RGB (`controller.py restore`).
+- **Desligar com confirmação dupla:** Desliga o sistema por completo (`systemctl poweroff`), exigindo confirmação na interface para evitar toques acidentais.
+- **Pré-requisitos de Wake-on-LAN (WoL):** Com a máquina desligada, o Ponte não roda e a Tailscale desconecta. Para religar o computador remotamente, envie um Magic Packet para a interface Ethernet física. O MAC (`d8:43:ae:8b:e8:a8`) e a interface (`enp12s0`) ficam expostos em `/api/state` e `/api/power`. Habilite "Power On By PCI-E" na BIOS/UEFI e confirme `Wake-on: g` com `ethtool`.
 
 A imagem usa MJPEG autenticado, com perfis de até 10 quadros por segundo. Não transmite o áudio do sistema. O teste local com três monitores ficou entre 7,1 e 7,3 quadros por segundo por transmissão. Ainda não medimos a experiência por rede celular ou fora de casa.
 
