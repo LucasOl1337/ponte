@@ -301,6 +301,7 @@ function navigate(page) {
 
 function selectControlMode(mode, focusTab = false) {
   if (!['view','touch','mouse','keyboard'].includes(mode)) return;
+  const previous = controlMode;
   if (mode !== controlMode) resetRemoteInput();
   if (mode !== 'keyboard' && document.activeElement === $('#keyboard-text')) $('#keyboard-text').blur();
   controlMode = mode;
@@ -318,10 +319,14 @@ function selectControlMode(mode, focusTab = false) {
     if (active && focusTab) tab.focus({preventScroll:true});
   });
   if (isScreenPage(currentPage)) setPageLocation(mode === 'view' || mode === 'touch' ? 'tela' : 'controle');
-  updatePreviewAria();
+  updateScreenModeChrome();
   syncRemoteViewport();
   applyScreenZoom();
   window.scrollTo({top:0,behavior:'instant'});
+  if (mode === 'touch' && previous !== 'touch' && savedPreference('ponte-direct-touch-seen') !== '1') {
+    savePreference('ponte-direct-touch-seen', '1');
+    toast(t('Toque agora clica no PC.'));
+  }
 }
 
 function syncRemoteViewport() {
@@ -571,6 +576,25 @@ function scaleMonitorRegion(region, factor, origin, monitorWidth, monitorHeight)
   return isFullMonitorRegion(next, monitorWidth, monitorHeight) ? null : next;
 }
 
+function nativePreviewRegion(previewWidth, previewHeight, monitorWidth, monitorHeight, origin) {
+  const pw = Math.round(Number(previewWidth));
+  const ph = Math.round(Number(previewHeight));
+  if (!(pw > 0) || !(ph > 0) || !(monitorWidth > 0) || !(monitorHeight > 0)) return null;
+  const previewRatio = pw / ph;
+  let w = Math.min(monitorWidth, Math.max(8, pw));
+  let h = Math.max(8, Math.round(w / previewRatio));
+  if (h > monitorHeight) {
+    h = monitorHeight;
+    w = Math.min(monitorWidth, Math.max(8, Math.round(h * previewRatio)));
+  }
+  const ox = origin && Number.isFinite(Number(origin.x)) ? Number(origin.x) : w / 2;
+  const oy = origin && Number.isFinite(Number(origin.y)) ? Number(origin.y) : h / 2;
+  const x = Math.max(0, Math.min(monitorWidth - w, Math.round(ox - w / 2)));
+  const y = Math.max(0, Math.min(monitorHeight - h, Math.round(oy - h / 2)));
+  const next = { x: x, y: y, w: w, h: h };
+  return isFullMonitorRegion(next, monitorWidth, monitorHeight) ? null : next;
+}
+
 function screenIsVisible() { return isScreenPage(currentPage) && !document.hidden && !nativePaused && !!token; }
 function selectedMonitor() {
   const name = $('#monitor-select').value;
@@ -629,6 +653,20 @@ function updatePreviewAria() {
     ? t('Tela do PC. Toque para clicar, toque longo para botão direito, arraste para mover e pinça para ampliar.')
     : t('Tela do PC. Pinça amplia em resolução real. Arraste para mover o recorte.'));
 }
+function updateScreenModeChrome() {
+  const touch = controlMode === 'touch';
+  const indicator = $('#direct-touch-indicator');
+  if (indicator) indicator.hidden = !touch;
+  const tip = $('.viewer-tip');
+  if (tip) {
+    const key = touch
+      ? 'Toque = clique, toque longo = clique direito, arraste = mover a imagem, pinça = zoom.'
+      : 'Abra o toque direto, o touchpad ou o teclado sem perder a imagem. Use Ver para expandir o monitor.';
+    tip.setAttribute('data-i18n', key);
+    tip.textContent = t(key);
+  }
+  updatePreviewAria();
+}
 function reconcileLive() { if (liveWanted && !liveSession && screenIsVisible() && connected && state?.capabilities?.live && $('#monitor-select').value) startLive(); }
 function sessionIsCurrent(session) { return liveSession === session && screenIsVisible(); }
 function updateScreenButtons() {
@@ -666,12 +704,19 @@ function setScreenStatus(mode,message = '') {
 }
 function applyScreenZoom() {
   const stage = $('#screen-stage'), preview = $('#screen-preview'), image = $('#screen-image');
+  const regionFill = !!viewRegion && screenZoom <= 1 && screenMode !== 'snapshot';
   screenZoomed = screenZoom > 1 || !!viewRegion;
   stage.classList.toggle('zoomed',screenZoom > 1);
-  const ratio = (image.naturalWidth || 16) / (image.naturalHeight || 9);
-  const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
-  image.style.width = `${Math.round(fitWidth*screenZoom)}px`;
-  image.style.height = `${Math.round(fitWidth/ratio*screenZoom)}px`;
+  stage.classList.toggle('region-zoom', regionFill);
+  if (regionFill) {
+    image.style.width = `${Math.round(preview.clientWidth || 390)}px`;
+    image.style.height = `${Math.round(preview.clientHeight || 220)}px`;
+  } else {
+    const ratio = (image.naturalWidth || 16) / (image.naturalHeight || 9);
+    const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
+    image.style.width = `${Math.round(fitWidth*screenZoom)}px`;
+    image.style.height = `${Math.round(fitWidth/ratio*screenZoom)}px`;
+  }
   $('#zoom-button').setAttribute('aria-pressed',String(screenZoomed));
   $('#zoom-button').setAttribute('aria-label',screenZoomed ? t("Ajustar imagem inteira à tela") : t("Ampliar imagem para ler"));
   $('#zoom-out-button').disabled = !screenshotURL || (screenZoom <= 1 && !viewRegion);
@@ -688,7 +733,7 @@ function setScreenZoom(value, point) {
   const left = preview.scrollLeft || 0, top = preview.scrollTop || 0;
   applyScreenZoom();
   if (screenZoom > 1) { preview.scrollLeft = (left+x)*screenZoom/previous-x; preview.scrollTop = (top+y)*screenZoom/previous-y; }
-  if (liveSession && screenMode !== 'snapshot') scheduleLiveRegion();
+  if (liveSession && screenMode !== 'snapshot' && !viewRegion) scheduleLiveRegion();
 }
 function showScreenImage(url,timestamp,monitor) {
   const oldURL = screenshotURL;
@@ -842,14 +887,38 @@ $('#monitor-select').addEventListener('change',() => {
 });
 $('#live-quality').value = savedPreference('ponte-quality','balanced') === 'sharp' ? 'sharp' : 'balanced';
 $('#live-quality').addEventListener('change',() => { savePreference('ponte-quality',$('#live-quality').value); if (liveSession) startLive(); });
+function enterNativeLiveCrop() {
+  const monitor = selectedMonitor();
+  if (!monitor) return;
+  const layout = previewLayout();
+  viewRegion = nativePreviewRegion(layout.previewWidth, layout.previewHeight, monitor.width, monitor.height, {
+    x: monitor.width / 2,
+    y: monitor.height / 2,
+  });
+  screenZoom = 1;
+  applyScreenZoom();
+  syncLiveRegion();
+}
+function zoomLiveRegion(factor, origin) {
+  const monitor = selectedMonitor();
+  if (!monitor) return;
+  viewRegion = scaleMonitorRegion(viewRegion, factor, origin || null, monitor.width, monitor.height);
+  screenZoom = 1;
+  applyScreenZoom();
+  scheduleLiveRegion();
+}
 $('#zoom-button').addEventListener('click',() => {
   if (screenZoom > 1 || viewRegion) {
     screenZoom = 1; viewRegion = null; applyScreenZoom(); syncLiveRegion(); return;
   }
-  const image = $('#screen-image'), preview = $('#screen-preview');
-  const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
-  const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
-  setScreenZoom(Math.max(1,(image.naturalWidth || fitWidth)/fitWidth));
+  if (screenMode === 'snapshot' || !liveSession) {
+    const image = $('#screen-image'), preview = $('#screen-preview');
+    const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
+    const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
+    setScreenZoom(Math.max(1,(image.naturalWidth || fitWidth)/fitWidth));
+    return;
+  }
+  enterNativeLiveCrop();
 });
 $('#zoom-out-button').addEventListener('click',() => {
   if (viewRegion && screenZoom <= 1) {
@@ -951,12 +1020,10 @@ screenPreview.addEventListener('pointermove',event => {
     const factor = pinchDistance > 0 ? distance/pinchDistance : 1;
     pinchDistance = distance;
     const monitor = selectedMonitor();
-    if (viewRegion && screenZoom <= 1 && factor < 1 && monitor && screenMode !== 'snapshot') {
+    if (monitor && screenMode !== 'snapshot' && liveSession) {
       const local = imageLocalPoint((a.x+b.x)/2,(a.y+b.y)/2);
       const origin = mapTouchToMonitorPixel(local.x, local.y, mappingLayout());
-      viewRegion = scaleMonitorRegion(viewRegion, 1/factor, origin, monitor.width, monitor.height);
-      applyScreenZoom();
-      scheduleLiveRegion();
+      zoomLiveRegion(1/factor, origin);
     } else if (pinchDistance >= 0) {
       setScreenZoom(screenZoom*factor,{x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top});
     }
@@ -992,10 +1059,16 @@ function finishScreenPointer(event) {
 }
 for (const name of ['pointerup','pointercancel','lostpointercapture']) screenPreview.addEventListener(name,finishScreenPointer);
 screenPreview.addEventListener('keydown',event => {
-  if (event.key === '+' || event.key === '=') setScreenZoom(screenZoom*1.5);
-  else if (event.key === '-') setScreenZoom(screenZoom/1.5);
-  else if (event.key === '0') setScreenZoom(1);
-  else return;
+  if (event.key === '+' || event.key === '=') {
+    if (screenMode === 'snapshot' || !liveSession) setScreenZoom(screenZoom*1.5);
+    else zoomLiveRegion(1/1.5);
+  } else if (event.key === '-') {
+    if (screenMode === 'snapshot' || !liveSession) setScreenZoom(screenZoom/1.5);
+    else zoomLiveRegion(1.5);
+  } else if (event.key === '0') {
+    if (screenMode === 'snapshot' || !liveSession) setScreenZoom(1);
+    else { screenZoom = 1; viewRegion = null; applyScreenZoom(); syncLiveRegion(); }
+  } else return;
   event.preventDefault();
 });
 
@@ -1561,7 +1634,7 @@ document.addEventListener('ponte-language-change', () => {
   setScreenStatus(screenMode,liveMessage);
   $('#zoom-button').setAttribute('aria-label',screenZoomed ? t('Ajustar imagem inteira à tela') : t('Ampliar imagem para ler'));
   $('#fullscreen-button').setAttribute('aria-label',document.fullscreenElement || $('#screen-stage').classList.contains('expanded') ? t('Sair da tela cheia') : t('Abrir tela cheia'));
-  updatePreviewAria();
+  updateScreenModeChrome();
   if (screenshotURL) $('#screen-image').alt = t('Monitor {monitor}',{monitor:$('#viewer-monitor-name').textContent});
   updateInstalledState();
   i18n.apply();
