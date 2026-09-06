@@ -19,6 +19,7 @@ const savedPreference = (key, fallback = '') => { try { return localStorage.getI
 const savePreference = (key,value) => { try { localStorage.setItem(key,value); } catch {} };
 let controlMode = 'view';
 let lastInputMode = 'mouse';
+let lastScreenMode = 'view';
 let remoteInputGeneration = 0;
 let viewportBaseline = {width:0,height:0};
 let chosenWorkspace = 'all';
@@ -261,7 +262,7 @@ function navigate(page) {
   setPageLocation(page);
   const visiblePage = page === 'controle' ? 'tela' : page;
   $$('.page').forEach(element => { element.hidden = element.dataset.page !== visiblePage; });
-  if (nextScreen) selectControlMode(page === 'tela' ? 'view' : lastInputMode);
+  if (nextScreen) selectControlMode(page === 'tela' ? lastScreenMode : lastInputMode);
   window.scrollTo({top:0,behavior:'instant'});
   if (page === 'voz' && connected) loadAudio();
   reconcileLive();
@@ -269,14 +270,15 @@ function navigate(page) {
 }
 
 function selectControlMode(mode, focusTab = false) {
-  if (!['view','mouse','keyboard'].includes(mode)) return;
+  if (!['view','touch','mouse','keyboard'].includes(mode)) return;
   if (mode !== controlMode) resetRemoteInput();
   if (mode !== 'keyboard' && document.activeElement === $('#keyboard-text')) $('#keyboard-text').blur();
   controlMode = mode;
-  if (mode !== 'view') lastInputMode = mode;
+  if (mode === 'view' || mode === 'touch') lastScreenMode = mode;
+  else lastInputMode = mode;
   $('#screen-stage').setAttribute('data-input-mode',mode);
   $('#screen-stage').classList.remove('controls-hidden');
-  $('#remote-controls').hidden = mode === 'view';
+  $('#remote-controls').hidden = mode === 'view' || mode === 'touch';
   $$('[data-control-panel]').forEach(panel => { panel.hidden = panel.dataset.controlPanel !== mode; });
   $$('[data-control-mode]').forEach(tab => {
     const active = tab.dataset.controlMode === mode;
@@ -285,7 +287,8 @@ function selectControlMode(mode, focusTab = false) {
     tab.tabIndex = active ? 0 : -1;
     if (active && focusTab) tab.focus({preventScroll:true});
   });
-  if (isScreenPage(currentPage)) setPageLocation(mode === 'view' ? 'tela' : 'controle');
+  if (isScreenPage(currentPage)) setPageLocation(mode === 'view' || mode === 'touch' ? 'tela' : 'controle');
+  updatePreviewAria();
   syncRemoteViewport();
   applyScreenZoom();
   window.scrollTo({top:0,behavior:'instant'});
@@ -313,7 +316,7 @@ document.addEventListener('pointerdown',event => {
 });
 
 $('.control-tabs').addEventListener('keydown', event => {
-  const modes = ['view','mouse','keyboard'];
+  const modes = ['view','touch','mouse','keyboard'];
   const current = modes.indexOf(controlMode);
   let next;
   if (event.key === 'ArrowRight') next = (current+1)%modes.length;
@@ -396,7 +399,12 @@ let screenZoomed = false;
 let screenZoom = 1;
 let screenSourceSize = '';
 let readAtOriginal = false;
+let viewRegion = null;
+let liveRegionTimer = 0;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
+const LONG_PRESS_MS = 500;
+const REGION_RECONNECT_PX = 8;
+const SCREEN_PAN_SLOP = 12;
 
 class MjpegParser {
   constructor(onFrame,boundary = 'ponte-frame') {
@@ -441,7 +449,137 @@ class MjpegParser {
   }
 }
 
+function mapTouchToMonitorPixel(localX, localY, layout) {
+  const imageWidth = Number(layout.imageWidth);
+  const imageHeight = Number(layout.imageHeight);
+  const monitorWidth = Number(layout.monitorWidth);
+  const monitorHeight = Number(layout.monitorHeight);
+  if (!(imageWidth > 0) || !(imageHeight > 0) || !(monitorWidth > 0) || !(monitorHeight > 0)) return null;
+  const fx = localX / imageWidth, fy = localY / imageHeight;
+  if (!Number.isFinite(fx) || !Number.isFinite(fy) || fx < 0 || fy < 0 || fx > 1 || fy > 1) return null;
+  const source = layout.region && layout.region.w > 0 && layout.region.h > 0 ? layout.region : { x: 0, y: 0, w: monitorWidth, h: monitorHeight };
+  return {
+    x: Math.max(0, Math.min(monitorWidth - 1, Math.round(source.x + fx * source.w))),
+    y: Math.max(0, Math.min(monitorHeight - 1, Math.round(source.y + fy * source.h))),
+  };
+}
+
+function visibleMonitorRegion(layout) {
+  const left = Math.max(0, Number(layout.scrollLeft) || 0);
+  const top = Math.max(0, Number(layout.scrollTop) || 0);
+  const previewWidth = Number(layout.previewWidth);
+  const previewHeight = Number(layout.previewHeight);
+  const imageWidth = Number(layout.imageWidth);
+  const imageHeight = Number(layout.imageHeight);
+  if (!(previewWidth > 0) || !(previewHeight > 0) || !(imageWidth > 0) || !(imageHeight > 0)) return null;
+  const right = Math.min(imageWidth, left + previewWidth);
+  const bottom = Math.min(imageHeight, top + previewHeight);
+  if (right - left < 1 || bottom - top < 1) return null;
+  const a = mapTouchToMonitorPixel(left, top, layout);
+  const b = mapTouchToMonitorPixel(right, bottom, layout);
+  if (!a || !b) return null;
+  return { x: a.x, y: a.y, w: Math.max(1, b.x - a.x), h: Math.max(1, b.y - a.y) };
+}
+
+function isFullMonitorRegion(region, monitorWidth, monitorHeight) {
+  if (!region) return true;
+  return region.x <= monitorWidth * 0.02 && region.y <= monitorHeight * 0.02
+    && region.w >= monitorWidth * 0.98 && region.h >= monitorHeight * 0.98;
+}
+
+function liveStreamPath(session) {
+  let path = `/stream?monitor=${encodeURIComponent(session.monitor)}&fps=${session.fps}&scale=${session.scale}`;
+  const region = session.region;
+  if (region && [region.x, region.y, region.w, region.h].every(value => Number.isInteger(value))) {
+    path += `&x=${region.x}&y=${region.y}&w=${region.w}&h=${region.h}`;
+  }
+  return path;
+}
+
+function regionsClose(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return Math.abs(a.x - b.x) < REGION_RECONNECT_PX && Math.abs(a.y - b.y) < REGION_RECONNECT_PX
+    && Math.abs(a.w - b.w) < REGION_RECONNECT_PX && Math.abs(a.h - b.h) < REGION_RECONNECT_PX;
+}
+
+function classifyScreenGesture({ pointerCount, moved, durationMs }) {
+  if (pointerCount >= 2) return 'pinch';
+  if (moved) return 'pan';
+  if (durationMs >= LONG_PRESS_MS) return 'longpress';
+  return 'tap';
+}
+
+function scaleMonitorRegion(region, factor, origin, monitorWidth, monitorHeight) {
+  const source = region && region.w > 0 && region.h > 0 ? region : { x: 0, y: 0, w: monitorWidth, h: monitorHeight };
+  const ox = origin?.x ?? source.x + source.w / 2;
+  const oy = origin?.y ?? source.y + source.h / 2;
+  const w = Math.max(8, Math.min(monitorWidth, source.w * factor));
+  const h = Math.max(8, Math.min(monitorHeight, source.h * factor));
+  const x = Math.max(0, Math.min(monitorWidth - w, ox - (ox - source.x) * (w / source.w)));
+  const y = Math.max(0, Math.min(monitorHeight - h, oy - (oy - source.y) * (h / source.h)));
+  const next = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+  return isFullMonitorRegion(next, monitorWidth, monitorHeight) ? null : next;
+}
+
 function screenIsVisible() { return isScreenPage(currentPage) && !document.hidden && !nativePaused && !!token; }
+function selectedMonitor() {
+  const name = $('#monitor-select').value;
+  return state?.monitors?.find(item => item.name === name) || null;
+}
+function previewLayout() {
+  const preview = $('#screen-preview');
+  const image = $('#screen-image');
+  return {
+    previewWidth: preview.clientWidth || 390,
+    previewHeight: preview.clientHeight || 300,
+    scrollLeft: preview.scrollLeft || 0,
+    scrollTop: preview.scrollTop || 0,
+    imageWidth: parseFloat(image.style.width) || image.clientWidth || image.naturalWidth || 0,
+    imageHeight: parseFloat(image.style.height) || image.clientHeight || image.naturalHeight || 0,
+  };
+}
+function mappingLayout() {
+  const monitor = selectedMonitor();
+  if (!monitor) return null;
+  return { ...previewLayout(), monitorWidth: monitor.width, monitorHeight: monitor.height, region: viewRegion };
+}
+function currentViewRegion() {
+  const monitor = selectedMonitor();
+  if (!monitor) return null;
+  const layout = mappingLayout();
+  if (viewRegion && screenZoom <= 1) return viewRegion;
+  if (screenZoom <= 1 && !viewRegion) return null;
+  const visible = visibleMonitorRegion(layout);
+  if (!visible || isFullMonitorRegion(visible, monitor.width, monitor.height)) return null;
+  return visible;
+}
+function applyLiveRegion(region) {
+  if (!liveSession || screenMode === 'snapshot') return;
+  const next = region && region.w > 0 ? region : null;
+  if (regionsClose(liveSession.region || null, next)) return;
+  liveSession.region = next;
+  liveSession.refreshing = true;
+  liveSession.controller?.abort();
+}
+function syncLiveRegion() {
+  clearTimeout(liveRegionTimer); liveRegionTimer = 0;
+  applyLiveRegion(currentViewRegion());
+}
+function scheduleLiveRegion() {
+  clearTimeout(liveRegionTimer);
+  liveRegionTimer = setTimeout(() => { liveRegionTimer = 0; syncLiveRegion(); }, 120);
+}
+function sendMonitorClick(pixel, button) {
+  const monitor = selectedMonitor();
+  if (!pixel || !monitor || !connected || !state?.capabilities?.mouse) return false;
+  return action('mouse.clickAt', { monitor: monitor.name, x: pixel.x, y: pixel.y, button });
+}
+function updatePreviewAria() {
+  $('#screen-preview').setAttribute('aria-label', controlMode === 'touch'
+    ? t('Tela do PC. Toque para clicar, toque longo para botão direito, arraste para mover e pinça para ampliar.')
+    : t('Tela do PC. Pinça amplia em resolução real. Arraste para mover o recorte.'));
+}
 function reconcileLive() { if (liveWanted && !liveSession && screenIsVisible() && connected && state?.capabilities?.live && $('#monitor-select').value) startLive(); }
 function sessionIsCurrent(session) { return liveSession === session && screenIsVisible(); }
 function updateScreenButtons() {
@@ -453,7 +591,7 @@ function updateScreenButtons() {
   $('#stage-capture-button').disabled = $('#capture-button').disabled;
   $('#fullscreen-button').disabled = !screenshotURL;
   $('#zoom-button').disabled = !screenshotURL;
-  $('#zoom-out-button').disabled = !screenshotURL || screenZoom <= 1;
+  $('#zoom-out-button').disabled = !screenshotURL || (screenZoom <= 1 && !viewRegion);
   $('#stage-live-toggle').hidden = !liveSession && !screenshotURL;
   $('#stage-live-toggle').disabled = !liveSession && !canStream;
   $('#stage-live-toggle').setAttribute('aria-label',liveSession ? t("Pausar transmissão") : t("Retomar transmissão ao vivo"));
@@ -479,16 +617,16 @@ function setScreenStatus(mode,message = '') {
 }
 function applyScreenZoom() {
   const stage = $('#screen-stage'), preview = $('#screen-preview'), image = $('#screen-image');
-  screenZoomed = screenZoom > 1;
-  stage.classList.toggle('zoomed',screenZoomed);
+  screenZoomed = screenZoom > 1 || !!viewRegion;
+  stage.classList.toggle('zoomed',screenZoom > 1);
   const ratio = (image.naturalWidth || 16) / (image.naturalHeight || 9);
   const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
   image.style.width = `${Math.round(fitWidth*screenZoom)}px`;
   image.style.height = `${Math.round(fitWidth/ratio*screenZoom)}px`;
   $('#zoom-button').setAttribute('aria-pressed',String(screenZoomed));
   $('#zoom-button').setAttribute('aria-label',screenZoomed ? t("Ajustar imagem inteira à tela") : t("Ampliar imagem para ler"));
-  $('#zoom-out-button').disabled = !screenshotURL || screenZoom <= 1;
-  if (!screenZoomed) { preview.scrollLeft = 0; preview.scrollTop = 0; }
+  $('#zoom-out-button').disabled = !screenshotURL || (screenZoom <= 1 && !viewRegion);
+  if (screenZoom <= 1) { preview.scrollLeft = 0; preview.scrollTop = 0; }
 }
 function setScreenZoom(value, point) {
   const preview = $('#screen-preview');
@@ -501,6 +639,7 @@ function setScreenZoom(value, point) {
   const left = preview.scrollLeft || 0, top = preview.scrollTop || 0;
   applyScreenZoom();
   if (screenZoom > 1) { preview.scrollLeft = (left+x)*screenZoom/previous-x; preview.scrollTop = (top+y)*screenZoom/previous-y; }
+  if (liveSession && screenMode !== 'snapshot') scheduleLiveRegion();
 }
 function showScreenImage(url,timestamp,monitor) {
   const oldURL = screenshotURL;
@@ -514,7 +653,7 @@ function showScreenImage(url,timestamp,monitor) {
 }
 function clearScreenImage() {
   if (screenshotURL) URL.revokeObjectURL(screenshotURL);
-  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenZoom = 1;
+  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenZoom = 1; viewRegion = null;
   $('#screen-image').removeAttribute('src'); $('#screen-image').hidden = true; $('#screen-empty').hidden = false;
   applyScreenZoom(); updateScreenButtons();
 }
@@ -584,15 +723,17 @@ async function runLiveSession(session) {
   while (sessionIsCurrent(session)) {
     session.attempt += 1;
     const attempt = session.attempt;
+    const refreshing = session.refreshing;
+    session.refreshing = false;
     session.controller = new AbortController(); session.error = null; session.receiving = false;
     session.pendingFrame = null; session.lastReceived = Date.now();
-    setScreenStatus(session.attempt > 1 ? 'reconnecting' : 'connecting');
+    if (!refreshing || !session.hasFrame) setScreenStatus(session.attempt > 1 ? 'reconnecting' : 'connecting');
     session.watchdog = setInterval(() => {
       if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 2500 && screenMode === 'live') setScreenStatus('reconnecting',t("Aguardando novos quadros do monitor…"));
       if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 10000) { session.error = new Error(t("O monitor ficou sem enviar imagens.")); session.controller.abort(); }
     },1000);
     try {
-      const response = await screenResponse(`/stream?monitor=${encodeURIComponent(session.monitor)}&fps=${session.fps}&scale=${session.scale}`,session.controller);
+      const response = await screenResponse(liveStreamPath(session),session.controller);
       if (!sessionIsCurrent(session)) return;
       const contentType = response.headers.get('content-type') || '';
       if (!/^multipart\/x-mixed-replace\b/i.test(contentType)) throw Object.assign(new Error(t("O PC não ofereceu uma transmissão compatível.")),{status:415});
@@ -616,6 +757,7 @@ async function runLiveSession(session) {
     } catch(error) {
       if (!sessionIsCurrent(session)) return;
       session.receiving = false; session.pendingFrame = null;
+      if (session.refreshing || refreshing) { session.refreshing = false; session.failures = 0; continue; }
       if ([400,401,403,404,415].includes(error.status)) { liveWanted = false; stopLive(error); toast(error,true); return; }
       session.failures += 1;
       if (session.failures >= 5) { liveWanted = false; stopLive(t('Não chegaram novos quadros. Toque em iniciar para tentar novamente.')); return; }
@@ -633,7 +775,7 @@ function startLive() {
   if (!monitor) return;
   stopLive(); cancelSnapshot();
   const sharp = $('#live-quality').value === 'sharp';
-  const session = {monitor,fps:sharp ? 6 : 10,scale:sharp ? 0.65 : 0.5,profileLabel:sharp ? 'Mais nítido · até 6 quadros/s' : 'Equilibrado · até 10 quadros/s',attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null};
+  const session = {monitor,fps:sharp ? 6 : 10,scale:sharp ? 0.65 : 0.5,profileLabel:sharp ? 'Mais nítido · até 6 quadros/s' : 'Equilibrado · até 10 quadros/s',attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:currentViewRegion(),refreshing:false};
   liveSession = session;
   runLiveSession(session);
 }
@@ -643,6 +785,7 @@ $('#stage-live-toggle').addEventListener('click',toggleLive);
 $('#monitor-select').addEventListener('change',() => {
   const restart = !!liveSession || liveWanted;
   savePreference('ponte-monitor',$('#monitor-select').value);
+  viewRegion = null; screenZoom = 1;
   stopLive(); cancelSnapshot(); clearScreenImage();
   $('#viewer-monitor-name').textContent = $('#monitor-select').value || t("Monitor do PC");
   setScreenStatus('idle');
@@ -651,12 +794,22 @@ $('#monitor-select').addEventListener('change',() => {
 $('#live-quality').value = savedPreference('ponte-quality','balanced') === 'sharp' ? 'sharp' : 'balanced';
 $('#live-quality').addEventListener('change',() => { savePreference('ponte-quality',$('#live-quality').value); if (liveSession) startLive(); });
 $('#zoom-button').addEventListener('click',() => {
+  if (screenZoom > 1 || viewRegion) {
+    screenZoom = 1; viewRegion = null; applyScreenZoom(); syncLiveRegion(); return;
+  }
   const image = $('#screen-image'), preview = $('#screen-preview');
   const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
   const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
-  setScreenZoom(screenZoom > 1 ? 1 : Math.max(1,(image.naturalWidth || fitWidth)/fitWidth));
+  setScreenZoom(Math.max(1,(image.naturalWidth || fitWidth)/fitWidth));
 });
-$('#zoom-out-button').addEventListener('click',() => setScreenZoom(screenZoom/1.5));
+$('#zoom-out-button').addEventListener('click',() => {
+  if (viewRegion && screenZoom <= 1) {
+    const monitor = selectedMonitor();
+    if (monitor) { viewRegion = scaleMonitorRegion(viewRegion, 1.5, null, monitor.width, monitor.height); applyScreenZoom(); syncLiveRegion(); }
+    return;
+  }
+  setScreenZoom(screenZoom/1.5);
+});
 $('#screen-image').addEventListener('load',() => {
   const image = $('#screen-image');
   const size = `${image.naturalWidth}x${image.naturalHeight}`;
@@ -695,7 +848,7 @@ $('#capture-button').addEventListener('click',async () => {
     const response = await screenResponse(`/screenshot?monitor=${encodeURIComponent(monitor)}&scale=1`,request.controller);
     const blob = await response.blob();
     if (snapshotRequest !== request || !screenIsVisible()) return;
-    readAtOriginal = true;
+    readAtOriginal = true; viewRegion = null;
     showScreenImage(URL.createObjectURL(blob),Date.now(),monitor);
     setScreenStatus('snapshot');
   } catch(error) {
@@ -708,29 +861,87 @@ $('#stage-capture-button').addEventListener('click',() => $('#capture-button').c
 const screenPointers = new Map();
 const screenPreview = $('#screen-preview');
 let pinchDistance = 0;
+let screenGesture = { pinch: false, panned: false };
 const pointerDistance = () => { const [a,b] = [...screenPointers.values()]; return a && b ? Math.hypot(a.x-b.x,a.y-b.y) : 0; };
+function imageLocalPoint(clientX, clientY) {
+  const image = $('#screen-image');
+  const rect = image.getBoundingClientRect?.() || { left: 0, top: 0 };
+  return { x: clientX - rect.left, y: clientY - rect.top };
+}
+function translateViewRegion(dxImage, dyImage) {
+  const monitor = selectedMonitor();
+  if (!monitor || !viewRegion) return;
+  const layout = previewLayout();
+  const width = layout.imageWidth || 1, height = layout.imageHeight || 1;
+  const next = {
+    x: Math.max(0, Math.min(monitor.width - viewRegion.w, Math.round(viewRegion.x - dxImage / width * viewRegion.w))),
+    y: Math.max(0, Math.min(monitor.height - viewRegion.h, Math.round(viewRegion.y - dyImage / height * viewRegion.h))),
+    w: viewRegion.w, h: viewRegion.h,
+  };
+  viewRegion = next;
+  scheduleLiveRegion();
+}
 screenPreview.addEventListener('pointerdown',event => {
   if (!screenshotURL) return;
-  screenPreview.setPointerCapture(event.pointerId);
-  screenPointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+  screenPreview.setPointerCapture?.(event.pointerId);
+  screenPointers.set(event.pointerId,{x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,started:Date.now(),moved:false});
   pinchDistance = pointerDistance();
+  if (screenPointers.size === 1) screenGesture = { pinch: false, panned: false };
+  if (screenPointers.size >= 2) screenGesture.pinch = true;
 });
 screenPreview.addEventListener('pointermove',event => {
   const before = screenPointers.get(event.pointerId);
   if (!before) return;
-  screenPointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+  const dx = event.clientX-before.x, dy = event.clientY-before.y;
+  if (Math.hypot(event.clientX-before.startX,event.clientY-before.startY) > SCREEN_PAN_SLOP) before.moved = true;
+  screenPointers.set(event.pointerId,{...before,x:event.clientX,y:event.clientY});
   if (screenPointers.size === 2) {
+    screenGesture.pinch = true;
     const distance = pointerDistance();
-    const [a,b] = [...screenPointers.values()], rect = screenPreview.getBoundingClientRect();
-    if (pinchDistance > 0) setScreenZoom(screenZoom*distance/pinchDistance,{x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top});
+    const [a,b] = [...screenPointers.values()], rect = screenPreview.getBoundingClientRect?.() || {left:0,top:0};
+    const factor = pinchDistance > 0 ? distance/pinchDistance : 1;
     pinchDistance = distance;
+    const monitor = selectedMonitor();
+    if (viewRegion && screenZoom <= 1 && factor < 1 && monitor && screenMode !== 'snapshot') {
+      const local = imageLocalPoint((a.x+b.x)/2,(a.y+b.y)/2);
+      const origin = mapTouchToMonitorPixel(local.x, local.y, mappingLayout());
+      viewRegion = scaleMonitorRegion(viewRegion, 1/factor, origin, monitor.width, monitor.height);
+      applyScreenZoom();
+      scheduleLiveRegion();
+    } else if (pinchDistance >= 0) {
+      setScreenZoom(screenZoom*factor,{x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top});
+    }
   } else if (screenZoom > 1) {
-    screenPreview.scrollLeft -= event.clientX-before.x;
-    screenPreview.scrollTop -= event.clientY-before.y;
+    screenGesture.panned = screenGesture.panned || before.moved;
+    screenPreview.scrollLeft -= dx;
+    screenPreview.scrollTop -= dy;
+  } else if (viewRegion && screenPointers.size === 1 && before.moved && screenMode !== 'snapshot') {
+    screenGesture.panned = true;
+    translateViewRegion(dx, dy);
   }
-  event.preventDefault();
+  event.preventDefault?.();
 });
-for (const name of ['pointerup','pointercancel','lostpointercapture']) screenPreview.addEventListener(name,event => { screenPointers.delete(event.pointerId); pinchDistance = pointerDistance(); });
+function finishScreenPointer(event) {
+  const pointer = screenPointers.get(event.pointerId);
+  screenPointers.delete(event.pointerId);
+  pinchDistance = pointerDistance();
+  if (screenPointers.size > 0 || !pointer) return;
+  const visible = currentViewRegion();
+  if (visible) viewRegion = visible;
+  else if (screenZoom <= 1) viewRegion = null;
+  syncLiveRegion();
+  const gesture = classifyScreenGesture({
+    pointerCount: screenGesture.pinch ? 2 : 1,
+    moved: pointer.moved || screenGesture.panned || screenGesture.pinch,
+    durationMs: Date.now() - pointer.started,
+  });
+  if (controlMode === 'touch' && (gesture === 'tap' || gesture === 'longpress')) {
+    const layout = mappingLayout();
+    const local = imageLocalPoint(pointer.startX, pointer.startY);
+    sendMonitorClick(layout ? mapTouchToMonitorPixel(local.x, local.y, layout) : null, gesture === 'longpress' ? 'right' : 'left');
+  }
+}
+for (const name of ['pointerup','pointercancel','lostpointercapture']) screenPreview.addEventListener(name,finishScreenPointer);
 screenPreview.addEventListener('keydown',event => {
   if (event.key === '+' || event.key === '=') setScreenZoom(screenZoom*1.5);
   else if (event.key === '-') setScreenZoom(screenZoom/1.5);
@@ -1301,6 +1512,7 @@ document.addEventListener('ponte-language-change', () => {
   setScreenStatus(screenMode,liveMessage);
   $('#zoom-button').setAttribute('aria-label',screenZoomed ? t('Ajustar imagem inteira à tela') : t('Ampliar imagem para ler'));
   $('#fullscreen-button').setAttribute('aria-label',document.fullscreenElement || $('#screen-stage').classList.contains('expanded') ? t('Sair da tela cheia') : t('Abrir tela cheia'));
+  updatePreviewAria();
   if (screenshotURL) $('#screen-image').alt = t('Monitor {monitor}',{monitor:$('#viewer-monitor-name').textContent});
   updateInstalledState();
   i18n.apply();

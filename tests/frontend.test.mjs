@@ -106,6 +106,48 @@ test('MJPEG rejects a body without JPEG markers', () => {
   assert.throws(() => harness().parser.push(input), /JPEG/);
 });
 
+function mappingContext() {
+  const context = vm.createContext({ Uint8Array, TextDecoder, Date, t: key => key, Number, Math, URL, encodeURIComponent });
+  vm.runInContext(`${parserSource}
+    globalThis.mapTouchToMonitorPixel = mapTouchToMonitorPixel;
+    globalThis.visibleMonitorRegion = visibleMonitorRegion;
+    globalThis.isFullMonitorRegion = isFullMonitorRegion;
+    globalThis.liveStreamPath = liveStreamPath;
+    globalThis.classifyScreenGesture = classifyScreenGesture;
+    globalThis.scaleMonitorRegion = scaleMonitorRegion;
+    globalThis.regionsClose = regionsClose;
+  `, context);
+  return context;
+}
+
+test('touch mapping converts zoom and pan into monitor pixels', () => {
+  const m = mappingContext();
+  const plain = value => value && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value;
+  assert.deepEqual(plain(m.mapTouchToMonitorPixel(480, 270, { imageWidth: 960, imageHeight: 540, monitorWidth: 1920, monitorHeight: 1080 })), { x: 960, y: 540 });
+  assert.deepEqual(plain(m.mapTouchToMonitorPixel(0, 0, { imageWidth: 960, imageHeight: 540, monitorWidth: 1920, monitorHeight: 1080 })), { x: 0, y: 0 });
+  assert.deepEqual(plain(m.mapTouchToMonitorPixel(200, 150, {
+    imageWidth: 400, imageHeight: 300, monitorWidth: 1920, monitorHeight: 1080, region: { x: 100, y: 100, w: 800, h: 600 },
+  })), { x: 500, y: 400 });
+  assert.equal(m.mapTouchToMonitorPixel(-1, 0, { imageWidth: 400, imageHeight: 300, monitorWidth: 1920, monitorHeight: 1080 }), null);
+  assert.deepEqual(plain(m.visibleMonitorRegion({
+    previewWidth: 960, previewHeight: 540, scrollLeft: 0, scrollTop: 0, imageWidth: 1920, imageHeight: 1080, monitorWidth: 1920, monitorHeight: 1080,
+  })), { x: 0, y: 0, w: 960, h: 540 });
+  assert.deepEqual(plain(m.visibleMonitorRegion({
+    previewWidth: 400, previewHeight: 300, scrollLeft: 200, scrollTop: 150, imageWidth: 800, imageHeight: 600,
+    monitorWidth: 1920, monitorHeight: 1080, region: { x: 100, y: 100, w: 800, h: 600 },
+  })), { x: 300, y: 250, w: 400, h: 300 });
+  assert.equal(m.isFullMonitorRegion({ x: 0, y: 0, w: 1920, h: 1080 }, 1920, 1080), true);
+  assert.equal(m.isFullMonitorRegion({ x: 100, y: 80, w: 640, h: 360 }, 1920, 1080), false);
+  assert.equal(m.liveStreamPath({ monitor: 'DP-1', fps: 10, scale: 0.5 }), '/stream?monitor=DP-1&fps=10&scale=0.5');
+  assert.equal(m.liveStreamPath({ monitor: 'DP-1', fps: 6, scale: 0.65, region: { x: 10, y: 20, w: 30, h: 40 } }), '/stream?monitor=DP-1&fps=6&scale=0.65&x=10&y=20&w=30&h=40');
+  assert.equal(m.classifyScreenGesture({ pointerCount: 1, moved: false, durationMs: 20 }), 'tap');
+  assert.equal(m.classifyScreenGesture({ pointerCount: 1, moved: false, durationMs: 500 }), 'longpress');
+  assert.equal(m.classifyScreenGesture({ pointerCount: 1, moved: true, durationMs: 20 }), 'pan');
+  assert.equal(m.classifyScreenGesture({ pointerCount: 2, moved: false, durationMs: 20 }), 'pinch');
+  assert.equal(m.scaleMonitorRegion({ x: 100, y: 100, w: 800, h: 600 }, 4, null, 1920, 1080), null);
+  assert.equal(m.regionsClose({ x: 10, y: 10, w: 100, h: 100 }, { x: 12, y: 11, w: 101, h: 99 }), true);
+});
+
 
 test('Android permission dialog keeps the pending microphone request, while background closes it', () => {
   const handlerSource = source.slice(source.indexOf("window.addEventListener('ponte-native-pause'"), source.indexOf("window.addEventListener('hashchange'"));

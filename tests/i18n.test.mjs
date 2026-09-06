@@ -92,6 +92,37 @@ test('Screen is the first destination and native pause prevents polling from res
  assert.ok(h.calls.filter(call=>call.path.startsWith('/api/stream')).length>before);
 });
 
+test('Direct touch maps taps to monitor pixels and keeps pan and pinch from clicking',async()=>{
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
+ h.run("selectControlMode('touch')");
+ assert.equal(h.run('controlMode'),'touch');
+ assert.equal(h.el('#remote-controls').hidden,true);
+ assert.equal(h.el('[data-control-mode="touch"]').getAttribute('aria-pressed'),'true');
+ assert.equal(h.el('[data-control-mode="view"]').getAttribute('aria-pressed'),'false');
+ assert.match(h.el('#screen-preview').getAttribute('aria-label'),/Tap to click/);
+ assert.equal(h.run('currentPage'),'tela');
+ h.run("selectControlMode('mouse')");
+ assert.equal(h.el('#touchpad').closest('[data-control-panel]').hidden,false);
+ assert.equal(h.run('lastInputMode'),'mouse');
+ h.run("selectControlMode('touch');connected=true;screenshotURL='blob:screen'");
+ const pixel=h.run("JSON.stringify(mapTouchToMonitorPixel(240,135,{imageWidth:480,imageHeight:270,monitorWidth:1920,monitorHeight:1080}))");
+ assert.equal(pixel,'{"x":960,"y":540}');
+ await h.run("sendMonitorClick({x:100,y:40},'left')");await flush();
+ await h.run("sendMonitorClick({x:8,y:9},'right')");await flush();
+ const actions=h.calls.filter(call=>call.path==='/api/action').map(call=>JSON.parse(call.options.body));
+ assert.deepEqual(actions,[
+  {type:'mouse.clickAt',monitor:'TEST-1',x:100,y:40,button:'left'},
+  {type:'mouse.clickAt',monitor:'TEST-1',x:8,y:9,button:'right'},
+ ]);
+ assert.equal(h.run("classifyScreenGesture({pointerCount:1,moved:true,durationMs:40})"),'pan');
+ assert.equal(h.run("classifyScreenGesture({pointerCount:2,moved:false,durationMs:40})"),'pinch');
+ h.run("liveSession={monitor:'TEST-1',fps:10,scale:0.5,region:null};viewRegion={x:100,y:80,w:640,h:360};screenZoom=1;syncLiveRegion()");
+ assert.equal(h.run('JSON.stringify(liveSession.region)'),'{"x":100,"y":80,"w":640,"h":360}');
+ assert.equal(h.run('liveSession.refreshing'),true);
+ h.run("viewRegion=null;screenZoom=1;syncLiveRegion()");
+ assert.equal(h.run('liveSession.region'),null);
+});
+
 test('View, touchpad and keyboard keep one monitor stream and preserve a manual pause',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
  h.run("stopLive();liveSession={monitor:'TEST-1'};screenMode='live';liveWanted=true");

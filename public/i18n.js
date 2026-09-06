@@ -4,7 +4,10 @@
   const english = {
   "Ver": "View",
   "Ver e controlar": "View and control",
-  "Abra o touchpad ou teclado sem perder a imagem. Use Ver para expandir o monitor.": "Open the touchpad or keyboard while keeping the screen in view. Choose View to expand the monitor.",
+  "Toque direto": "Direct touch",
+  "Abra o toque direto, o touchpad ou o teclado sem perder a imagem. Use Ver para expandir o monitor.": "Open Direct touch, the touchpad or the keyboard while keeping the screen in view. Choose View to expand the monitor.",
+  "Tela do PC. Pinça amplia em resolução real. Arraste para mover o recorte.": "PC screen. Pinch zooms at full resolution. Drag to pan the crop.",
+  "Tela do PC. Toque para clicar, toque longo para botão direito, arraste para mover e pinça para ampliar.": "PC screen. Tap to click, long-press for right click, drag to pan and pinch to zoom.",
   "Seu Omarchy ao alcance da mão. Controle seu PC, organize janelas e envie áudio pelo celular.": "Your Omarchy within reach. Control your PC, manage windows and send audio from your phone.",
   "Ponte — seu Omarchy, por perto": "Ponte — your Omarchy, within reach",
   "Ponte, início": "Ponte, home",
