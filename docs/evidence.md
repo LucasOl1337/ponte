@@ -49,3 +49,15 @@ MJPEG profiles top out at 10 fps and carry no system audio. Recording verificati
 The global release defaults to English and offers a persistent Portuguese preference. Browser previews use a separate local review instance connected to the PC, with desktop actions disabled for the review. They document the actual interface at a 390-pixel mobile viewport. They are not Android device captures.
 
 Original English browser captures: [touchpad](assets/app-en-control.png), [monitor controls](assets/app-en-screen.png), [voice interface](assets/app-en-voice.png). The original physical Redmi captures above remain unedited in Portuguese.
+
+## Next alpha: direct screen access and text terminals
+
+The [new screen and terminal guide](screen-and-terminals.md) records this revision separately. Its Chromium captures use a synthetic monitor and a real shell on a temporary private tmux socket. They demonstrate the running interface without using a person's desktop or terminal.
+
+The source passed 67 Node tests. The native adapter passed 101 proxy checks, 17 microphone lifecycle checks and seven configuration tests. These automated microphone checks do not complete the pending physical recording test. The updated personal APK compiled and passed package, signature, certificate and permission checks. Android version code5 is installed over the existing app with pairing preserved. Physical checks confirmed direct live Screen entry, landscape fullscreen and terminal text followed by separate Enter execution. A loopback port-reuse failure found during Activity recreation was reproduced in a regression test and fixed in this update. The soft keyboard opened; a complete typing/layout flow and microphone recording remain pending. Current personal desktop captures are not included in the public repository.
+
+## Combined monitor and input
+
+The next-alpha branch keeps View, Touchpad and Keyboard in the same monitor stage, including fullscreen. The browser verification used a synthetic desktop API and its own Chromium context. It sent pointer movement, single taps and a two-finger scroll, then verified text sending and separate Enter while the monitor remained visible. Reduced portrait and landscape viewports modeled the space left by a software keyboard. A delayed drag response was released after the controls closed. These checks are not a physical Android keyboard test.
+
+All 70 Node tests pass. The earlier 12 viewer/terminal browser flows also pass with the shared-mode pause behavior. Live monitor capture and snapshots now request cursor inclusion from grim. The personal runtime serves this layout without requiring a new native APK. Native proxy and microphone code did not change in this revision.

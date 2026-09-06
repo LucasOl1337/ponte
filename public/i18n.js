@@ -2,6 +2,9 @@
 (() => {
   // Portuguese source messages are stable translation keys. English is the global default.
   const english = {
+  "Ver": "View",
+  "Ver e controlar": "View and control",
+  "Abra o touchpad ou teclado sem perder a imagem. Use Ver para expandir o monitor.": "Open the touchpad or keyboard while keeping the screen in view. Choose View to expand the monitor.",
   "Seu Omarchy ao alcance da mão. Controle seu PC, organize janelas e envie áudio pelo celular.": "Your Omarchy within reach. Control your PC, manage windows and send audio from your phone.",
   "Ponte — seu Omarchy, por perto": "Ponte — your Omarchy, within reach",
   "Ponte, início": "Ponte, home",
@@ -300,7 +303,54 @@
   "Atualizado {time}": "Updated {time}",
   "Progresso sincronizado agora.": "Progress just synchronized.",
   "Aguardando atualização do servidor. Tentando novamente automaticamente.": "Waiting for a server update. Retrying automatically.",
-  "Acesse pelo app Ponte ou pelo navegador com HTTPS para gravar.": "Use the Ponte app or an HTTPS browser connection to record."
+  "Acesse pelo app Ponte ou pelo navegador com HTTPS para gravar.": "Use the Ponte app or an HTTPS browser connection to record.",
+  "Terminais": "Terminals",
+  "Tela do PC. Use pinça para ampliar e arraste para explorar.": "PC screen. Pinch to zoom, then drag to explore.",
+  "Diminuir zoom": "Zoom out",
+  "Gire o celular para ver maior. Use pinça para ampliar e arraste para ler.": "Turn your phone sideways for a larger view. Pinch to zoom and drag to read.",
+  "Nova sessão": "New session",
+  "Sessões de texto para usar pelo celular, sem mudar o foco do PC.": "Text sessions for your phone, without changing the PC's focus.",
+  "Sessão do terminal": "Terminal session",
+  "Escolha ou crie uma sessão": "Choose or create a session",
+  "Pausar leitura": "Pause output",
+  "Retomar leitura": "Resume output",
+  "Saída do terminal": "Terminal output",
+  "Largura": "Width",
+  "Celular · 40 colunas": "Phone · 40 columns",
+  "Desktop · 80 colunas": "Desktop · 80 columns",
+  "Amplo · 120 colunas": "Wide · 120 columns",
+  "Encerrar": "Close session",
+  "Texto para esta sessão": "Text for this session",
+  "Digite aqui e depois envie": "Type here, then send",
+  "Digitar": "Type text",
+  "Digitar envia o texto. Enter executa separadamente. Evite enviar senhas pelo campo de texto.": "Type text sends the text. Enter executes separately. Avoid sending passwords through the text field.",
+  "Comando anterior": "Previous command",
+  "Próximo comando": "Next command",
+  "Apagar caractere": "Backspace",
+  "Você pode sair do app e voltar. Parar o serviço, sair da sessão do Linux ou reiniciar o PC pode encerrar estes terminais.": "You can leave the app and return. Stopping the service, logging out of Linux or restarting the PC may end these terminals.",
+  "Terminais abertos no PC": "Terminal windows on your PC",
+  "Veja a janela no monitor. O texto dessas janelas não é importado para as sessões acima.": "View the window on its monitor. Text from these windows is not imported into the sessions above.",
+  "Focar e ver no monitor": "Focus and view on monitor",
+  "Nenhuma janela de terminal aberta.": "No terminal windows are open.",
+  "Conectado à sessão de texto.": "Connected to the text session.",
+  "Crie uma sessão para começar. Digitar e executar são ações separadas.": "Create a session to begin. Typing and executing are separate actions.",
+  "Instale tmux no PC para usar sessões de texto.": "Install tmux on the PC to use text sessions.",
+  "Encerrar esta sessão?": "Close this session?",
+  "Os processos neste terminal serão encerrados. Esta ação não pode ser desfeita.": "Processes in this terminal will end. This cannot be undone.",
+  "Cancelar": "Cancel",
+  "Encerrar sessão": "Close session",
+  "Ler em alta resolução": "Freeze & read",
+  "Ver na resolução original": "View at original resolution",
+  "Painel do PC": "PC dashboard",
+  "Não chegaram novos quadros. Toque em iniciar para tentar novamente.": "No new frames arrived. Tap play to try again.",
+  "Texto vai para a janela em foco: {title}": "Text goes to the focused window: {title}",
+  "Modo de cópia ativo. Saia dele no terminal do PC para voltar a digitar.": "Copy mode is active. Leave it in the PC terminal to type again.",
+  "Abrir esta mesma sessão no PC": "Open this same session on the PC",
+  "Comando para conectar no PC": "Command to attach on the PC",
+  "Execute este comando em um terminal do PC. O texto e os processos serão os mesmos.": "Run this command in a PC terminal. Both devices share the same text and processes.",
+  "Ocultar controles": "Hide controls",
+  "Mostrar controles da tela": "Show screen controls",
+  "Controles": "Controls"
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
@@ -599,6 +649,34 @@
   "proxy_body": {
     "en": "A request body is not allowed.",
     "pt": "Corpo não permitido."
+  },
+  "TERMINAL_IN_COPY_MODE": {
+    "en": "This terminal is in copy mode. Exit that mode in the PC terminal before sending input.",
+    "pt": "Este terminal está no modo de cópia. Saia desse modo no terminal do PC antes de enviar comandos."
+  },
+  "TERMINAL_UNAVAILABLE": {
+    "en": "Terminals are unavailable. Check that tmux is installed and private terminal storage is accessible.",
+    "pt": "Terminais indisponíveis. Verifique se o tmux está instalado e se o armazenamento privado está acessível."
+  },
+  "TERMINAL_NOT_FOUND": {
+    "en": "This terminal session is no longer available.",
+    "pt": "Esta sessão de terminal não está mais disponível."
+  },
+  "TERMINAL_CHANGED": {
+    "en": "This terminal was changed outside Ponte and cannot be controlled here.",
+    "pt": "Este terminal foi alterado fora do Ponte e não pode ser controlado aqui."
+  },
+  "TERMINAL_LIMIT_REACHED": {
+    "en": "Four terminals are already open. Close one to create another.",
+    "pt": "Já existem quatro terminais abertos. Feche um para criar outro."
+  },
+  "INVALID_TERMINAL_SIZE": {
+    "en": "Terminal size must be 20–240 columns and 8–100 rows.",
+    "pt": "O terminal deve ter de 20 a 240 colunas e de 8 a 100 linhas."
+  },
+  "INVALID_TERMINAL_INPUT": {
+    "en": "Send either text or one terminal key.",
+    "pt": "Envie texto ou uma tecla do terminal."
   }
 };
   const storageKey = 'ponte-language';

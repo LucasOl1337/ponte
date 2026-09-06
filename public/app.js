@@ -12,8 +12,15 @@ let token = '';
 let state = null;
 let connected = false;
 let polling = false;
-let currentPage = 'inicio';
-let controlMode = 'mouse';
+let currentPage = 'tela';
+let liveWanted = true;
+let nativePaused = false;
+const savedPreference = (key, fallback = '') => { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } };
+const savePreference = (key,value) => { try { localStorage.setItem(key,value); } catch {} };
+let controlMode = 'view';
+let lastInputMode = 'mouse';
+let remoteInputGeneration = 0;
+let viewportBaseline = {width:0,height:0};
 let chosenWorkspace = 'all';
 let windowSignature = '';
 let workspaceSignature = '';
@@ -82,6 +89,8 @@ async function action(type, payload = {}, feedback = '') {
 
 function showPairing(error = '') {
   leaveScreen(); clearScreenImage(); cancelPendingRecording();
+  clearTimeout(terminalTimer); terminalGeneration++; terminalDrafts.clear(); terminalId = ''; terminalSessions = []; terminalText = null;
+  $('#terminal-output').textContent = ''; $('#terminal-input').value = ''; terminalControls();
   if (recorder?.state === 'recording') stopRecording();
   $('#pairing').hidden = false;
   $('#paired-app').hidden = true;
@@ -152,6 +161,7 @@ function renderState() {
   $('#stat-windows').textContent = state.windows?.length ?? 0;
   $('#stat-workspaces').textContent = (state.workspaces || []).filter(ws => Number.isInteger(ws.id) && ws.id >= 1 && ws.id <= 100).length;
   $('#stat-uptime').textContent = formatUptime(state.uptime);
+  $('#keyboard-target').textContent = t('Texto vai para a janela em foco: {title}',{title:state.activeWindow?.title || t('Nenhuma janela em foco')});
   $('#focus-summary').textContent = state.activeWindow?.title || t("Nenhuma janela em foco");
   if (!volumeEditing) {
     const volume = Math.round((state.volume?.value || 0) * 100);
@@ -169,14 +179,15 @@ function renderState() {
   const nextMonitorSignature = JSON.stringify([monitors,i18n.language]);
   if (monitorSignature !== nextMonitorSignature) {
     monitorSignature = nextMonitorSignature;
-    const selected = $('#monitor-select').value;
+    const selected = $('#monitor-select').value || savedPreference('ponte-monitor');
     $('#monitor-select').innerHTML = monitors.length ? monitors.map(m => `<option value="${escaped(m.name)}">${escaped(m.name)} · ${Number(m.width)} × ${Number(m.height)}${m.focused ? t(" · em foco") : ''}</option>`).join('') : `<option value="">${escaped(t("Nenhum monitor disponível"))}</option>`;
     const next = monitors.find(m => m.name === selected) || monitors.find(m => m.focused) || monitors[0];
-    if (next) $('#monitor-select').value = next.name;
-    if (selected && next?.name !== selected) { stopLive(t("Monitor alterado. Inicie a transmissão do monitor escolhido.")); cancelSnapshot(); clearScreenImage(); }
+    if (next) { $('#monitor-select').value = next.name; if (!savedPreference('ponte-monitor')) savePreference('ponte-monitor',next.name); }
+    if (selected && next?.name !== selected) { liveWanted = false; stopLive(t("Monitor alterado. Inicie a transmissão do monitor escolhido.")); cancelSnapshot(); clearScreenImage(); }
     $('#viewer-monitor-name').textContent = next?.name || t("Nenhum monitor");
   }
   updateScreenButtons();
+  reconcileLive();
 }
 
 function renderWorkspaces() {
@@ -227,38 +238,82 @@ async function pollState() {
     setConnection(true);
     renderState();
     if (currentPage === 'voz' && !audioLoaded) loadAudio();
+    if (currentPage === 'terminais') renderDesktopTerminals();
   } catch (error) { if (token && requestToken === token) setConnection(false, error); }
   finally { polling = false; }
 }
 
-function navigate(page) {
-  if (!['inicio','controle','janelas','voz'].includes(page)) return;
-  if (currentPage !== page) { stopDrag(); if (currentPage === 'controle') leaveScreen(); }
+function isScreenPage(page) { return page === 'tela' || page === 'controle'; }
+
+function setPageLocation(page) {
   currentPage = page;
-  $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
+  document.body.setAttribute('data-current-page',page);
   $$('.nav-item').forEach(element => { const active = element.dataset.nav === page; element.classList.toggle('active', active); if (active) element.setAttribute('aria-current','page'); else element.removeAttribute('aria-current'); });
   if (location.hash !== `#${page}`) history.replaceState(null,'',`${location.pathname}${location.search}#${page}`);
+}
+
+function navigate(page) {
+  if (!['inicio','tela','controle','terminais','janelas','voz'].includes(page)) return;
+  const wasScreen = isScreenPage(currentPage), nextScreen = isScreenPage(page);
+  if (currentPage !== page) resetRemoteInput();
+  if (wasScreen && !nextScreen) leaveScreen();
+  if (nextScreen && !wasScreen) liveWanted = true;
+  setPageLocation(page);
+  const visiblePage = page === 'controle' ? 'tela' : page;
+  $$('.page').forEach(element => { element.hidden = element.dataset.page !== visiblePage; });
+  if (nextScreen) selectControlMode(page === 'tela' ? 'view' : lastInputMode);
   window.scrollTo({top:0,behavior:'instant'});
   if (page === 'voz' && connected) loadAudio();
+  reconcileLive();
+  updateTerminalNavigation();
 }
 
 function selectControlMode(mode, focusTab = false) {
-  if (!['mouse','keyboard','screen'].includes(mode)) return;
-  if (mode !== controlMode) { stopDrag(); if (controlMode === 'screen') leaveScreen(); }
+  if (!['view','mouse','keyboard'].includes(mode)) return;
+  if (mode !== controlMode) resetRemoteInput();
+  if (mode !== 'keyboard' && document.activeElement === $('#keyboard-text')) $('#keyboard-text').blur();
   controlMode = mode;
+  if (mode !== 'view') lastInputMode = mode;
+  $('#screen-stage').setAttribute('data-input-mode',mode);
+  $('#screen-stage').classList.remove('controls-hidden');
+  $('#remote-controls').hidden = mode === 'view';
   $$('[data-control-panel]').forEach(panel => { panel.hidden = panel.dataset.controlPanel !== mode; });
   $$('[data-control-mode]').forEach(tab => {
     const active = tab.dataset.controlMode === mode;
     tab.classList.toggle('active',active);
-    tab.setAttribute('aria-selected',String(active));
+    tab.setAttribute('aria-pressed',String(active));
     tab.tabIndex = active ? 0 : -1;
     if (active && focusTab) tab.focus({preventScroll:true});
   });
+  if (isScreenPage(currentPage)) setPageLocation(mode === 'view' ? 'tela' : 'controle');
+  syncRemoteViewport();
+  applyScreenZoom();
   window.scrollTo({top:0,behavior:'instant'});
 }
 
+function syncRemoteViewport() {
+  const width = window.visualViewport?.width || window.innerWidth;
+  const height = window.visualViewport?.height || window.innerHeight;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+  if (Math.abs(width - viewportBaseline.width) > 100) viewportBaseline = {width,height};
+  else viewportBaseline.height = Math.max(viewportBaseline.height,height);
+  const keyboardOpen = controlMode === 'keyboard' && viewportBaseline.height - height > 100;
+  document.body.setAttribute('data-keyboard-open',String(keyboardOpen));
+  document.documentElement.style.setProperty('--remote-viewport-height',`${height}px`);
+  document.documentElement.style.setProperty('--remote-viewport-top',`${window.visualViewport?.offsetTop || 0}px`);
+  applyScreenZoom();
+}
+window.visualViewport?.addEventListener('resize',syncRemoteViewport);
+window.visualViewport?.addEventListener('scroll',syncRemoteViewport);
+window.addEventListener('resize',syncRemoteViewport);
+$('#keyboard-text').addEventListener('focus',syncRemoteViewport);
+$('#keyboard-text').addEventListener('blur',syncRemoteViewport);
+document.addEventListener('pointerdown',event => {
+  if (document.activeElement === $('#keyboard-text') && event.target.closest('#send-text,[data-key]')) event.preventDefault();
+});
+
 $('.control-tabs').addEventListener('keydown', event => {
-  const modes = ['mouse','keyboard','screen'];
+  const modes = ['view','mouse','keyboard'];
   const current = modes.indexOf(controlMode);
   let next;
   if (event.key === 'ArrowRight') next = (current+1)%modes.length;
@@ -271,7 +326,10 @@ $('.control-tabs').addEventListener('keydown', event => {
 
 document.addEventListener('click', event => {
   const controlTab = event.target.closest('[data-control-mode]');
-  if (controlTab) selectControlMode(controlTab.dataset.controlMode);
+  if (controlTab) {
+    selectControlMode(controlTab.dataset.controlMode);
+    if (controlMode === 'keyboard') $('#keyboard-text').focus({preventScroll:true});
+  }
   const nav = event.target.closest('[data-nav]');
   if (nav) navigate(nav.dataset.nav);
   const app = event.target.closest('[data-app]');
@@ -302,7 +360,7 @@ $('#pair-form').addEventListener('submit', async event => {
     const response = await api('/state');
     state = await response.json();
     $('#pair-token').value = '';
-    showApp(); setConnection(true); renderState(); navigate('inicio');
+    showApp(); setConnection(true); renderState(); navigate('tela');
     toast(t("Sua ponte está pronta."));
   } catch(error) { i18n.write($('#pair-error'),error); $('#pair-error').hidden = false; }
   finally { $('#pair-submit').disabled = false; $('#pair-submit').innerHTML = `${h('Conectar ao meu PC')} ${icon('arrow')}`; }
@@ -335,6 +393,9 @@ let screenStatusMessage = '';
 let lastScreenTimestamp = null;
 let snapshotRequest = null;
 let screenZoomed = false;
+let screenZoom = 1;
+let screenSourceSize = '';
+let readAtOriginal = false;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
 class MjpegParser {
@@ -380,7 +441,8 @@ class MjpegParser {
   }
 }
 
-function screenIsVisible() { return currentPage === 'controle' && controlMode === 'screen' && !document.hidden && !!token; }
+function screenIsVisible() { return isScreenPage(currentPage) && !document.hidden && !nativePaused && !!token; }
+function reconcileLive() { if (liveWanted && !liveSession && screenIsVisible() && connected && state?.capabilities?.live && $('#monitor-select').value) startLive(); }
 function sessionIsCurrent(session) { return liveSession === session && screenIsVisible(); }
 function updateScreenButtons() {
   const canCapture = connected && !!state?.capabilities?.screenshot && !!$('#monitor-select').value;
@@ -388,8 +450,10 @@ function updateScreenButtons() {
   $('#live-toggle').disabled = !liveSession && !canStream;
   $('#live-toggle').innerHTML = liveSession ? `${icon('pause')}<span>${h("Pausar ao vivo")}</span>` : `${icon('play')}<span>${h("Iniciar ao vivo")}</span>`;
   $('#capture-button').disabled = !canCapture || busyControls.has('capture-button');
+  $('#stage-capture-button').disabled = $('#capture-button').disabled;
   $('#fullscreen-button').disabled = !screenshotURL;
   $('#zoom-button').disabled = !screenshotURL;
+  $('#zoom-out-button').disabled = !screenshotURL || screenZoom <= 1;
   $('#stage-live-toggle').hidden = !liveSession && !screenshotURL;
   $('#stage-live-toggle').disabled = !liveSession && !canStream;
   $('#stage-live-toggle').setAttribute('aria-label',liveSession ? t("Pausar transmissão") : t("Retomar transmissão ao vivo"));
@@ -414,12 +478,29 @@ function setScreenStatus(mode,message = '') {
   updateScreenButtons();
 }
 function applyScreenZoom() {
-  const stage = $('#screen-stage'), image = $('#screen-image');
+  const stage = $('#screen-stage'), preview = $('#screen-preview'), image = $('#screen-image');
+  screenZoomed = screenZoom > 1;
   stage.classList.toggle('zoomed',screenZoomed);
-  image.style.width = screenZoomed ? `${Math.max(stage.clientWidth*2,image.naturalWidth || 0)}px` : '';
+  const ratio = (image.naturalWidth || 16) / (image.naturalHeight || 9);
+  const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
+  image.style.width = `${Math.round(fitWidth*screenZoom)}px`;
+  image.style.height = `${Math.round(fitWidth/ratio*screenZoom)}px`;
   $('#zoom-button').setAttribute('aria-pressed',String(screenZoomed));
   $('#zoom-button').setAttribute('aria-label',screenZoomed ? t("Ajustar imagem inteira à tela") : t("Ampliar imagem para ler"));
-  if (!screenZoomed) { $('#screen-preview').scrollLeft = 0; $('#screen-preview').scrollTop = 0; }
+  $('#zoom-out-button').disabled = !screenshotURL || screenZoom <= 1;
+  if (!screenZoomed) { preview.scrollLeft = 0; preview.scrollTop = 0; }
+}
+function setScreenZoom(value, point) {
+  const preview = $('#screen-preview');
+  const previous = screenZoom;
+  const image = $('#screen-image');
+  const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
+  const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
+  screenZoom = Math.max(1,Math.min(Math.max(4,(image.naturalWidth || fitWidth)/fitWidth),value));
+  const x = point?.x ?? preview.clientWidth/2, y = point?.y ?? preview.clientHeight/2;
+  const left = preview.scrollLeft || 0, top = preview.scrollTop || 0;
+  applyScreenZoom();
+  if (screenZoom > 1) { preview.scrollLeft = (left+x)*screenZoom/previous-x; preview.scrollTop = (top+y)*screenZoom/previous-y; }
 }
 function showScreenImage(url,timestamp,monitor) {
   const oldURL = screenshotURL;
@@ -433,7 +514,7 @@ function showScreenImage(url,timestamp,monitor) {
 }
 function clearScreenImage() {
   if (screenshotURL) URL.revokeObjectURL(screenshotURL);
-  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false;
+  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenZoom = 1;
   $('#screen-image').removeAttribute('src'); $('#screen-image').hidden = true; $('#screen-empty').hidden = false;
   applyScreenZoom(); updateScreenButtons();
 }
@@ -456,12 +537,12 @@ function cancelSnapshot() {
   updateScreenButtons();
 }
 function exitScreenFullscreen() {
-  $('#screen-stage').classList.remove('expanded');
+  $('#screen-stage').classList.remove('expanded','controls-hidden');
   if (document.fullscreenElement === $('#screen-stage')) document.exitFullscreen?.().catch(() => {});
   $('#fullscreen-button').setAttribute('aria-label',t("Abrir tela cheia"));
   $('#fullscreen-button').innerHTML = icon('expand');
 }
-function leaveScreen() { stopLive(); cancelSnapshot(); exitScreenFullscreen(); }
+function leaveScreen() { resetRemoteInput(); stopLive(); cancelSnapshot(); exitScreenFullscreen(); }
 async function screenResponse(path,controller) {
   const requestToken = token;
   let response;
@@ -535,8 +616,9 @@ async function runLiveSession(session) {
     } catch(error) {
       if (!sessionIsCurrent(session)) return;
       session.receiving = false; session.pendingFrame = null;
-      if ([400,401,403,404,415].includes(error.status)) { stopLive(error); toast(error,true); return; }
+      if ([400,401,403,404,415].includes(error.status)) { liveWanted = false; stopLive(error); toast(error,true); return; }
       session.failures += 1;
+      if (session.failures >= 5) { liveWanted = false; stopLive(t('Não chegaram novos quadros. Toque em iniciar para tentar novamente.')); return; }
       const delay = Math.min(5000,1000*2**Math.min(session.failures-1,3));
       session.retryDelay = delay;
       setScreenStatus('reconnecting',t('{message} Tentando novamente em {seconds}s.',{message:t(session.error?.message || 'Conexão interrompida.'),seconds:delay/1000}));
@@ -555,17 +637,33 @@ function startLive() {
   liveSession = session;
   runLiveSession(session);
 }
-$('#live-toggle').addEventListener('click',() => { if (liveSession) stopLive(); else startLive(); });
-$('#stage-live-toggle').addEventListener('click',() => { if (liveSession) stopLive(); else startLive(); });
+function toggleLive() { liveWanted = !liveSession; if (liveSession) stopLive(); else startLive(); }
+$('#live-toggle').addEventListener('click',toggleLive);
+$('#stage-live-toggle').addEventListener('click',toggleLive);
 $('#monitor-select').addEventListener('change',() => {
-  const restart = !!liveSession;
+  const restart = !!liveSession || liveWanted;
+  savePreference('ponte-monitor',$('#monitor-select').value);
   stopLive(); cancelSnapshot(); clearScreenImage();
   $('#viewer-monitor-name').textContent = $('#monitor-select').value || t("Monitor do PC");
   setScreenStatus('idle');
   if (restart) startLive();
 });
-$('#live-quality').addEventListener('change',() => { if (liveSession) startLive(); });
-$('#zoom-button').addEventListener('click',() => { screenZoomed = !screenZoomed; applyScreenZoom(); });
+$('#live-quality').value = savedPreference('ponte-quality','balanced') === 'sharp' ? 'sharp' : 'balanced';
+$('#live-quality').addEventListener('change',() => { savePreference('ponte-quality',$('#live-quality').value); if (liveSession) startLive(); });
+$('#zoom-button').addEventListener('click',() => {
+  const image = $('#screen-image'), preview = $('#screen-preview');
+  const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
+  const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
+  setScreenZoom(screenZoom > 1 ? 1 : Math.max(1,(image.naturalWidth || fitWidth)/fitWidth));
+});
+$('#zoom-out-button').addEventListener('click',() => setScreenZoom(screenZoom/1.5));
+$('#screen-image').addEventListener('load',() => {
+  const image = $('#screen-image');
+  const size = `${image.naturalWidth}x${image.naturalHeight}`;
+  if (size !== screenSourceSize) { screenZoom = 1; screenSourceSize = size; }
+  applyScreenZoom();
+  if (readAtOriginal) { readAtOriginal = false; const preview = $('#screen-preview'); const fit = Math.min(preview.clientWidth,preview.clientHeight*image.naturalWidth/image.naturalHeight); setScreenZoom(image.naturalWidth/fit,{x:0,y:0}); }
+});
 $('#fullscreen-button').addEventListener('click',async () => {
   const stage = $('#screen-stage');
   if (document.fullscreenElement === stage || stage.classList.contains('expanded')) { exitScreenFullscreen(); return; }
@@ -575,31 +673,219 @@ $('#fullscreen-button').addEventListener('click',async () => {
   $('#fullscreen-button').innerHTML = icon('close');
   applyScreenZoom();
 });
+$('#hide-screen-controls').addEventListener('click',() => { selectControlMode('view'); $('#screen-stage').classList.add('controls-hidden'); applyScreenZoom(); });
+$('#show-screen-controls').addEventListener('click',() => { $('#screen-stage').classList.remove('controls-hidden'); applyScreenZoom(); });
 window.addEventListener('resize',applyScreenZoom);
+if (window.ResizeObserver) new window.ResizeObserver(applyScreenZoom).observe($('#screen-preview'));
 window.addEventListener('keydown',event => { if (event.key === 'Escape') exitScreenFullscreen(); });
 document.addEventListener('fullscreenchange',() => {
-  if (!document.fullscreenElement) { $('#fullscreen-button').setAttribute('aria-label',t("Abrir tela cheia")); $('#fullscreen-button').innerHTML = icon('expand'); }
+  if (!document.fullscreenElement) { $('#screen-stage').classList.remove('controls-hidden'); $('#fullscreen-button').setAttribute('aria-label',t("Abrir tela cheia")); $('#fullscreen-button').innerHTML = icon('expand'); }
   applyScreenZoom();
 });
 $('#capture-button').addEventListener('click',async () => {
   if (busyControls.has('capture-button') || !screenIsVisible()) return;
   const monitor = $('#monitor-select').value;
   if (!monitor) { toast(t("Nenhum monitor disponível."),true); return; }
-  stopLive();
+  liveWanted = false; stopLive();
   const request = {controller:new AbortController(),timer:null}; snapshotRequest = request;
   request.timer = setTimeout(() => request.controller.abort(),15000);
   busyControls.add('capture-button'); updateScreenButtons();
   $('#screen-preview').classList.add('loading');
   try {
-    const response = await screenResponse(`/screenshot?monitor=${encodeURIComponent(monitor)}`,request.controller);
+    const response = await screenResponse(`/screenshot?monitor=${encodeURIComponent(monitor)}&scale=1`,request.controller);
     const blob = await response.blob();
     if (snapshotRequest !== request || !screenIsVisible()) return;
+    readAtOriginal = true;
     showScreenImage(URL.createObjectURL(blob),Date.now(),monitor);
     setScreenStatus('snapshot');
   } catch(error) {
     if (snapshotRequest === request) toast(error.name === 'AbortError' ? t("A foto demorou para chegar. Tente novamente.") : error,true);
   } finally { if (snapshotRequest === request) cancelSnapshot(); }
 });
+
+$('#stage-capture-button').addEventListener('click',() => $('#capture-button').click());
+
+const screenPointers = new Map();
+const screenPreview = $('#screen-preview');
+let pinchDistance = 0;
+const pointerDistance = () => { const [a,b] = [...screenPointers.values()]; return a && b ? Math.hypot(a.x-b.x,a.y-b.y) : 0; };
+screenPreview.addEventListener('pointerdown',event => {
+  if (!screenshotURL) return;
+  screenPreview.setPointerCapture(event.pointerId);
+  screenPointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+  pinchDistance = pointerDistance();
+});
+screenPreview.addEventListener('pointermove',event => {
+  const before = screenPointers.get(event.pointerId);
+  if (!before) return;
+  screenPointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+  if (screenPointers.size === 2) {
+    const distance = pointerDistance();
+    const [a,b] = [...screenPointers.values()], rect = screenPreview.getBoundingClientRect();
+    if (pinchDistance > 0) setScreenZoom(screenZoom*distance/pinchDistance,{x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top});
+    pinchDistance = distance;
+  } else if (screenZoom > 1) {
+    screenPreview.scrollLeft -= event.clientX-before.x;
+    screenPreview.scrollTop -= event.clientY-before.y;
+  }
+  event.preventDefault();
+});
+for (const name of ['pointerup','pointercancel','lostpointercapture']) screenPreview.addEventListener(name,event => { screenPointers.delete(event.pointerId); pinchDistance = pointerDistance(); });
+screenPreview.addEventListener('keydown',event => {
+  if (event.key === '+' || event.key === '=') setScreenZoom(screenZoom*1.5);
+  else if (event.key === '-') setScreenZoom(screenZoom/1.5);
+  else if (event.key === '0') setScreenZoom(1);
+  else return;
+  event.preventDefault();
+});
+
+// These sessions use Ponte's tmux socket. They never inject desktop input.
+let terminalId = '';
+let terminalSessions = [];
+let terminalAvailable = false;
+let terminalBusy = false;
+let terminalPaused = false;
+let terminalTimer;
+let terminalGeneration = 0;
+let terminalText = null;
+let terminalClosingId = '';
+const terminalDrafts = new Map();
+function terminalVisible() { return currentPage === 'terminais' && !!token && !document.hidden && !nativePaused; }
+function terminalControls() {
+  const ready = connected && terminalAvailable && !!terminalId && !terminalBusy;
+  $('#terminal-new').disabled = !connected || !terminalAvailable || terminalBusy || terminalSessions.length >= 4;
+  $('#terminal-session').hidden = !terminalId;
+  $('#terminal-select').disabled = terminalBusy || !terminalSessions.length;
+  $('#terminal-pause').disabled = !terminalId;
+  $('#terminal-pause').setAttribute('aria-pressed',String(terminalPaused));
+  $('#terminal-pause').textContent = terminalPaused ? t('Retomar leitura') : t('Pausar leitura');
+  $$('#terminal-send,#terminal-input,#terminal-close,#terminal-size,[data-terminal-key]').forEach(element => { element.disabled = !ready; });
+}
+function renderDesktopTerminals() {
+  const windows = (state?.windows || []).filter(w => appIcon(w.class) === 'terminal');
+  $('#desktop-terminals').innerHTML = windows.length ? windows.map(w => `<button class="terminal-window" data-preview-window="${escaped(w.address)}">${icon('terminal')}<span><strong>${escaped(w.title || w.class)}</strong><small>${escaped(t('Focar e ver no monitor'))}</small></span>${icon('arrow')}</button>`).join('') : `<p class="hint">${h('Nenhuma janela de terminal aberta.')}</p>`;
+}
+function terminalSessionOptions() {
+  const select = $('#terminal-select');
+  const signature = JSON.stringify([terminalSessions,i18n.language]);
+  if (select.dataset.signature !== signature) {
+    select.innerHTML = terminalSessions.length ? terminalSessions.map(session => `<option value="${escaped(session.id)}">${escaped(session.title || t('Terminal'))} · ${escaped(session.id.slice(-6))}</option>`).join('') : `<option value="">${h('Escolha ou crie uma sessão')}</option>`;
+    select.setAttribute('data-signature',signature);
+  }
+  select.value = terminalId;
+  terminalControls();
+}
+function selectTerminal(id) {
+  if (terminalId) terminalDrafts.set(terminalId,$('#terminal-input').value);
+  terminalId = id; terminalText = null;
+  $('#terminal-output').textContent = '';
+  $('#terminal-input').value = terminalDrafts.get(id) || '';
+  savePreference('ponte-terminal',id);
+  const session = terminalSessions.find(item => item.id === id);
+  $('#terminal-size').value = String(session?.cols || 40);
+  terminalSessionOptions();
+}
+async function readTerminals(generation) {
+  if (!terminalVisible() || generation !== terminalGeneration) return;
+  const requestToken = token;
+  try {
+    const response = await api('/terminals',{timeout:8000});
+    const listing = await response.json();
+    if (generation !== terminalGeneration || requestToken !== token || !terminalVisible()) return;
+    terminalAvailable = listing.available === true;
+    terminalSessions = listing.sessions || [];
+    if (!terminalSessions.some(item => item.id === terminalId)) selectTerminal(terminalSessions.find(item => item.id === savedPreference('ponte-terminal'))?.id || terminalSessions[0]?.id || '');
+    terminalSessionOptions();
+    const active = terminalSessions.find(session => session.id === terminalId);
+    $('#terminal-attach').value = active?.attachCommand || '';
+    $('#terminal-mode').hidden = !active?.inMode;
+    $('#terminal-status').textContent = terminalAvailable ? terminalId ? t('Conectado à sessão de texto.') : t('Crie uma sessão para começar. Digitar e executar são ações separadas.') : t('Instale tmux no PC para usar sessões de texto.');
+    if (terminalId && !terminalPaused) {
+      const requestedId = terminalId;
+      const view = await (await api(`/terminals/${encodeURIComponent(requestedId)}`,{timeout:8000})).json();
+      if (generation !== terminalGeneration || requestedId !== terminalId || requestToken !== token || !terminalVisible()) return;
+      const output = $('#terminal-output');
+      const followsTail = output.scrollHeight-output.scrollTop-output.clientHeight < 48;
+      const text = view.text.replace(/\n+$/,'');
+      if (terminalText !== text) {
+        terminalText = text;
+        output.textContent = text;
+        if (followsTail) output.scrollTop = output.scrollHeight;
+      }
+    }
+  } catch (error) {
+    if (generation === terminalGeneration && requestToken === token && terminalVisible()) i18n.write($('#terminal-status'),error);
+  } finally {
+    if (generation === terminalGeneration && terminalVisible()) terminalTimer = setTimeout(() => readTerminals(generation),terminalPaused ? 2000 : 800);
+  }
+}
+function updateTerminalNavigation() {
+  clearTimeout(terminalTimer);
+  const generation = ++terminalGeneration;
+  terminalControls();
+  if (terminalVisible()) { renderDesktopTerminals(); readTerminals(generation); }
+}
+async function terminalMutation(path,body,method = 'POST') {
+  if (terminalBusy || !connected || !token) return null;
+  terminalBusy = true; terminalControls();
+  const requestToken = token;
+  try {
+    const result = await (await api(path,{method,headers:{'Content-Type':'application/json'},...(body === undefined ? {} : {body:JSON.stringify(body)})})).json();
+    return token === requestToken ? result : null;
+  } catch(error) { if (token === requestToken) toast(error,true); return null; }
+  finally { terminalBusy = false; terminalControls(); }
+}
+$('#terminal-new').addEventListener('click',async () => {
+  const session = await terminalMutation('/terminals',{cols:40,rows:24});
+  if (session) { terminalSessions.push(session); selectTerminal(session.id); terminalPaused = false; updateTerminalNavigation(); }
+});
+$('#terminal-select').addEventListener('change',event => { selectTerminal(event.target.value); terminalPaused = false; updateTerminalNavigation(); });
+$('#terminal-pause').addEventListener('click',() => { terminalPaused = !terminalPaused; updateTerminalNavigation(); });
+$('#terminal-input-form').addEventListener('submit',async event => {
+  event.preventDefault();
+  const id = terminalId, text = $('#terminal-input').value;
+  if (!id || !text || terminalBusy) return;
+  const result = await terminalMutation(`/terminals/${encodeURIComponent(id)}/input`,{text});
+  if (result) {
+    terminalDrafts.delete(id);
+    if (terminalId === id && $('#terminal-input').value === text) $('#terminal-input').value = '';
+    updateTerminalNavigation();
+  }
+});
+$('#terminal-size').addEventListener('change',async event => {
+  const id = terminalId;
+  if (!id) return;
+  await terminalMutation(`/terminals/${encodeURIComponent(id)}/resize`,{cols:Number(event.target.value),rows:24});
+  updateTerminalNavigation();
+});
+$('#terminal-close').addEventListener('click',() => {
+  if (!terminalId || terminalBusy) return;
+  terminalClosingId = terminalId;
+  $('#terminal-close-dialog').showModal();
+});
+$('#terminal-close-cancel').addEventListener('click',() => $('#terminal-close-dialog').close());
+$('#terminal-close-confirm').addEventListener('click',async () => {
+  const id = terminalClosingId; terminalClosingId = '';
+  $('#terminal-close-dialog').close();
+  if (!id) return;
+  if (await terminalMutation(`/terminals/${encodeURIComponent(id)}`,undefined,'DELETE')) { terminalDrafts.delete(id); selectTerminal(''); updateTerminalNavigation(); }
+});
+document.addEventListener('click',async event => {
+  const key = event.target.closest('[data-terminal-key]');
+  if (key && terminalId) { await terminalMutation(`/terminals/${encodeURIComponent(terminalId)}/input`,{key:key.dataset.terminalKey}); updateTerminalNavigation(); }
+  const preview = event.target.closest('[data-preview-window]');
+  if (preview) {
+    const target = (state?.windows || []).find(w => w.address === preview.dataset.previewWindow);
+    if (target && await action('window.focus',{address:target.address})) {
+      const monitor = (state.monitors || []).find(m => m.id === target.monitor);
+      if (monitor) { $('#monitor-select').value = monitor.name; savePreference('ponte-monitor',monitor.name); }
+      navigate('tela');
+    }
+  }
+});
+document.addEventListener('visibilitychange',updateTerminalNavigation);
+window.addEventListener('pagehide',() => { clearTimeout(terminalTimer); terminalGeneration++; });
+window.addEventListener('ponte-native-resume',() => { nativePaused = false; updateTerminalNavigation(); pollState(); });
 
 // Pointer deltas are coalesced; only one movement request is in flight.
 const touchpad = $('#touchpad');
@@ -612,6 +898,17 @@ let moving = false;
 let movementTimer = null;
 let dragging = false;
 let dragTimer = null;
+
+function resetRemoteInput() {
+  remoteInputGeneration++;
+  const ids = [...pointers.keys()];
+  pointers.clear();
+  for (const id of ids) { if (touchpad.hasPointerCapture?.(id)) touchpad.releasePointerCapture(id); }
+  touchpad.classList.remove('touched');
+  clearInterval(movementTimer); movementTimer = null;
+  moveQueue = {dx:0,dy:0,scroll:0};
+  stopDrag();
+}
 
 async function flushMovement() {
   if (moving || !connected || !state?.capabilities?.mouse) return;
@@ -684,7 +981,9 @@ async function stopDrag() {
 }
 $('#drag-button').addEventListener('click', async () => {
   if (dragging) { stopDrag(); return; }
+  const generation = remoteInputGeneration;
   if (await action('mouse.drag',{pressed:true})) {
+    if (generation !== remoteInputGeneration) { action('mouse.drag',{pressed:false}); return; }
     dragging = true; updateDragButton(); toast(t("Arraste no touchpad. Toque em Soltar ao terminar."));
     dragTimer = setInterval(async () => {
       if (!connected || document.hidden) { stopDrag(); return; }
@@ -970,21 +1269,23 @@ window.addEventListener('online', pollState);
 window.addEventListener('offline', () => { if(token) setConnection(false,t("Este dispositivo está sem conexão.")); });
 window.addEventListener('pagehide', () => { leaveScreen(); cancelPendingRecording(); stopRecording(); closeMicrophone(); clearInterval(dragTimer); });
 window.addEventListener('ponte-native-pause', event => {
+  nativePaused = true;
+  clearTimeout(terminalTimer); terminalGeneration++;
   leaveScreen(); stopDrag();
   if (!event.detail?.awaitingMicrophonePermission) { cancelPendingRecording(); stopRecording(); closeMicrophone(); }
 });
 window.addEventListener('hashchange', () => { const page = location.hash.slice(1); if (token) navigate(page); });
 
-const dynamicFields = '#home-status,#pc-online,#hostname,#focus-summary,#dialog-hostname,#dialog-status,#touchpad-state,#window-count,#live-badge,#live-overlay-text,#viewer-monitor-name,#capture-time,#live-note,#record-state,#record-hint,#install-hint,#drag-button';
+const dynamicFields = '#terminal-pause,#home-status,#pc-online,#hostname,#focus-summary,#dialog-hostname,#dialog-status,#touchpad-state,#window-count,#live-badge,#live-overlay-text,#viewer-monitor-name,#capture-time,#live-note,#record-state,#record-hint,#install-hint,#drag-button';
 $$(dynamicFields).forEach(element => element.removeAttribute('data-i18n'));
 $$('#mute-button,#stage-live-toggle,#zoom-button,#fullscreen-button').forEach(element => element.removeAttribute('data-i18n-aria-label'));
 $('#screen-image').removeAttribute('data-i18n-alt');
 document.addEventListener('ponte-language-change', () => {
-  const ownedText = '#toast,#pair-error,#record-error,#record-state,#record-hint,#install-hint,#connection-banner-text';
+  const ownedText = '#toast,#pair-error,#record-error,#record-state,#record-hint,#install-hint,#connection-banner-text,#terminal-status';
   $$(ownedText).forEach(element => { element.textContent = t(element.textContent); });
   const bannerError = i18n.read($('#connection-banner-text'));
   setConnection(connected,bannerError);
-  if (state) { renderState(); updateCapabilities(); }
+  if (state) { renderState(); updateCapabilities(); renderDesktopTerminals(); }
   else {
     $('#hostname').textContent = t('Conectando…');
     $('#dialog-hostname').textContent = t('Seu Omarchy');
@@ -992,6 +1293,7 @@ document.addEventListener('ponte-language-change', () => {
     $('#window-count').textContent = t('CARREGANDO');
     $('#viewer-monitor-name').textContent = t('Monitor do PC');
   }
+  terminalSessionOptions();
   if (!token) $('#dialog-status').textContent = t('Não conectado');
   updateDragButton();
   let liveMessage = typeof screenStatusMessage === 'string' ? t(screenStatusMessage) : screenStatusMessage;
@@ -1006,7 +1308,7 @@ document.addEventListener('ponte-language-change', () => {
 });
 
 updateInstalledState();
-if (token) { showApp(); setConnection(false,t("Conectando ao seu computador…")); navigate(location.hash.slice(1) || 'inicio'); pollState(); }
+if (token) { showApp(); setConnection(false,t("Conectando ao seu computador…")); navigate(location.hash.slice(1) || 'tela'); pollState(); }
 else showPairing();
 setInterval(pollState,4000);
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});

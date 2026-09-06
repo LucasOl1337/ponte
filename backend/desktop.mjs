@@ -13,6 +13,7 @@ const keyCodes = {
 const workspace = (value) => ({ id: Number(value?.id) || 0, name: String(value?.name ?? '').slice(0, 150) });
 const windowInfo = (value) => value?.address ? ({
   address: String(value.address), title: String(value.title ?? '').slice(0, 1000),
+  monitor: Number.isInteger(value.monitor) ? value.monitor : null,
   class: String(value.class ?? '').slice(0, 250), workspace: workspace(value.workspace),
 }) : null;
 const numberIn = (value, min, max, integer = false) => {
@@ -92,7 +93,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     return {
       hostname: os.hostname(), uptime: Math.floor(os.uptime()),
       activeWindow: windowInfo(get(0, null, 'ACTIVE_WINDOW_UNAVAILABLE')),
-      monitors: get(1, [], 'MONITORS_UNAVAILABLE').map(m => ({ name: String(m.name), width: m.width, height: m.height, focused: Boolean(m.focused) })),
+      monitors: get(1, [], 'MONITORS_UNAVAILABLE').map(m => ({ id: m.id, name: String(m.name), width: m.width, height: m.height, focused: Boolean(m.focused) })),
       workspaces: get(2, [], 'WORKSPACES_UNAVAILABLE').map(w => ({ ...workspace(w), windows: Number(w.windows) || 0 })),
       windows: get(3, [], 'WINDOWS_UNAVAILABLE').map(windowInfo).filter(Boolean),
       volume: { value: match ? Math.max(0, Math.min(1, Number(match[1]))) : 0, muted: rawVolume.includes('[MUTED]') },
@@ -182,11 +183,12 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     return { ok: true };
   }
 
-  async function screenshot(requestedMonitor) {
+  async function screenshot(requestedMonitor, scale = 0.65) {
+    numberIn(scale, 0.2, 1);
     const monitors = await readHypr('monitors');
     const monitor = requestedMonitor ?? monitors.find(m => m.focused)?.name ?? monitors[0]?.name;
     if (typeof monitor !== 'string' || monitor.length > 150 || !monitors.some(m => m.name === monitor)) throw new ApiError(400, 'INVALID_MONITOR');
-    return run('grim', ['-t', 'jpeg', '-q', '72', '-s', '0.65', '-o', monitor, '-'], { binary: true, timeout: 8000, maxBuffer: 12 * 1024 * 1024 });
+    return run('grim', ['-c', '-t', 'jpeg', '-q', scale === 1 ? '90' : '72', '-s', String(scale), '-o', monitor, '-'], { binary: true, timeout: 8000, maxBuffer: 12 * 1024 * 1024 });
   }
 
   async function prepareLive({ monitor: requestedMonitor, scale, signal }) {
@@ -196,7 +198,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     if (typeof monitor !== 'string' || monitor.length > 150 || !monitors.some(m => m.name === monitor)) throw new ApiError(400, 'INVALID_MONITOR');
     return {
       monitor,
-      capture: (captureSignal) => run('grim', ['-t', 'jpeg', '-q', '65', '-s', scale.toFixed(2), '-o', monitor, '-'], {
+      capture: (captureSignal) => run('grim', ['-c', '-t', 'jpeg', '-q', '65', '-s', scale.toFixed(2), '-o', monitor, '-'], {
         binary: true, signal: captureSignal, timeout: 4000, maxBuffer: 8 * 1024 * 1024,
       }),
     };

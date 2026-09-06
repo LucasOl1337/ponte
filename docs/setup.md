@@ -14,6 +14,7 @@ Desktop actions use these commands:
 | `ydotool` and `ydotoold` | Pointer and keyboard shortcuts |
 | `wtype` | Unicode text input |
 | `grim` | Monitor capture |
+| `tmux` | Optional phone terminal sessions |
 | `wpctl` | PipeWire volume |
 | `ffmpeg` and `ffprobe` | Image/audio processing and validation |
 | `ffplay` | Audio playback on the PC |

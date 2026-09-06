@@ -27,6 +27,7 @@ class Element extends Events {
   querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
   closest(selector){let current=this;while(current){if(current.matches(selector))return current;current=current.parentElement;}return null;}
   focus(){this.ownerDocument.activeElement=this;}
+  blur(){if(this.ownerDocument.activeElement===this)this.ownerDocument.activeElement=null;}
   pause(){this.paused=true;}
   load(){}
   play(){this.paused=false;return Promise.resolve();}

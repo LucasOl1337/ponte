@@ -12,9 +12,13 @@ O Ponte nasceu da vontade de abrir um app no celular e continuar usando o PC. A 
 
 É uma versão **alfa experimental e independente do Omarchy**. O acesso e a imagem ao vivo foram testados em um Redmi Note 13 Pro+ com Android 14. O pareamento permaneceu salvo depois de fechar o app à força e abrir novamente pelo ícone. O teste final de gravação no Android ainda está pendente.
 
+Os modos Ver, Touchpad e Teclado agora compartilham o mesmo monitor. A imagem fica acima dos controles em pé e ao lado deles na horizontal. O layout combinado passou nos testes de navegador; a conferência do teclado real no Android ainda está pendente.
+
+As melhorias de tela e terminais estão na próxima alfa. A atualização personalizada já foi instalada no Redmi, preservando o login; foram verificados a abertura direta na imagem ao vivo, a tela cheia na horizontal e a execução no terminal. A verificação completa do teclado virtual e da gravação ainda está pendente. Veja o [guia de tela e terminais](docs/screen-and-terminals.md).
+
 ## Instalação
 
-No PC, você precisa de Omarchy/Hyprland ativo, Node.js 22+, Python 3.12+, OpenSSL 3 e Tailscale conectada. No celular, Android 8+ e Tailscale na mesma rede privada. Os recursos do desktop usam `hyprctl`, `ydotool`, `wtype`, `grim`, `wpctl`, `ffmpeg` e `ffplay`.
+No PC, você precisa de Omarchy/Hyprland ativo, Node.js 22+, Python 3.12+, OpenSSL 3 e Tailscale conectada. No celular, Android 8+ e Tailscale na mesma rede privada. Os recursos do desktop usam `hyprctl`, `ydotool`, `wtype`, `grim`, `wpctl`, `ffmpeg` e `ffplay`. As sessões de texto também precisam de `tmux`.
 
 ```sh
 git clone https://github.com/LucasOl1337/ponte.git
@@ -32,7 +36,8 @@ Cada instalação gera configuração e certificado próprios. O APK é personal
 
 - Mouse com toque, rolagem de dois dedos, arraste e botão direito.
 - Texto, atalhos, lista de janelas e troca de áreas de trabalho.
-- Imagem ao vivo do monitor escolhido, pausa, zoom e tela cheia.
+- A imagem do PC abre primeiro, com zoom por pinça, rotação, tela cheia e captura em resolução original para ler.
+- Terminais de texto com sessões próprias, edição com setas e Enter separado. A mesma sessão pode ser aberta no PC.
 - Volume e controles de mídia.
 - Interface para gravar, revisar e enviar áudio ao PC, com validação final no Android em andamento.
 
