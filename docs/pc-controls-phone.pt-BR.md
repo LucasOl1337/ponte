@@ -1,8 +1,9 @@
 # PC controla o celular (vice-versa)
 
-Situação: especificação. Nada neste documento está implementado. Ele descreve
-como o PC poderia controlar o celular Android já pareado pela mesma rede
-Tailscale, espelhando o que o Ponte faz hoje na direção contrária.
+Situação: o CLI do caminho A está implementado (`ponte phone`). Os caminhos B e
+C continuam especificação. Este documento descreve como o PC controla o celular
+Android já pareado pela mesma rede Tailscale, espelhando o que o Ponte faz hoje
+na direção contrária.
 
 ## Objetivo
 
@@ -168,6 +169,65 @@ O celular mantém exatamente a superfície de ataque de hoje, e tudo se reverte
 nos Ajustes do aparelho. O caminho B é o produto ideal se o Lucas quiser um dia
 controlar sem modo desenvolvedor, e o C é um complemento sempre-ligado útil,
 mas nenhum dos dois deve travar a primeira versão funcionando.
+
+## Controlar o celular a partir do PC
+
+Este é o caminho A na prática. O PC fala com o Redmi (`redmi-note-13-pro-5g-1`)
+no IPv4 Tailscale `100.111.221.82`. Depois de uma sessão de depuração sem fio
+bem-sucedida, o Android costuma escutar na porta **5555**, que é o padrão do
+Ponte. A porta de pareamento (já vimos 33841 e 44875) só entra quando o celular
+mostra um código.
+
+ADB é um shell completo. Deixe a depuração sem fio desligada quando não estiver
+usando.
+
+### Uma vez no celular
+
+1. Ative as Opções do desenvolvedor (toque sete vezes em Número da compilação).
+2. Ligue **Depuração sem fio**.
+3. Mantenha a Tailscale conectada no celular.
+
+Se o PC ainda não foi aceito, abra Depuração sem fio → **Parear dispositivo com
+código de pareamento**. Anote o IP:porta de pareamento e o código de 6 dígitos.
+
+### No PC
+
+```sh
+./ponte phone status
+```
+
+Confere se `adb` e `scrcpy` estão instalados, se `100.111.221.82` está online na
+tailnet, e se o ADB já lista o celular como `device`.
+
+Se o status pedir código de pareamento:
+
+```sh
+./ponte phone pair 100.111.221.82:37123 123456
+```
+
+Use o IP:porta de pareamento e o código do celular, não a 5555.
+
+Conectar (o padrão é `100.111.221.82:5555`, ou o último endereço salvo):
+
+```sh
+./ponte phone connect
+./ponte phone connect 100.111.221.82:5555
+```
+
+Abrir a janela do scrcpy (título `Ponte`, tela acordada, H.264, sem áudio).
+`--screen-off` apaga a tela do celular enquanto você usa o PC:
+
+```sh
+./ponte phone view
+./ponte phone view --screen-off
+```
+
+Quando a porta de depuração mudar, o `connect` falha em vez de travar. Leia a
+porta nova no celular e rode `./ponte phone connect IP:PORTA` de novo. Feche a
+janela do scrcpy para encerrar. Desligue a depuração sem fio para cortar o
+acesso.
+
+Se o `status` disser que falta ferramenta neste Omarchy: `pacman -S android-tools scrcpy`.
 
 ## Primeira fatia mínima
 

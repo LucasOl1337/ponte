@@ -34,6 +34,8 @@ View, Direct touch, Touchpad and Keyboard share the monitor, so you can watch th
 
 See the [screen and terminal guide](docs/screen-and-terminals.md) for the new navigation and session behavior. These changes target the next alpha. Its personalized Android update has been installed and checked on the Redmi for live Screen entry, landscape fullscreen and terminal execution. Soft-keyboard completion and microphone recording remain pending.
 
+To see and control the phone from this PC over Tailscale, use `./ponte phone status`, then `./ponte phone connect` (default `100.111.221.82:5555`) and `./ponte phone view`. Step-by-step: [PC controls phone](docs/pc-controls-phone.md).
+
 ## Try it
 
 You need an active Omarchy/Hyprland graphical session, Node.js 22+, Python 3.12+, OpenSSL 3, and Tailscale connected on both devices. Desktop capabilities use `hyprctl`, `ydotool`/`ydotoold`, `wtype`, `grim`, `wpctl`, `ffmpeg` and `ffplay`. Text sessions also require `tmux`. The input service needs your user's existing access to `/dev/uinput`.
