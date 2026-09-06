@@ -115,6 +115,10 @@ export const messages = {
     "en": "Invalid monitor.",
     "pt": "Monitor inválido."
   },
+  "INVALID_REGION": {
+    "en": "The visible monitor region is invalid.",
+    "pt": "A região visível do monitor é inválida."
+  },
   "STREAM_ENDED": {
     "en": "The live stream ended.",
     "pt": "Transmissão encerrada."

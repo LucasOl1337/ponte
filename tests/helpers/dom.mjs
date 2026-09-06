@@ -11,6 +11,9 @@ class Element extends Events {
   constructor(tag,document,attrs={}) {
     super(); this.tagName=tag.toUpperCase(); this.ownerDocument=document; this.attrs=attrs; this.nodes=[];
     this.value=attrs.value||''; this.hidden='hidden' in attrs; this.disabled='disabled' in attrs; this.style={setProperty(name,value){this[name]=value;}};
+    this.clientWidth=0; this.clientHeight=0; this.scrollLeft=0; this.scrollTop=0; this.naturalWidth=0; this.naturalHeight=0;
+    this.getBoundingClientRect=()=>({left:this._left||0,top:this._top||0,right:(this._left||0)+this.clientWidth,bottom:(this._top||0)+this.clientHeight,width:this.clientWidth,height:this.clientHeight,x:this._left||0,y:this._top||0});
+    this.setPointerCapture=()=>{}; this.releasePointerCapture=()=>{};
     this.classList={contains:name=>(this.attrs.class||'').split(/\s+/).includes(name),toggle:(name,force)=>{const classes=new Set((this.attrs.class||'').split(/\s+/).filter(Boolean));const add=force===undefined?!classes.has(name):force;if(add)classes.add(name);else classes.delete(name);this.attrs.class=[...classes].join(' ');return add;},add:(...names)=>names.forEach(name=>this.classList.toggle(name,true)),remove:(...names)=>names.forEach(name=>this.classList.toggle(name,false))};
   }
   get id(){return this.attrs.id||'';}

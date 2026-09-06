@@ -6,10 +6,10 @@ import { mkdtemp, mkdir, writeFile, readFile, stat, readdir, rm, symlink } from 
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { createApp } from '../server.mjs';
-import { createDesktop } from '../backend/desktop.mjs';
+import { createDesktop, resolveLiveCapture } from '../backend/desktop.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from '../backend/audio.mjs';
 import { ApiError, runCommand } from '../backend/process.mjs';
-import { createLiveStreaming, writeLiveFrame } from '../backend/live.mjs';
+import { createLiveStreaming, parseLiveOptions, writeLiveFrame } from '../backend/live.mjs';
 import { message, messages } from '../backend/i18n.mjs';
 
 const TOKEN = 'test_token_with_at_least_thirty_two_characters';
@@ -151,6 +151,9 @@ test('actions reject shell injection and bounds before launching any process', a
     null, [], {}, { type: 'exec', command: 'touch /tmp/never' },
     { type: 'mouse.move', dx: '--help', dy: 0 }, { type: 'mouse.move', dx: 1001, dy: 0 },
     { type: 'mouse.scroll', dy: 31 }, { type: 'mouse.click', button: '__proto__' },
+    { type: 'mouse.clickAt', button: 'left', x: -1, y: 0, monitor: 'DP-1' },
+    { type: 'mouse.clickAt', button: 'left', x: 1.5, y: 0, monitor: 'DP-1' },
+    { type: 'mouse.clickAt', button: '__proto__', x: 0, y: 0, monitor: 'DP-1' },
     { type: 'mouse.drag', pressed: 'true' }, { type: 'keyboard.key', key: 'Enter; touch /tmp/never' },
     { type: 'keyboard.text', text: 'a\0b' }, { type: 'keyboard.text', text: 'a'.repeat(4001) },
     { type: 'workspace.focus', id: '1;exec sh' }, { type: 'workspace.focus', id: -1 }, { type: 'workspace.focus', id: 1.1 },
@@ -408,6 +411,89 @@ test('live stream authenticates, validates query/live monitor, then sends contin
   assert.equal(f.calls.filter(call => call.command === 'grim').length, callsBeforeAbort, 'capture must stop after disconnect');
   const monitorReads = f.calls.filter(call => call.command === 'hyprctl' && call.args[1] === 'monitors').length;
   assert.equal(monitorReads, 2, 'one read for invalid live monitor and one when the valid stream starts; none per frame');
+});
+
+test('live region is validated, clamped to the monitor, and captured at scale 1', async t => {
+  const monitor = { name: 'HDMI-A-1', x: 2560, y: 1080, width: 1920, height: 1080 };
+  assert.deepEqual(resolveLiveCapture(monitor, 0.5, null), { scale: 0.5, output: 'HDMI-A-1', geometry: null, region: null });
+  assert.deepEqual(resolveLiveCapture(monitor, 0.5, { x: 100, y: 80, w: 640, h: 360 }), {
+    scale: 1, output: null, geometry: '2660,1160 640x360', region: { x: 100, y: 80, w: 640, h: 360 },
+  });
+  assert.equal(resolveLiveCapture(monitor, 0.65, { x: 0, y: 0, w: 1920, h: 1080 }).geometry, null);
+  assert.equal(resolveLiveCapture(monitor, 0.5, { x: 10, y: 10, w: 1900, h: 1060 }).geometry, null, 'near-full region falls back to the scaled monitor');
+  assert.equal(resolveLiveCapture(monitor, 0.5, { x: 1915, y: 1075, w: 400, h: 400 }).geometry, null, 'a sliver after clamping falls back');
+  const clamped = resolveLiveCapture(monitor, 0.5, { x: 1800, y: 900, w: 400, h: 400 });
+  assert.deepEqual(clamped.region, { x: 1800, y: 900, w: 120, h: 180 });
+  assert.equal(clamped.geometry, '4360,1980 120x180');
+  assert.equal(clamped.scale, 1);
+  assert.throws(() => resolveLiveCapture(monitor, 0.5, { x: -1, y: 0, w: 10, h: 10 }), error => error.status === 400 && error.code === 'INVALID_REGION');
+  assert.throws(() => resolveLiveCapture(monitor, 0.5, { x: 0, y: 0, w: 0, h: 10 }), error => error.status === 400 && error.code === 'INVALID_REGION');
+  assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=10')), error => error.status === 400 && error.code === 'INVALID_REGION');
+  assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=-1&y=0&w=10&h=10')), error => error.code === 'INVALID_REGION');
+  assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=1&y=1&w=10&h=10&x=2')), error => error.code === 'REPEATED_PARAMETER');
+  assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=1&y=1&w=10&h=10&scale=1')), error => error.code === 'INVALID_SCALE');
+  assert.deepEqual(parseLiveOptions(new URLSearchParams('monitor=DP-1&fps=6&scale=0.65&x=100&y=80&w=640&h=360')), {
+    monitor: 'DP-1', fps: 6, scale: 0.65, region: { x: 100, y: 80, w: 640, h: 360 },
+  });
+
+  const f = await fixture(t);
+  for (const query of ['x=10', 'x=-1&y=0&w=10&h=10', 'x=1&y=1&w=0&h=10', 'x=1&y=1&w=10&h=10&x=2', 'x=1.5&y=1&w=10&h=10']) {
+    assert.equal((await f.request(`/api/stream?monitor=DP-1&${query}`)).status, 400, query);
+  }
+  assert.equal(f.calls.filter(call => call.command === 'grim').length, 0);
+
+  const controller = new AbortController();
+  const response = await f.request('/api/stream?monitor=DP-1&fps=10&scale=0.5&x=100&y=80&w=640&h=360', { signal: controller.signal });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-live-max-fps'), '10');
+  const reader = response.body.getReader();
+  let received = Buffer.alloc(0);
+  while ((received.toString('latin1').match(/--ponte-frame/g) || []).length < 2) {
+    const { value, done } = await reader.read(); assert.equal(done, false);
+    received = Buffer.concat([received, value]);
+  }
+  const grim = f.calls.filter(call => call.command === 'grim');
+  assert.ok(grim.length >= 2);
+  assert.deepEqual(grim[0].args, ['-c', '-t', 'jpeg', '-q', '65', '-s', '1', '-g', '100,80 640x360', '-']);
+  assert.equal(grim[0].options.maxBuffer, 8 * 1024 * 1024);
+  controller.abort(); await reader.cancel().catch(() => {});
+
+  const fallback = new AbortController();
+  const full = await f.request('/api/stream?monitor=DP-1&fps=8&scale=0.5&x=0&y=0&w=1920&h=1080', { signal: fallback.signal });
+  assert.equal(full.status, 200);
+  const fullReader = full.body.getReader();
+  let fullBytes = Buffer.alloc(0);
+  while ((fullBytes.toString('latin1').match(/--ponte-frame/g) || []).length < 1) {
+    const { value, done } = await fullReader.read(); assert.equal(done, false);
+    fullBytes = Buffer.concat([fullBytes, value]);
+  }
+  assert.deepEqual(f.calls.filter(call => call.command === 'grim').at(-1).args, ['-c', '-t', 'jpeg', '-q', '65', '-s', '0.50', '-o', 'DP-1', '-']);
+  fallback.abort(); await fullReader.cancel().catch(() => {});
+});
+
+test('absolute clicks map monitor pixels through the output origin without shell interpolation', async t => {
+  const calls = [];
+  const runner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'HDMI-A-1', x: 2560, y: 0, width: 1920, height: 1080, focused: true }]);
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  await desktop.action({ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 100, y: 40, button: 'left' });
+  assert.deepEqual(calls.at(-2).args, ['mousemove', '--absolute', '--', '2660', '40']);
+  assert.deepEqual(calls.at(-1).args, ['click', '0xC0']);
+  await desktop.action({ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 8, y: 9, button: 'right' });
+  assert.deepEqual(calls.at(-1).args, ['click', '0xC1']);
+  await assert.rejects(desktop.action({ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 1920, y: 0, button: 'left' }), error => error.status === 400);
+  await assert.rejects(desktop.action({ type: 'mouse.clickAt', monitor: 'missing', x: 0, y: 0, button: 'left' }), error => error.status === 400);
+  await desktop.close();
+
+  const f = await fixture(t);
+  const response = await f.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 15, y: 20, button: 'left' });
+  assert.equal(response.status, 200);
+  const ydotool = f.calls.filter(call => call.command === 'ydotool');
+  assert.deepEqual(ydotool.at(-2).args, ['mousemove', '--absolute', '--', '15', '20']);
+  assert.deepEqual(ydotool.at(-1).args, ['click', '0xC0']);
 });
 
 test('live streaming allows three sessions, rejects a fourth, and frees slots after cancellation', async t => {

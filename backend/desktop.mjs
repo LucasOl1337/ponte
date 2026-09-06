@@ -23,6 +23,30 @@ const numberIn = (value, min, max, integer = false) => {
   return value;
 };
 
+export function resolveLiveCapture(monitor, scale, region, { minEdge = 8 } = {}) {
+  const mx = Number(monitor?.x) || 0;
+  const my = Number(monitor?.y) || 0;
+  const mw = Number(monitor?.width);
+  const mh = Number(monitor?.height);
+  if (!Number.isInteger(mw) || !Number.isInteger(mh) || mw < 1 || mh < 1) throw new ApiError(400, 'INVALID_MONITOR');
+  if (region == null) return { scale, output: monitor.name, geometry: null, region: null };
+  const { x: x0, y: y0, w: w0, h: h0 } = region;
+  if (![x0, y0, w0, h0].every(value => Number.isInteger(value))) throw new ApiError(400, 'INVALID_REGION');
+  if (w0 < 1 || h0 < 1 || x0 < 0 || y0 < 0) throw new ApiError(400, 'INVALID_REGION');
+  const x = Math.min(x0, mw - 1);
+  const y = Math.min(y0, mh - 1);
+  const w = Math.max(0, Math.min(w0, mw - x));
+  const h = Math.max(0, Math.min(h0, mh - y));
+  const nearlyFull = w >= mw * 0.98 && h >= mh * 0.98 && x <= mw * 0.02 && y <= mh * 0.02;
+  if (nearlyFull || w < minEdge || h < minEdge) return { scale, output: monitor.name, geometry: null, region: null };
+  return {
+    scale: 1,
+    output: null,
+    geometry: `${mx + x},${my + y} ${w}x${h}`,
+    region: { x, y, w, h },
+  };
+}
+
 function getEthernetWolInfo(env = process.env) {
   if (env.PONTE_WOL_MAC && env.PONTE_WOL_INTERFACE) {
     return { mac: env.PONTE_WOL_MAC, interface: env.PONTE_WOL_INTERFACE };
@@ -157,6 +181,26 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         if (!Object.hasOwn(buttons, value.button)) throw new ApiError(400, 'INVALID_BUTTON');
         await run('ydotool', ['click', buttons[value.button]]); break;
       }
+      case 'mouse.clickAt': {
+        const buttons = { left: '0xC0', right: '0xC1', middle: '0xC2' };
+        if (!Object.hasOwn(buttons, value.button)) throw new ApiError(400, 'INVALID_BUTTON');
+        if (typeof value.monitor !== 'string' || value.monitor.length < 1 || value.monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
+        const x = numberIn(value.x, 0, 32767, true);
+        const y = numberIn(value.y, 0, 32767, true);
+        const monitors = await readHypr('monitors');
+        const monitor = monitors.find(item => item.name === value.monitor);
+        if (!monitor) throw new ApiError(400, 'INVALID_MONITOR');
+        const width = Number(monitor.width);
+        const height = Number(monitor.height);
+        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new ApiError(400, 'INVALID_MONITOR');
+        numberIn(x, 0, width - 1, true);
+        numberIn(y, 0, height - 1, true);
+        const gx = (Number(monitor.x) || 0) + x;
+        const gy = (Number(monitor.y) || 0) + y;
+        await run('ydotool', ['mousemove', '--absolute', '--', String(gx), String(gy)]);
+        await run('ydotool', ['click', buttons[value.button]]);
+        break;
+      }
       case 'mouse.scroll': {
         const dy = numberIn(value.dy, -30, 30);
         await run('ydotool', ['mousemove', '--wheel', '--', '0', String(Math.round(dy))]); break;
@@ -255,16 +299,22 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     return run('grim', ['-c', '-t', 'jpeg', '-q', scale === 1 ? '90' : '72', '-s', String(scale), '-o', monitor, '-'], { binary: true, timeout: 8000, maxBuffer: 12 * 1024 * 1024 });
   }
 
-  async function prepareLive({ monitor: requestedMonitor, scale, signal }) {
+  async function prepareLive({ monitor: requestedMonitor, scale, region, signal }) {
     numberIn(scale, 0.2, 0.65);
     const monitors = await readHypr('monitors', { signal });
-    const monitor = requestedMonitor ?? monitors.find(m => m.focused)?.name ?? monitors[0]?.name;
-    if (typeof monitor !== 'string' || monitor.length > 150 || !monitors.some(m => m.name === monitor)) throw new ApiError(400, 'INVALID_MONITOR');
+    const selected = monitors.find(item => item.name === (requestedMonitor ?? monitors.find(m => m.focused)?.name ?? monitors[0]?.name));
+    if (!selected || typeof selected.name !== 'string' || selected.name.length > 150) throw new ApiError(400, 'INVALID_MONITOR');
+    const capture = resolveLiveCapture(selected, scale, region);
     return {
-      monitor,
-      capture: (captureSignal) => run('grim', ['-c', '-t', 'jpeg', '-q', '65', '-s', scale.toFixed(2), '-o', monitor, '-'], {
-        binary: true, signal: captureSignal, timeout: 4000, maxBuffer: 8 * 1024 * 1024,
-      }),
+      monitor: selected.name,
+      region: capture.region,
+      capture: (captureSignal) => {
+        const args = ['-c', '-t', 'jpeg', '-q', '65', '-s', capture.geometry ? '1' : capture.scale.toFixed(2)];
+        if (capture.geometry) args.push('-g', capture.geometry);
+        else args.push('-o', capture.output);
+        args.push('-');
+        return run('grim', args, { binary: true, signal: captureSignal, timeout: 4000, maxBuffer: 8 * 1024 * 1024 });
+      },
     };
   }
 

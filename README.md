@@ -21,7 +21,7 @@ These English previews show the running app connected to a read-only review inst
 | Touchpad | Pointer movement, tap to click, two-finger scrolling, drag and right click |
 | Keyboard | Send text and common shortcuts to the current PC window |
 | Windows | Browse windows and workspaces, then focus the one you want |
-| Monitor view | Opens first. Watch live, rotate, pinch, or freeze a full-resolution frame to read |
+| Monitor view | Opens first. Watch live, rotate, pinch a real-resolution crop, tap the image in Direct touch, or freeze a full-resolution frame to read |
 | Terminals | Read and type in dedicated text sessions, with explicit Enter and desktop attachment |
 | Media | Volume, mute, playback and track controls |
 | Voice | Record, review, send to the PC and play back. Android recording verification is still in progress |
@@ -29,7 +29,7 @@ These English previews show the running app connected to a read-only review inst
 
 Live view uses authenticated MJPEG with profiles up to 10 frames per second. It does not stream system audio. This is intended for desktop control and checking progress, not gaming or high-frame-rate remote video.
 
-View, Touchpad and Keyboard now share the monitor, so you can watch the PC while controlling it. The image sits above the controls in portrait and beside them in landscape. The combined layout is browser-tested; its physical Android keyboard check remains pending.
+View, Direct touch, Touchpad and Keyboard share the monitor, so you can watch the PC while controlling it. Zooming the live image captures only the visible region at full resolution. Direct touch clicks that image; the separate touchpad remains available. The image sits above the controls in portrait and beside them in landscape. The combined layout is browser-tested; its physical Android keyboard check remains pending.
 
 See the [screen and terminal guide](docs/screen-and-terminals.md) for the new navigation and session behavior. These changes target the next alpha. Its personalized Android update has been installed and checked on the Redmi for live Screen entry, landscape fullscreen and terminal execution. Soft-keyboard completion and microphone recording remain pending.
 
