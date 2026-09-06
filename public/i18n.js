@@ -1,5 +1,7 @@
 'use strict';
 (() => {
+  // The hasOwn() static needs Chrome 93, but minSdk 26 promises older WebViews.
+  const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
   // Portuguese source messages are stable translation keys. English is the global default.
   const english = {
   "Ver": "View",
@@ -726,15 +728,15 @@
   try { if (localStorage.getItem(storageKey) === 'pt') language = 'pt'; } catch {}
   const reverse = new Map(Object.entries(english).map(([key,value]) => [value,key]));
   const rendered = new Map();
-  const canonical = key => Object.hasOwn(english,key) ? key : reverse.get(key) || key;
+  const canonical = key => hasOwn(english,key) ? key : reverse.get(key) || key;
   const locale = () => language === 'pt' ? 'pt-BR' : 'en';
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function t(key, values = {}) {
     if (rendered.has(key) && !Object.keys(values).length) { const previous = rendered.get(key); key = previous.key; values = previous.values; }
     key = canonical(key);
     const message = language === 'pt' ? key : english[key] ?? key;
-    const result = message.replace(/\{([a-zA-Z]+)\}/g, (match,name) => Object.hasOwn(values,name) ? String(values[name]) : match);
-    if (Object.hasOwn(english,key) && Object.keys(values).length) {
+    const result = message.replace(/\{([a-zA-Z]+)\}/g, (match,name) => hasOwn(values,name) ? String(values[name]) : match);
+    if (hasOwn(english,key) && Object.keys(values).length) {
       if (rendered.size >= 200) rendered.delete(rendered.keys().next().value);
       rendered.set(result,{key,values});
     }
@@ -747,15 +749,15 @@
     return `<span data-i18n="${escape(canonical(key))}" data-i18n-values="${escape(JSON.stringify(values))}">${escape(t(key,values))}</span>`;
   }
   function apiMessage(code,parameters = {},fallback = '') {
-    const entry = Object.hasOwn(apiMessages,code) ? apiMessages[code] : null;
+    const entry = hasOwn(apiMessages,code) ? apiMessages[code] : null;
     if (!entry) return fallback;
-    return entry[language].replace(/\{(\w+)\}/g, (match,name) => Object.hasOwn(parameters,name) ? String(parameters[name]) : match);
+    return entry[language].replace(/\{(\w+)\}/g, (match,name) => hasOwn(parameters,name) ? String(parameters[name]) : match);
   }
   function write(element,value) {
     element.removeAttribute('data-api-code'); element.removeAttribute('data-api-parameters');
     const code = value && typeof value === 'object' ? value.errorCode : null;
     const fallback = value && typeof value === 'object' ? value.message : String(value ?? '');
-    if (code && Object.hasOwn(apiMessages,code)) {
+    if (code && hasOwn(apiMessages,code)) {
       const parameters = value.errorParameters || {};
       element.setAttribute('data-api-code',code);
       element.setAttribute('data-api-parameters',JSON.stringify(parameters));
