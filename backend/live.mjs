@@ -3,8 +3,17 @@ import { ApiError } from './process.mjs';
 export const LIVE_BOUNDARY = 'ponte-frame';
 export const MAX_LIVE_FRAME_BYTES = 8 * 1024 * 1024;
 
+function parseRegionPart(query, key) {
+  if (!query.has(key)) return undefined;
+  const raw = query.get(key);
+  if (raw === '' || !/^-?\d+$/.test(raw)) throw new ApiError(400, 'INVALID_REGION');
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value > 32767) throw new ApiError(400, 'INVALID_REGION');
+  return value;
+}
+
 export function parseLiveOptions(query) {
-  const fields = ['monitor', 'fps', 'scale'];
+  const fields = ['monitor', 'fps', 'scale', 'x', 'y', 'w', 'h'];
   for (const key of fields) if (query.getAll(key).length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
   const fps = query.has('fps') ? Number(query.get('fps')) : 10;
   const scale = query.has('scale') ? Number(query.get('scale')) : 0.5;
@@ -12,7 +21,18 @@ export function parseLiveOptions(query) {
   if (!Number.isFinite(scale) || scale < 0.2 || scale > 0.65) throw new ApiError(400, 'INVALID_SCALE');
   const monitor = query.get('monitor') ?? undefined;
   if (monitor !== undefined && (monitor.length < 1 || monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(monitor))) throw new ApiError(400, 'INVALID_MONITOR');
-  return { monitor, fps, scale };
+  const x = parseRegionPart(query, 'x');
+  const y = parseRegionPart(query, 'y');
+  const w = parseRegionPart(query, 'w');
+  const h = parseRegionPart(query, 'h');
+  const given = [x, y, w, h].map(value => value !== undefined);
+  if (given.some(Boolean) !== given.every(Boolean)) throw new ApiError(400, 'INVALID_REGION');
+  let region;
+  if (x !== undefined) {
+    if (x < 0 || y < 0 || w < 1 || h < 1) throw new ApiError(400, 'INVALID_REGION');
+    region = { x, y, w, h };
+  }
+  return { monitor, fps, scale, region };
 }
 
 function aborted() { return new ApiError(499, 'STREAM_ENDED'); }
