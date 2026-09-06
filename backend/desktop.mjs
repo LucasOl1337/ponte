@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { access, stat } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 import { message } from './i18n.mjs';
 
@@ -45,6 +45,32 @@ export function resolveLiveCapture(monitor, scale, region, { minEdge = 8 } = {})
     geometry: `${mx + x},${my + y} ${w}x${h}`,
     region: { x, y, w, h },
   };
+}
+
+function getEthernetWolInfo(env = process.env) {
+  if (env.PONTE_WOL_MAC && env.PONTE_WOL_INTERFACE) {
+    return { mac: env.PONTE_WOL_MAC, interface: env.PONTE_WOL_INTERFACE };
+  }
+  let ifaces;
+  try { ifaces = os.networkInterfaces(); } catch { return { mac: null, interface: null }; }
+  const candidates = [];
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    for (const addr of addrs || []) {
+      if (addr.internal || !addr.mac || addr.mac === '00:00:00:00:00:00') continue;
+      const isEthernetName = /^(en|eth)/i.test(name);
+      let isPhysical = false;
+      try { isPhysical = existsSync(`/sys/class/net/${name}/device`); } catch {}
+      candidates.push({ name, mac: addr.mac, isEthernetName, isPhysical, hasIpv4: addr.family === 'IPv4' });
+    }
+  }
+  candidates.sort((a, b) => {
+    if (a.isPhysical !== b.isPhysical) return b.isPhysical ? 1 : -1;
+    if (a.isEthernetName !== b.isEthernetName) return b.isEthernetName ? 1 : -1;
+    if (a.hasIpv4 !== b.hasIpv4) return b.hasIpv4 ? 1 : -1;
+    return 0;
+  });
+  const best = candidates[0];
+  return best ? { mac: best.mac, interface: best.name } : { mac: null, interface: null };
 }
 
 export function createDesktop({ runner = runCommand, exists = commandExists, env = process.env, dragTimeout = 1800 } = {}) {
@@ -114,14 +140,22 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     if (!caps.keyboard) warnings.push('TEXT_UNAVAILABLE');
     if (!caps.screenshot) warnings.push('SCREENSHOT_UNAVAILABLE');
     if (!caps.audio) warnings.push('PLAYBACK_UNAVAILABLE');
+    const wol = getEthernetWolInfo(env);
+    const wolInstructions = message('WOL_INSTRUCTIONS', locale, { mac: wol.mac || '—', interface: wol.interface || '—' });
     return {
       hostname: os.hostname(), uptime: Math.floor(os.uptime()),
       activeWindow: windowInfo(get(0, null, 'ACTIVE_WINDOW_UNAVAILABLE')),
-      monitors: get(1, [], 'MONITORS_UNAVAILABLE').map(m => ({ id: m.id, name: String(m.name), width: m.width, height: m.height, focused: Boolean(m.focused) })),
+      monitors: get(1, [], 'MONITORS_UNAVAILABLE').map(m => ({
+        id: m.id, name: String(m.name), width: m.width, height: m.height, focused: Boolean(m.focused),
+        dpmsStatus: m.dpmsStatus !== undefined ? Boolean(m.dpmsStatus) : true,
+        model: m.model ? String(m.model) : (m.description ? String(m.description) : undefined),
+      })),
       workspaces: get(2, [], 'WORKSPACES_UNAVAILABLE').map(w => ({ ...workspace(w), windows: Number(w.windows) || 0 })),
       windows: get(3, [], 'WINDOWS_UNAVAILABLE').map(windowInfo).filter(Boolean),
       volume: { value: match ? Math.max(0, Math.min(1, Number(match[1]))) : 0, muted: rawVolume.includes('[MUTED]') },
       capabilities: caps, warningCodes: warnings, warnings: warnings.map(code => message(code, locale)),
+      wakeOnLan: { mac: wol.mac, interface: wol.interface, instructions: wolInstructions },
+      power: { wakeOnLan: { mac: wol.mac, interface: wol.interface, instructions: wolInstructions } },
     };
   }
 
@@ -221,6 +255,36 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         await run('systemd-run', ['--user', '--quiet', '--collect', '--no-ask-password',
           '--property=StandardOutput=null', '--property=StandardError=null',
           '--', 'omarchy', 'launch', apps[value.app]], { timeout: 6000 }); break;
+      }
+      case 'power.dpms':
+      case 'screen.dpms':
+      case 'monitor.dpms': {
+        const stateStr = typeof value.enabled === 'boolean' ? (value.enabled ? 'on' : 'off') : value.state;
+        if (stateStr !== 'on' && stateStr !== 'off') throw new ApiError(400, 'INVALID_POWER_STATE');
+        if (typeof value.monitor !== 'string' || !value.monitor.length || value.monitor.length > 150 || /[\s;&|`$><()]/u.test(value.monitor)) {
+          throw new ApiError(400, 'INVALID_MONITOR');
+        }
+        const monitors = await readHypr('monitors');
+        if (!monitors.some(m => m.name === value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
+        await run('hyprctl', ['dispatch', 'dpms', stateStr, value.monitor]); break;
+      }
+      case 'power.sleep':
+      case 'power.smart_sleep': {
+        await run('hyprctl', ['dispatch', 'dpms', 'off']);
+        const pythonBin = env.PYTHON_BIN || 'python';
+        const controller = env.MAGMA_LIGHTS_CONTROLLER || path.join(env.HOME || os.homedir(), '.local/share/magma-lights/controller.py');
+        await run(pythonBin, [controller, 'sleep']); break;
+      }
+      case 'power.wake':
+      case 'power.restore': {
+        await run('hyprctl', ['dispatch', 'dpms', 'on']);
+        const pythonBin = env.PYTHON_BIN || 'python';
+        const controller = env.MAGMA_LIGHTS_CONTROLLER || path.join(env.HOME || os.homedir(), '.local/share/magma-lights/controller.py');
+        await run(pythonBin, [controller, 'restore']); break;
+      }
+      case 'power.poweroff':
+      case 'power.off': {
+        await run('systemctl', ['poweroff']); break;
       }
       default: throw new ApiError(400, 'ACTION_NOT_ALLOWED');
     }

@@ -72,6 +72,25 @@ A stopped service is unavailable to the phone. Your PC must be awake, connected 
 
 `./ponte serve` is an optional, explicit Tailscale Serve operation for the browser interface. It requires a configured Tailscale DNS name in `trustedHosts`; the native Android app does not require Serve. Check your existing Serve configuration before using that command.
 
+## Power management and smart sleep
+
+Ponte provides power controls directly from your phone's home dashboard:
+
+- **Per-monitor DPMS toggles:** Turn individual screens off and on using `hyprctl dispatch dpms off/on <monitor>`.
+- **Smart sleep (`power.sleep`):** Turns off all monitors via DPMS and switches off all RGB lights using the Magma Lights controller (`python /home/lol/.local/share/magma-lights/controller.py sleep`). **This is not suspend or shutdown**: the PC remains powered on, background agents and processes continue running uninterrupted, and the machine stays reachable over Tailscale.
+- **Wake (`power.wake`):** Turns on all monitors via DPMS and restores RGB lighting profiles (`controller.py restore`).
+- **Power off (`power.poweroff`):** Shuts down the machine (`systemctl poweroff`) with explicit double confirmation in the UI.
+
+### Wake-on-LAN (WoL) prerequisites
+
+Because a powered-off machine stops running Ponte and disconnects from Tailscale, turning the PC back on remotely requires a Wake-on-LAN Magic Packet sent over your local Ethernet network.
+
+Ponte exposes your primary Ethernet MAC address (`d8:43:ae:8b:e8:a8`) and interface (`enp12s0`) in the `/api/state` and `/api/power` responses to facilitate WoL tooling:
+
+1. **Motherboard BIOS/UEFI:** Enable "Power On By PCI-E/PCI" or "Wake on LAN" in ACPI/APM power management configuration.
+2. **Network interface:** Verify that the Ethernet interface has WoL enabled with `ethtool enp12s0 | grep Wake-on`. It should report `Wake-on: g`. To persist this across reboots, configure `systemd.link` (`[Link] WakeOnLan=magic`) or NetworkManager.
+3. **Magic Packet:** When the PC is off, broadcast a standard UDP magic packet containing the MAC address to port 9 from another device on the local network.
+
 ## Update
 
 Keep your configuration, token and Android signing directory. Stop the service before updating source, run the relevant tests, then start it again. If a new CLI generates different unit definitions, review them and use `./ponte uninstall` followed by `./ponte install` rather than overwriting an unrelated service.

@@ -118,7 +118,7 @@ function setConnection(isConnected, error = '') {
   $('#dialog-status').textContent = isConnected ? t("Conexão privada · navegador pareado") : t("Aguardando resposta do computador");
   $('#connection-banner').hidden = isConnected || !token;
   if (!isConnected) i18n.write($('#connection-banner-text'),error || t("Conexão interrompida. Tentando reconectar…"));
-  $$('[data-app],[data-action],[data-key],#mute-button,#send-text,#left-click,#right-click,#drag-button,#stop-pc-audio').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
+  $$('[data-app],[data-action],[data-key],[data-monitor-toggle],#mute-button,#send-text,#left-click,#right-click,#drag-button,#stop-pc-audio,#btn-poweroff').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
   $('#volume').disabled = !isConnected;
   $('#capture-button').disabled = !isConnected || !state?.capabilities?.screenshot || busyControls.has('capture-button');
   updateScreenButtons();
@@ -176,6 +176,7 @@ function renderState() {
   $('#mute-button').innerHTML = icon(muted ? 'muted' : 'volume');
   renderWorkspaces();
   renderWindows();
+  renderPowerMonitors();
   const monitors = state.monitors || [];
   const nextMonitorSignature = JSON.stringify([monitors,i18n.language]);
   if (monitorSignature !== nextMonitorSignature) {
@@ -224,6 +225,25 @@ function renderWindows() {
     return;
   }
   $('#window-list').innerHTML = windows.map(window => `<button class="window-card ${window.address === activeAddress ? 'active' : ''}" data-window="${escaped(window.address)}" aria-label="${escaped(t('Focar {title}, área {workspace}',{title:window.title || window.class || t("janela"),workspace:window.workspace?.name || window.workspace?.id || '—'}))}"><span class="window-app-icon">${icon(appIcon(window.class))}</span><span class="window-details"><span>${escaped(window.class || t("Aplicativo"))}</span><strong>${escaped(window.title || t("Janela sem título"))}</strong><small>${escaped(t('Área {workspace}',{workspace:window.workspace?.name || window.workspace?.id || '—'}))}${window.address === activeAddress ? t(" · em foco") : ''}</small></span>${icon(window.address === activeAddress ? 'check' : 'arrow')}</button>`).join('');
+}
+
+function renderPowerMonitors() {
+  const container = $('#power-monitors');
+  if (!container || !state) return;
+  const monitors = state.monitors || [];
+  if (!monitors.length) {
+    container.innerHTML = `<p class="hint">${h("Nenhum monitor disponível.")}</p>`;
+    return;
+  }
+  const disabledAttr = !connected ? ' disabled' : '';
+  container.innerHTML = monitors.map(m => {
+    const isOn = m.dpmsStatus !== false;
+    const actionLabel = isOn ? t("Desligar monitor {name}",{name:m.name}) : t("Ligar monitor {name}",{name:m.name});
+    const stateLabel = isOn ? t("Ligado") : t("Desligado");
+    const nextState = isOn ? 'off' : 'on';
+    const resolution = `${Number(m.width)}×${Number(m.height)}`;
+    return `<div class="power-monitor-row"><div class="power-monitor-info"><strong class="power-monitor-name">${escaped(m.name)}</strong><span class="power-monitor-details">${escaped(resolution)}${m.description ? ` · ${escaped(m.description)}` : ''}</span></div><button type="button" class="power-monitor-toggle ${isOn ? 'on' : 'off'}" data-monitor-toggle="${escaped(m.name)}" data-next-state="${nextState}" aria-label="${escaped(actionLabel)}" aria-pressed="${isOn}"${disabledAttr}><span class="toggle-track"><span class="toggle-thumb"></span></span><span class="toggle-label">${escaped(stateLabel)}</span></button></div>`;
+  }).join('');
 }
 
 async function pollState() {
@@ -337,8 +357,20 @@ document.addEventListener('click', event => {
   if (nav) navigate(nav.dataset.nav);
   const app = event.target.closest('[data-app]');
   if (app) action('app.launch',{app:app.dataset.app}, t("Abrindo no PC…"));
+  const monitorToggle = event.target.closest('[data-monitor-toggle]');
+  if (monitorToggle) {
+    const monitor = monitorToggle.dataset.monitorToggle;
+    const nextState = monitorToggle.dataset.nextState;
+    const feedback = nextState === 'on' ? t("Monitor ligado.") : t("Monitor desligado.");
+    action('power.dpms', { monitor, state: nextState }, feedback);
+  }
   const generic = event.target.closest('[data-action]');
-  if (generic) action(generic.dataset.action);
+  if (generic) {
+    let feedback = '';
+    if (generic.dataset.action === 'power.sleep') feedback = t("Dormindo: monitores e luzes apagados.");
+    else if (generic.dataset.action === 'power.wake') feedback = t("PC acordado: monitores e luzes restaurados.");
+    action(generic.dataset.action, {}, feedback);
+  }
   const key = event.target.closest('[data-key]');
   if (key) action('keyboard.key',{key:key.dataset.key});
   const workspace = event.target.closest('[data-workspace]');
@@ -379,6 +411,13 @@ $('#volume').addEventListener('input', event => {
 });
 $('#volume').addEventListener('change', async event => { await action('volume.set',{value:Number(event.target.value)/100}); volumeEditing = false; });
 $('#volume').addEventListener('blur', () => { volumeEditing = false; });
+$('#btn-poweroff').addEventListener('click', () => { $('#poweroff-dialog').showModal(); });
+$('#poweroff-cancel').addEventListener('click', () => $('#poweroff-dialog').close());
+$('#poweroff-dialog-close').addEventListener('click', () => $('#poweroff-dialog').close());
+$('#poweroff-confirm').addEventListener('click', async () => {
+  $('#poweroff-dialog').close();
+  await action('power.poweroff', {}, t("Desligando o PC…"));
+});
 $('#send-text').addEventListener('click', async () => {
   if (busyControls.has('send-text')) return;
   const text = $('#keyboard-text').value;

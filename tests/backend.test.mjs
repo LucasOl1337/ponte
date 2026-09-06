@@ -135,8 +135,9 @@ test('state normalizes live desktop output and marks degraded integrations', asy
   const state = await response.json();
   assert.deepEqual(state.activeWindow, {...window,monitor:null});
   assert.deepEqual(state.volume, { value: 0.67, muted: true });
-  assert.deepEqual(state.monitors, [{ name: 'DP-1', width: 1920, height: 1080, focused: true }]);
+  assert.deepEqual(state.monitors, [{ name: 'DP-1', width: 1920, height: 1080, focused: true, dpmsStatus: true }]);
   assert.deepEqual(state.workspaces, [{ id: 3, name: '3', windows: 1 }]);
+  assert.ok(state.wakeOnLan && typeof state.wakeOnLan.instructions === 'string');
   const degraded = createDesktop({ runner: async () => { throw new Error('private internal failure'); }, exists: async () => false });
   const degradedState = await degraded.getState();
   assert.equal(degradedState.activeWindow, null);
@@ -159,6 +160,8 @@ test('actions reject shell injection and bounds before launching any process', a
     { type: 'window.focus', address: '0xabc;dispatch exec true' },
     { type: 'volume.set', value: 1.1 }, { type: 'volume.set', value: '0.5' },
     { type: 'app.launch', app: 'terminal; touch /tmp/never' }, { type: 'app.launch', app: '__proto__' },
+    { type: 'power.dpms', monitor: 'DP-1; reboot', state: 'off' }, { type: 'power.dpms', monitor: 'DP-1', state: 'standby' },
+    { type: 'power.dpms', monitor: '', state: 'off' }, { type: 'power.dpms', monitor: 'DP-1', state: 123 },
   ]) {
     assert.equal((await f.action(value)).status, 400, JSON.stringify(value));
   }
@@ -199,6 +202,60 @@ test('reading at original resolution uses a bounded full-size screenshot without
   assert.deepEqual(f.calls.at(-1).args, ['-c', '-t', 'jpeg', '-q', '90', '-s', '1', '-o', 'DP-1', '-']);
   assert.equal((await f.request('/api/stream?monitor=DP-1&scale=1')).status, 400);
   assert.equal(f.calls.filter(call => call.command === 'grim').length, 1);
+});
+
+test('power actions control monitors, smart sleep, wake, and poweroff with validation', async t => {
+  const f = await fixture(t);
+  // Invalid monitor name (not in live state)
+  assert.equal((await f.action({ type: 'power.dpms', monitor: 'UNKNOWN-1', state: 'off' })).status, 400);
+  assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1; reboot', state: 'off' })).status, 400);
+  // Valid monitor DPMS off and on
+  assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1', state: 'off' })).status, 200);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'off', 'DP-1']);
+  assert.equal(f.calls.at(-1).command, 'hyprctl');
+
+  assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1', state: 'on' })).status, 200);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'on', 'DP-1']);
+
+  // Boolean enabled form
+  assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1', enabled: false })).status, 200);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'off', 'DP-1']);
+
+  // Smart sleep
+  assert.equal((await f.action({ type: 'power.sleep' })).status, 200);
+  const sleepCalls = f.calls.slice(-2);
+  assert.deepEqual(sleepCalls[0].args, ['dispatch', 'dpms', 'off']);
+  assert.equal(sleepCalls[1].command, 'python');
+  assert.match(sleepCalls[1].args[0], /controller\.py$/);
+  assert.equal(sleepCalls[1].args[1], 'sleep');
+
+  // Wake
+  assert.equal((await f.action({ type: 'power.wake' })).status, 200);
+  const wakeCalls = f.calls.slice(-2);
+  assert.deepEqual(wakeCalls[0].args, ['dispatch', 'dpms', 'on']);
+  assert.equal(wakeCalls[1].command, 'python');
+  assert.match(wakeCalls[1].args[0], /controller\.py$/);
+  assert.equal(wakeCalls[1].args[1], 'restore');
+
+  // Poweroff
+  assert.equal((await f.action({ type: 'power.poweroff' })).status, 200);
+  assert.equal(f.calls.at(-1).command, 'systemctl');
+  assert.deepEqual(f.calls.at(-1).args, ['poweroff']);
+
+  // Dedicated /api/power endpoint
+  const getPower = await f.request('/api/power');
+  assert.equal(getPower.status, 200);
+  const powerData = await getPower.json();
+  assert.ok(Array.isArray(powerData.monitors));
+  assert.ok(powerData.wakeOnLan);
+
+  const postPower = await f.request('/api/power', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'power.dpms', monitor: 'DP-1', state: 'off' }),
+  });
+  assert.equal(postPower.status, 200);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'off', 'DP-1']);
 });
 
 test('drag renews its lease and auto-releases; shortcut keys release modifiers', async t => {

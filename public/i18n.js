@@ -353,7 +353,34 @@
   "Execute este comando em um terminal do PC. O texto e os processos serão os mesmos.": "Run this command in a PC terminal. Both devices share the same text and processes.",
   "Ocultar controles": "Hide controls",
   "Mostrar controles da tela": "Show screen controls",
-  "Controles": "Controls"
+  "Controles": "Controls",
+  "ENERGIA DO PC": "PC POWER",
+  "Energia": "Power",
+  "Telas e monitores": "Monitors & screens",
+  "Monitores": "Monitors",
+  "Carregando monitores…": "Loading monitors…",
+  "Nenhum monitor disponível.": "No monitors available.",
+  "Superbotões": "Superbuttons",
+  "Dormir inteligente": "Smart sleep",
+  "Apaga telas e luzes RGB": "Turns off screens and RGB lights",
+  "Acordar": "Wake up",
+  "Liga telas e restaura luzes": "Turns on screens and restores lights",
+  "Desligar computador": "Turn off computer",
+  "Desligar PC": "Turn off PC",
+  "Desligar o computador?": "Turn off computer?",
+  "A máquina será completamente desligada. Para religar, use Wake-on-LAN ou o botão físico no gabinete.": "The machine will be completely shut down. To turn it back on, use Wake-on-LAN or the physical power button on the case.",
+  "Confirmar e desligar": "Confirm & power off",
+  "Desligar monitor {name}": "Turn off monitor {name}",
+  "Ligar monitor {name}": "Turn on monitor {name}",
+  "Ligado": "On",
+  "Desligado": "Off",
+  "Dormindo: monitores e luzes apagados.": "Smart sleep: monitors and lights turned off.",
+  "PC acordado: monitores e luzes restaurados.": "PC awake: monitors and lights restored.",
+  "Desligando o PC…": "Shutting down PC…",
+  "Monitor ligado.": "Monitor turned on.",
+  "Monitor desligado.": "Monitor turned off.",
+  "Wake-on-LAN": "Wake-on-LAN",
+  "MAC da Ethernet": "Ethernet MAC"
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
@@ -684,6 +711,14 @@
   "INVALID_TERMINAL_INPUT": {
     "en": "Send either text or one terminal key.",
     "pt": "Envie texto ou uma tecla do terminal."
+  },
+  "INVALID_POWER_STATE": {
+    "en": "Power state must be either on or off.",
+    "pt": "O estado de energia deve ser ligado ou desligado."
+  },
+  "WOL_INSTRUCTIONS": {
+    "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",
+    "pt": "Habilite Wake-on-LAN na BIOS/UEFI (Power On By PCI-E) e no Linux com sudo ethtool -s {interface} wol g. Acorde com Magic Packet para {mac} na porta UDP 9."
   }
 };
   const storageKey = 'ponte-language';
