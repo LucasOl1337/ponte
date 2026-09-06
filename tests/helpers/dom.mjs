@@ -33,6 +33,19 @@ class Element extends Events {
   play(){this.paused=false;return Promise.resolve();}
   showModal(){this.open=true;}
   close(){this.open=false;}
+  click(){
+    const event = { type: 'click', target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    let current = this;
+    let reachedDoc = false;
+    while (current) {
+      current.dispatchEvent(event);
+      if (current === this.ownerDocument) reachedDoc = true;
+      current = current.parentElement;
+    }
+    if (!reachedDoc && this.ownerDocument) {
+      this.ownerDocument.dispatchEvent(event);
+    }
+  }
 }
 function parse(source,parent,document){
  const stack=[parent];
