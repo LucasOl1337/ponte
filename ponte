@@ -70,8 +70,8 @@ def load_config(target):
     return value
 
 
-def run(*args, capture=False):
-    return subprocess.run(args, check=True, text=True, capture_output=capture, timeout=30)
+def run(*args, capture=False, timeout=30):
+    return subprocess.run(args, check=True, text=True, capture_output=capture, timeout=timeout)
 
 
 def tailscale_ip(value):
@@ -224,8 +224,221 @@ def port(value):
     return value
 
 
+DEFAULT_PHONE = '100.111.221.82:5555'
+PHONE_NAME = 'redmi-note-13-pro-5g-1'
+
+
+def phone_target(value):
+    if not isinstance(value, str) or value.count(':') != 1:
+        raise ValueError('Use a Tailscale IPv4 and port, for example 100.111.221.82:5555.')
+    host, port_text = value.split(':')
+    try:
+        port_value = int(port_text)
+    except ValueError as error:
+        raise ValueError('The phone port must be an integer from 1 to 65535.') from error
+    if not 1 <= port_value <= 65535:
+        raise ValueError('The phone port must be an integer from 1 to 65535.')
+    return f'{tailscale_ip(host)}:{port_value}'
+
+
+def phone_code(value):
+    if not re.fullmatch(r'\d{6,8}', value or ''):
+        raise ValueError('The pairing code is the 6-digit number shown under Wireless debugging on the phone.')
+    return value
+
+
+def phone_state_file(data):
+    return Path(data) / 'phone.json'
+
+
+def load_phone_address(config_file, data):
+    if Path(config_file).exists():
+        try:
+            saved = load_config(Path(config_file)).get('phone') or {}
+            if isinstance(saved, dict) and saved.get('address'):
+                return phone_target(saved['address'])
+        except ValueError:
+            pass
+    state = phone_state_file(data)
+    if state.exists():
+        try:
+            saved = json.loads(state.read_text())
+            if isinstance(saved, dict) and saved.get('address'):
+                return phone_target(saved['address'])
+        except (OSError, ValueError):
+            pass
+    return DEFAULT_PHONE
+
+
+def save_phone_address(config_file, data, address):
+    address = phone_target(address)
+    private_dir(Path(data))
+    private_json(phone_state_file(data), {'address': address})
+    target = Path(config_file)
+    if target.exists() and not target.is_symlink():
+        config = load_config(target)
+        config['phone'] = {'address': address}
+        private_json(target, config)
+    return address
+
+
+def command_path(name):
+    return shutil.which(name)
+
+
+def adb_device_state(serial, runner=run):
+    try:
+        output = runner('adb', 'devices', capture=True).stdout or ''
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == serial:
+            return parts[1]
+    return None
+
+
+def tailscale_phone_online(ip, runner=run):
+    try:
+        status = json.loads(runner('tailscale', 'status', '--json', capture=True).stdout)
+    except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+        return None
+    for peer in (status.get('Peer') or {}).values():
+        if ip in (peer.get('TailscaleIPs') or []):
+            return bool(peer.get('Online'))
+    return False
+
+
+def scrcpy_command(serial, screen_off=False):
+    command = ['scrcpy', '--window-title', 'Ponte', '--stay-awake', '--video-codec=h264', '--no-audio', '-s', serial]
+    if screen_off:
+        command.append('--turn-screen-off')
+    return command
+
+
+def phone_status(config_file, data, runner=run, which=command_path):
+    address = load_phone_address(config_file, data)
+    host = address.split(':')[0]
+    adb = which('adb')
+    scrcpy = which('scrcpy')
+    lines = [
+        f'Ponte phone control for {PHONE_NAME}',
+        f'Default address: {DEFAULT_PHONE}',
+        f'Last address: {address}',
+        f'adb: {"yes — " + adb if adb else "no — install with: pacman -S android-tools"}',
+        f'scrcpy: {"yes — " + scrcpy if scrcpy else "no — install with: pacman -S scrcpy"}',
+    ]
+    online = tailscale_phone_online(host, runner=runner)
+    if online is True:
+        lines.append(f'Tailscale: {host} is online')
+    elif online is False:
+        lines.append(f'Tailscale: {host} is not reachable. Open Tailscale on the phone.')
+    else:
+        lines.append('Tailscale: could not read `tailscale status`. Is Tailscale running on this PC?')
+    if adb:
+        state = adb_device_state(address, runner=runner)
+        if state == 'device':
+            lines.append(f'ADB: connected ({address})')
+        elif state == 'unauthorized':
+            lines.append('ADB: unauthorized. Accept the USB debugging prompt on the phone, or pair again.')
+        elif state:
+            lines.append(f'ADB: {state}. Try ./ponte phone connect {address}')
+        else:
+            lines.append(f'ADB: not connected. Run ./ponte phone connect {address}')
+    else:
+        lines.append('ADB: skipped until android-tools is installed.')
+    lines.append('')
+    lines.append('On the phone: Settings → System → Developer options → Wireless debugging.')
+    lines.append('If ADB asks for a pairing code: ./ponte phone pair IP:PORT CODE')
+    lines.append('Then: ./ponte phone view')
+    print('\n'.join(lines))
+
+
+def phone_connect(config_file, data, target, runner=run, which=command_path):
+    if not which('adb'):
+        raise ValueError('adb is not installed. Install it with: pacman -S android-tools')
+    address = phone_target(target or load_phone_address(config_file, data))
+    try:
+        result = runner('adb', 'connect', address, capture=True)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f'Could not reach {address}. On the phone, open Wireless debugging and check the IP and port. If the port changed, run: ./ponte phone connect IP:PORT'
+        ) from error
+    text = ((result.stdout or '') + (result.stderr or '')).lower()
+    if 'failed' in text or 'refused' in text or 'cannot' in text:
+        raise ValueError(
+            f'Could not reach {address}. On the phone, open Wireless debugging and check the IP and port. If the port changed, run: ./ponte phone connect IP:PORT'
+        )
+    save_phone_address(config_file, data, address)
+    print(f'Connected to {address}. Saved as the last phone address.')
+    print('Open the screen with: ./ponte phone view')
+
+
+def phone_pair(config_file, data, target, code, runner=run, which=command_path):
+    if not which('adb'):
+        raise ValueError('adb is not installed. Install it with: pacman -S android-tools')
+    address = phone_target(target)
+    pairing_code = phone_code(code)
+    try:
+        result = runner('adb', 'pair', address, pairing_code, capture=True)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            'Pairing failed. On the phone open Wireless debugging → Pair device with pairing code, then run: ./ponte phone pair IP:PORT CODE'
+        ) from error
+    text = ((result.stdout or '') + (result.stderr or '')).lower()
+    if 'fail' in text or 'wrong' in text:
+        raise ValueError(
+            'Pairing failed. On the phone open Wireless debugging → Pair device with pairing code, then run: ./ponte phone pair IP:PORT CODE'
+        )
+    print(f'Paired with {address}. Next: ./ponte phone connect {DEFAULT_PHONE}')
+
+
+def phone_view(config_file, data, screen_off=False, runner=run, which=command_path):
+    if not which('scrcpy'):
+        raise ValueError('scrcpy is not installed. Install it with: pacman -S scrcpy')
+    if not which('adb'):
+        raise ValueError('adb is not installed. Install it with: pacman -S android-tools')
+    address = load_phone_address(config_file, data)
+    command = scrcpy_command(address, screen_off=screen_off)
+    try:
+        runner(*command, timeout=None)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f'scrcpy could not open {address}. Connect first with ./ponte phone connect {address}. If the debugging port changed, read it on the phone and connect again.'
+        ) from error
+
+
+def phone_main(argv):
+    parser = argparse.ArgumentParser(
+        prog='ponte phone',
+        description='Show and control the paired phone from this PC with wireless ADB and scrcpy over Tailscale.',
+    )
+    sub = parser.add_subparsers(dest='action', required=True)
+    sub.add_parser('status', help='Check adb, scrcpy, Tailscale reachability and ADB connection.')
+    connect = sub.add_parser('connect', help='adb connect to the phone and remember the address.')
+    connect.add_argument('target', nargs='?', help=f'Tailscale IP:port (default {DEFAULT_PHONE} or the last saved address).')
+    pair = sub.add_parser('pair', help='adb pair using the code shown on the phone.')
+    pair.add_argument('target', help='Pairing IP:port shown under Wireless debugging.')
+    pair.add_argument('code', help='6-digit pairing code shown on the phone.')
+    view = sub.add_parser('view', help='Open scrcpy against the connected phone.')
+    view.add_argument('--screen-off', action='store_true', help='Turn the phone screen off while mirroring (--turn-screen-off).')
+    args = parser.parse_args(argv)
+    config_file, data, _ = paths()
+    if args.action == 'status':
+        phone_status(config_file, data)
+    elif args.action == 'connect':
+        phone_connect(config_file, data, args.target)
+    elif args.action == 'pair':
+        phone_pair(config_file, data, args.target, args.code)
+    elif args.action == 'view':
+        phone_view(config_file, data, screen_off=args.screen_off)
+
+
 def main():
     os.umask(0o077)
+    if sys.argv[1:2] == ['phone']:
+        phone_main(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'pair', 'serve', 'android-config'])
     parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')

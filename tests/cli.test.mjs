@@ -121,6 +121,110 @@ test('configuration rejects public permissions, symlinks, relative paths and pla
   assert.equal(defaults.dataDir, path.join(f.home, '.local/state/ponte'));
 });
 
+const python3 = (await run('/bin/sh', ['-c', 'command -v python3'])).stdout.trim();
+const phoneStub = `#!${python3}
+import json, os, sys
+name = os.path.basename(sys.argv[0])
+with open(os.environ['PONTE_TEST_LOG'], 'a') as f:
+    f.write(json.dumps([name] + sys.argv[1:]) + '\\n')
+fail = os.environ.get('PONTE_TEST_ADB_FAIL')
+if name == 'adb':
+    if sys.argv[1:2] == ['connect']:
+        if fail == 'connect':
+            sys.stderr.write("failed to connect to '%s'\\n" % sys.argv[2]); sys.exit(1)
+        print('connected to ' + sys.argv[2])
+    elif sys.argv[1:2] == ['pair']:
+        if fail == 'pair':
+            sys.stderr.write('Failed: Wrong pairing code.\\n'); sys.exit(1)
+        print('Successfully paired to ' + sys.argv[2])
+    elif sys.argv[1] == 'devices':
+        print('List of devices attached')
+        serial = os.environ.get('PONTE_TEST_ADB_DEVICE')
+        if serial:
+            print(serial + '\\tdevice')
+elif name == 'scrcpy':
+    if fail == 'scrcpy':
+        sys.exit(1)
+elif name == 'tailscale':
+    if sys.argv[1:] == ['status', '--json']:
+        online = os.environ.get('PONTE_TEST_TS_ONLINE', '1') == '1'
+        print(json.dumps({'Peer': {'phone': {'Online': online, 'TailscaleIPs': ['100.111.221.82']}}}))
+`;
+
+async function phoneFixture(t, { tools = ['adb', 'scrcpy', 'tailscale'] } = {}) {
+  const f = await fixture(t);
+  for (const name of tools) await writeFile(path.join(f.bin, name), phoneStub, { mode: 0o755 });
+  const cli = (args, extraEnv = {}) => run(python3, [path.join(root, 'ponte'), ...args], {
+    env: { ...f.env, PATH: f.bin, ...extraEnv }, timeout: 15000,
+  });
+  return { ...f, cli };
+}
+
+test('phone status reports missing adb and scrcpy without launching them', async t => {
+  const f = await phoneFixture(t, { tools: ['tailscale'] });
+  const result = await f.cli(['phone', 'status']);
+  assert.match(result.stdout, /adb: no — install with: pacman -S android-tools/);
+  assert.match(result.stdout, /scrcpy: no — install with: pacman -S scrcpy/);
+  assert.match(result.stdout, /100\.111\.221\.82:5555/);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls, [['tailscale', 'status', '--json']]);
+});
+
+test('phone connect uses the default Tailscale address, saves it, and fails clearly when the phone is offline', async t => {
+  const f = await phoneFixture(t);
+  await f.cli(['setup', '--local-only']);
+  const ok = await f.cli(['phone', 'connect']);
+  assert.match(ok.stdout, /Connected to 100\.111\.221\.82:5555/);
+  const config = JSON.parse(await readFile(f.configFile, 'utf8'));
+  assert.equal(config.phone.address, '100.111.221.82:5555');
+  assert.equal(JSON.parse(await readFile(path.join(f.dataDir, 'phone.json'), 'utf8')).address, '100.111.221.82:5555');
+  await assert.rejects(f.cli(['phone', 'connect', '100.111.221.82:44875'], { PONTE_TEST_ADB_FAIL: 'connect' }), error => /Wireless debugging/.test(error.stderr));
+  await assert.rejects(f.cli(['phone', 'connect', '8.8.8.8:5555']), error => /canonical Tailscale IPv4/.test(error.stderr));
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.filter(call => call[0] === 'adb'), [
+    ['adb', 'connect', '100.111.221.82:5555'],
+    ['adb', 'connect', '100.111.221.82:44875'],
+  ]);
+});
+
+test('phone pair records adb pair and rejects a non-numeric code before any process', async t => {
+  const f = await phoneFixture(t);
+  const ok = await f.cli(['phone', 'pair', '100.111.221.82:37123', '123456']);
+  assert.match(ok.stdout, /Paired with 100\.111\.221\.82:37123/);
+  await assert.rejects(f.cli(['phone', 'pair', '100.111.221.82:37123', '12a456']), error => /6-digit/.test(error.stderr));
+  await assert.rejects(f.cli(['phone', 'pair', '100.111.221.82:37123', '123456'], { PONTE_TEST_ADB_FAIL: 'pair' }), error => /Pair device with pairing code/.test(error.stderr));
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls, [
+    ['adb', 'pair', '100.111.221.82:37123', '123456'],
+    ['adb', 'pair', '100.111.221.82:37123', '123456'],
+  ]);
+});
+
+test('phone view launches scrcpy with Ponte title, stay-awake, and optional screen-off', async t => {
+  const f = await phoneFixture(t);
+  await f.cli(['phone', 'connect', '100.111.221.82:5555']);
+  await f.cli(['phone', 'view']);
+  await f.cli(['phone', 'view', '--screen-off']);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls, [
+    ['adb', 'connect', '100.111.221.82:5555'],
+    ['scrcpy', '--window-title', 'Ponte', '--stay-awake', '--video-codec=h264', '--no-audio', '-s', '100.111.221.82:5555'],
+    ['scrcpy', '--window-title', 'Ponte', '--stay-awake', '--video-codec=h264', '--no-audio', '-s', '100.111.221.82:5555', '--turn-screen-off'],
+  ]);
+  await assert.rejects(f.cli(['phone', 'view'], { PONTE_TEST_ADB_FAIL: 'scrcpy' }), error => /scrcpy could not open/.test(error.stderr));
+});
+
+test('phone status reports installed tools, online peer and connected device through the synthetic adapter', async t => {
+  const f = await phoneFixture(t);
+  const result = await f.cli(['phone', 'status'], { PONTE_TEST_ADB_DEVICE: '100.111.221.82:5555' });
+  assert.match(result.stdout, /adb: yes —/);
+  assert.match(result.stdout, /scrcpy: yes —/);
+  assert.match(result.stdout, /Tailscale: 100\.111\.221\.82 is online/);
+  assert.match(result.stdout, /ADB: connected \(100\.111\.221\.82:5555\)/);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls, [['tailscale', 'status', '--json'], ['adb', 'devices']]);
+});
+
 test('portable start.sh reads the generated private config and serves health only on its configured loopback port', async t => {
   const f = await fixture(t);
   const reservation = net.createServer();
