@@ -177,6 +177,16 @@ function renderState() {
   renderWorkspaces();
   renderWindows();
   renderPowerMonitors();
+  const wolSection = $('#power-wol-section');
+  if (wolSection) {
+    if (state.wakeOnLan?.mac) {
+      wolSection.hidden = false;
+      $('#wol-mac-address').textContent = state.wakeOnLan.mac;
+      $('#wol-interface').textContent = state.wakeOnLan.interface || '';
+    } else {
+      wolSection.hidden = true;
+    }
+  }
   const monitors = state.monitors || [];
   const nextMonitorSignature = JSON.stringify([monitors,i18n.language]);
   if (monitorSignature !== nextMonitorSignature) {

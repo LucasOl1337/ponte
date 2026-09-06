@@ -86,15 +86,16 @@ Ponte provides power controls directly from your phone's home dashboard:
 - **Wake (`power.wake`):** Turns on all monitors via DPMS and restores RGB lighting profiles (`controller.py restore`).
 - **Power off (`power.poweroff`):** Shuts down the machine (`systemctl poweroff`) with explicit double confirmation in the UI.
 
-### Wake-on-LAN (WoL) prerequisites
+### Wake-on-LAN (WoL) prerequisites and Android magic packet
 
 Because a powered-off machine stops running Ponte and disconnects from Tailscale, turning the PC back on remotely requires a Wake-on-LAN Magic Packet sent over your local Ethernet network.
 
-Ponte exposes your primary Ethernet MAC address (`d8:43:ae:8b:e8:a8`) and interface (`enp12s0`) in the `/api/state` and `/api/power` responses to facilitate WoL tooling:
+Ponte exposes your primary Ethernet MAC address (`d8:43:ae:8b:e8:a8`) and interface (`enp12s0`) in the `/api/state` and `/api/power` responses, and the Android app automatically remembers this MAC address.
 
 1. **Motherboard BIOS/UEFI:** Enable "Power On By PCI-E/PCI" or "Wake on LAN" in ACPI/APM power management configuration.
-2. **Network interface:** Verify that the Ethernet interface has WoL enabled with `ethtool enp12s0 | grep Wake-on`. It should report `Wake-on: g`. To persist this across reboots, configure `systemd.link` (`[Link] WakeOnLan=magic`) or NetworkManager.
-3. **Magic Packet:** When the PC is off, broadcast a standard UDP magic packet containing the MAC address to port 9 from another device on the local network.
+2. **NetworkManager / interface setup:** Ensure Wake-on-LAN is active on the Ethernet interface using `sudo ethtool -s <iface> wol g`. To persist this with NetworkManager, run `nmcli connection modify <connection-name> 802-3-ethernet.wake-on-lan magic` (or configure via `systemd.link` with `[Link] WakeOnLan=magic`). Check status with `ethtool <iface> | grep Wake-on`, which should report `Wake-on: g`.
+3. **Android "Turn on PC" button:** When the PC is off and Ponte is unreachable, the Android app displays a "Turn on PC" ("Ligar PC") button on the connection screen. Pressing it broadcasts 3 magic packets via UDP port 9 to `255.255.255.255` and the local Wi-Fi subnet broadcast addresses.
+4. **Tailscale limitation:** WoL magic packets are local Ethernet/Wi-Fi broadcasts. **They cannot cross the Tailscale VPN tunnel** because Tailscale operates at Layer 3 (IP unicast routing) and does not bridge broadcast traffic. Your phone must be connected to the same local Wi-Fi network (home LAN) as the PC's Ethernet interface when waking the PC.
 
 ## Update
 

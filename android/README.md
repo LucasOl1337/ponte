@@ -62,7 +62,7 @@ Leaving the app cancels live video and microphone access. The Android microphone
 
 The packaged permissions are `INTERNET`, `RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS`. The latter is a normal Android permission required by Chromium to select a recording device. The microphone still requires the user-facing Android runtime recording permission and the app's explicit record action.
 
-The Screen, Terminals and Energia (power) controls require an updated native app. Earlier APKs have a smaller HTTP method/path allowlist and cannot forward `/api/power` or the terminal endpoints. Live region query strings on `/api/stream` and `/api/screenshot` use the existing paths. Rebuild and install over the existing app with the same signing key to preserve pairing.
+The Screen, Terminals, Energia (power) controls and Wake-on-LAN require an updated native app. Earlier APKs have a smaller HTTP method/path allowlist and cannot forward `/api/power` or the terminal endpoints, nor do they include the offline Wake-on-LAN button. Live region query strings on `/api/stream` and `/api/screenshot` use the existing paths. Rebuild and install over the existing app with the same signing key to preserve pairing.
 
 ## Tests
 

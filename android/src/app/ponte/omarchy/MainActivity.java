@@ -41,7 +41,11 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(21, 23, 20));
         setContentView(root);
         try (InputStream certificate = getAssets().open("pc-certificate.pem")) {
-            proxy = new LoopbackProxy(URI.create(BuildConfig.UPSTREAM), certificate, 18987);
+            proxy = new LoopbackProxy(URI.create(BuildConfig.UPSTREAM), certificate, 18987, mac -> {
+                if (mac != null && !mac.isEmpty()) {
+                    preferences.edit().putString("wol_mac", mac).apply();
+                }
+            });
             origin = proxy.origin();
         } catch (Exception error) {
             showMessage(nativeText("Ponte could not start", "Não foi possível abrir o Ponte"), nativeText("The app connection is unavailable. Close Ponte and open it again.", "A conexão local do app está indisponível. Feche o Ponte e abra novamente."), false);
@@ -183,7 +187,37 @@ public final class MainActivity extends Activity {
         TextView brand = new TextView(this); brand.setText("ponte."); brand.setTextSize(34); brand.setTextColor(Color.rgb(213, 248, 136)); panel.addView(brand);
         TextView heading = new TextView(this); heading.setText(title); heading.setTextSize(26); heading.setTextColor(Color.rgb(244, 242, 233)); heading.setPadding(0, padding, 0, padding / 2); panel.addView(heading);
         TextView text = new TextView(this); text.setText(detail); text.setTextSize(16); text.setTextColor(Color.rgb(163, 170, 153)); panel.addView(text);
-        if (retry) { Button button = new Button(this); button.setText(nativeText("Try again", "Tentar novamente")); button.setOnClickListener(v -> loadHome()); panel.addView(button); }
+        if (retry) {
+            String wolMac = preferences.getString("wol_mac", null);
+            if (wolMac != null && !wolMac.isEmpty()) {
+                Button wolButton = new Button(this);
+                wolButton.setText(nativeText("Turn on PC", "Ligar PC"));
+                TextView wolStatus = new TextView(this);
+                wolStatus.setTextSize(14);
+                wolStatus.setTextColor(Color.rgb(213, 248, 136));
+                wolStatus.setPadding(0, padding / 4, 0, padding / 4);
+                wolStatus.setVisibility(View.GONE);
+                wolButton.setOnClickListener(v -> {
+                    wolButton.setEnabled(false);
+                    wolStatus.setText(nativeText("Packet sent, wait ~30 s", "Pacote enviado, aguarde ~30 s"));
+                    wolStatus.setVisibility(View.VISIBLE);
+                    new Thread(() -> {
+                        try {
+                            WakeOnLan.sendMagicPackets(wolMac);
+                        } catch (Exception ignored) { }
+                    }, "ponte-wol-send").start();
+                    wolButton.postDelayed(() -> {
+                        if (!destroyed) wolButton.setEnabled(true);
+                    }, 30000);
+                });
+                panel.addView(wolButton);
+                panel.addView(wolStatus);
+            }
+            Button button = new Button(this);
+            button.setText(nativeText("Try again", "Tentar novamente"));
+            button.setOnClickListener(v -> loadHome());
+            panel.addView(button);
+        }
         root.removeAllViews(); root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
     }
     private void exitFullscreen() {
