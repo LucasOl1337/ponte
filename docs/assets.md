@@ -6,6 +6,8 @@ The `app-en-*.png` images are unedited browser screenshots of the running Englis
 
 The `redmi-*.png` images are original device screenshots from the September 5, 2026 development session. The live monitor and fullscreen captures include a frame of the Lex Fridman interview with DHH, https://www.youtube.com/watch?v=NYFGCESmikA. That interview imagery remains the property of its respective rights holders and is outside the project's software license. Its use here documents the monitor stream and does not imply endorsement.
 
+`screen-1to1-before.png` and `screen-direct-touch-before.png` are emulator captures (Android 11, `emulator-5554`) of the 1:1 letterboxing bug and Direct touch without a visible mode cue. Matching after shots are taken on the same emulator once the fix is served from main.
+
 Ponte's code and UI assets are MIT licensed. Android build tools, Amazon Corretto, system packages and their respective licenses remain with their publishers. Build scripts download those tools separately with pinned checksums.
 
 ## Cover generation

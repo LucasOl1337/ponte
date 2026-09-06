@@ -30,7 +30,7 @@ These English previews show the running app connected to a read-only review inst
 
 Live view uses authenticated MJPEG with profiles up to 10 frames per second. It does not stream system audio. This is intended for desktop control and checking progress, not gaming or high-frame-rate remote video.
 
-View, Direct touch, Touchpad and Keyboard share the monitor, so you can watch the PC while controlling it. Zooming the live image captures only the visible region at full resolution. Direct touch clicks that image; the separate touchpad remains available. The image sits above the controls in portrait and beside them in landscape. The combined layout is browser-tested; its physical Android keyboard check remains pending.
+View, Direct touch, Touchpad and Keyboard share the monitor, so you can watch the PC while controlling it. Zooming the live image captures only the visible region at full resolution. 1:1 shows that crop at native pixels, without letterboxing. Direct touch outlines the monitor and clicks that image; the separate touchpad remains available. The image sits above the controls in portrait and beside them in landscape. The combined layout is browser-tested; its physical Android keyboard check remains pending.
 
 See the [screen and terminal guide](docs/screen-and-terminals.md) for the new navigation and session behavior. These changes target the next alpha. Its personalized Android update has been installed and checked on the Redmi for live Screen entry, landscape fullscreen and terminal execution. Soft-keyboard completion and microphone recording remain pending.
 

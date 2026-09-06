@@ -14,13 +14,13 @@ Test on the Redmi Note 13 Pro+ (Android 14) with Tailscale on and the PC awake. 
 
 ## 3. Region zoom
 
-- Do: pinch to zoom into small text, drag to read another area, then zoom back out.
-- Expect: the zoomed crop stays sharp (captured at full resolution, not stretched); zooming out returns to the whole monitor.
+- Do: pinch to zoom into small text, drag to read another area, tap 1:1, then zoom back out.
+- Expect: the zoomed crop stays sharp (captured at full resolution, not stretched) and fills the preview without black bars; 1:1 shows native pixels of a panable crop; zooming out returns to the whole monitor.
 
 ## 4. Direct touch
 
 - Do: switch to Direct touch, tap an icon, long-press for right click, drag with one finger, pinch with two.
-- Expect: tap left-clicks at that pixel, long press right-clicks, one finger pans the image, two fingers pinch; the PC pointer moves only under Direct touch.
+- Expect: the monitor shows a lime outline and a Direct touch badge; help text explains tap/long-press/drag/pinch; the first time, a short toast warns that a tap clicks the PC. Tap left-clicks at that pixel, long press right-clicks, one finger pans the image, two fingers pinch; the PC pointer moves only under Direct touch.
 
 ## 5. Power card (one monitor only)
 

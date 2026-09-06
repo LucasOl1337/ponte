@@ -12,7 +12,7 @@ O Ponte nasceu da vontade de abrir um app no celular e continuar usando o PC. A 
 
 É uma versão **alfa experimental e independente do Omarchy**. O acesso e a imagem ao vivo foram testados em um Redmi Note 13 Pro+ com Android 14. O pareamento permaneceu salvo depois de fechar o app à força e abrir novamente pelo ícone. O teste final de gravação no Android ainda está pendente.
 
-Os modos Ver, Toque direto, Touchpad e Teclado compartilham o mesmo monitor. A imagem fica acima dos controles em pé e ao lado deles na horizontal. Ao dar zoom, o Ponte captura só a região visível em resolução real. O toque direto clica na imagem; o touchpad separado continua disponível. O layout combinado passou nos testes de navegador; a conferência do teclado real no Android ainda está pendente.
+Os modos Ver, Toque direto, Touchpad e Teclado compartilham o mesmo monitor. A imagem fica acima dos controles em pé e ao lado deles na horizontal. Ao dar zoom, o Ponte captura só a região visível em resolução real. 1:1 mostra esse recorte em pixels nativos, sem barras. O toque direto marca o monitor e clica na imagem; o touchpad separado continua disponível. O layout combinado passou nos testes de navegador; a conferência do teclado real no Android ainda está pendente.
 
 As melhorias de tela e terminais estão na próxima alfa. A atualização personalizada já foi instalada no Redmi, preservando o login; foram verificados a abertura direta na imagem ao vivo, a tela cheia na horizontal e a execução no terminal. A verificação completa do teclado virtual e da gravação ainda está pendente. Veja o [guia de tela e terminais](docs/screen-and-terminals.md).
 
