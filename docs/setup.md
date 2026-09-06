@@ -66,7 +66,12 @@ The Android build pins the exact public leaf certificate and reads no server pri
 ./ponte start
 ./ponte restart
 ./ponte logs
+./ponte phone status
+./ponte phone connect
+./ponte phone view
 ```
+
+`phone` mirrors the Redmi over Tailscale with wireless ADB and scrcpy. The default address is `100.111.221.82:5555`. See [PC controls phone](pc-controls-phone.md).
 
 A stopped service is unavailable to the phone. Your PC must be awake, connected to Tailscale and running the graphical session. Returning to the Android app does not automatically restart a live stream that was paused when it went into the background.
 

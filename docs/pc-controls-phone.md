@@ -1,8 +1,9 @@
 # PC controls phone (vice-versa)
 
-Status: specification. Nothing in this document is implemented. It describes how
-the PC could control the already-paired Android phone over the same Tailscale
-network, mirroring what Ponte does today in the opposite direction.
+Status: Option A CLI is implemented (`ponte phone`). Options B and C remain
+specification. This document describes how the PC controls the already-paired
+Android phone over the same Tailscale network, mirroring what Ponte does today
+in the opposite direction.
 
 ## Goal
 
@@ -164,6 +165,64 @@ the whole path is reversible from the phone's Settings. Option B is the right
 long-term product if Lucas later wants control without Developer options, and
 Option C is a useful always-on complement, but neither should gate the first
 working version.
+
+## Control the phone from the PC
+
+This is Option A in practice. The PC talks to the Redmi (`redmi-note-13-pro-5g-1`)
+at Tailscale IPv4 `100.111.221.82`. After a successful wireless-debugging
+session Android usually listens on port **5555**, which is the Ponte default.
+The pairing port (we have seen 33841 and 44875) is only needed when the phone
+shows a pairing code.
+
+ADB is a full shell. Leave Wireless debugging off when you are not using it.
+
+### One-time on the phone
+
+1. Enable Developer options (tap Build number seven times).
+2. Turn on **Wireless debugging**.
+3. Keep Tailscale connected on the phone.
+
+If the PC has never been accepted, open Wireless debugging → **Pair device with
+pairing code**. Note the pairing IP:port and the 6-digit code.
+
+### On the PC
+
+```sh
+./ponte phone status
+```
+
+Checks that `adb` and `scrcpy` are installed, whether `100.111.221.82` is online
+on the tailnet, and whether ADB already lists the phone as `device`.
+
+If status says you need a pairing code:
+
+```sh
+./ponte phone pair 100.111.221.82:37123 123456
+```
+
+Use the pairing IP:port and code from the phone, not 5555.
+
+Connect (defaults to `100.111.221.82:5555`, or the last address you saved):
+
+```sh
+./ponte phone connect
+./ponte phone connect 100.111.221.82:5555
+```
+
+Open the scrcpy window (title `Ponte`, stay awake, H.264, no audio). Optional
+`--screen-off` turns the phone display off while you use the PC:
+
+```sh
+./ponte phone view
+./ponte phone view --screen-off
+```
+
+When the debugging port rotates, `connect` fails instead of hanging. Read the
+new port on the phone and run `./ponte phone connect IP:PORT` again. Close the
+scrcpy window to end the session. Turn Wireless debugging off to cut access.
+
+Install tools on this Omarchy PC with `pacman -S android-tools scrcpy` if
+`status` says they are missing.
 
 ## First minimal slice
 

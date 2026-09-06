@@ -16,6 +16,8 @@ Os modos Ver, Toque direto, Touchpad e Teclado compartilham o mesmo monitor. A i
 
 As melhorias de tela e terminais estão na próxima alfa. A atualização personalizada já foi instalada no Redmi, preservando o login; foram verificados a abertura direta na imagem ao vivo, a tela cheia na horizontal e a execução no terminal. A verificação completa do teclado virtual e da gravação ainda está pendente. Veja o [guia de tela e terminais](docs/screen-and-terminals.md).
 
+Para ver e controlar o celular a partir deste PC pela Tailscale: `./ponte phone status`, depois `./ponte phone connect` (padrão `100.111.221.82:5555`) e `./ponte phone view`. Passo a passo: [PC controla o celular](docs/pc-controls-phone.pt-BR.md).
+
 ## Instalação
 
 No PC, você precisa de Omarchy/Hyprland ativo, Node.js 22+, Python 3.12+, OpenSSL 3 e Tailscale conectada. No celular, Android 8+ e Tailscale na mesma rede privada. Os recursos do desktop usam `hyprctl`, `ydotool`, `wtype`, `grim`, `wpctl`, `ffmpeg` e `ffplay`. As sessões de texto também precisam de `tmux`.
