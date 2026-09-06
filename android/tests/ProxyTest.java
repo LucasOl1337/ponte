@@ -125,6 +125,40 @@ public final class ProxyTest {
         check(unicode.getResponseCode() == 200 && Arrays.equals(text, remote.body.get()), "terminal Unicode JSON bytes stream unchanged");
         unicode.disconnect();
     }
+    static void powerAndRegionRoutes(LoopbackProxy proxy, Remote remote) throws Exception {
+        String[][] allowed = {
+            {"GET", "/api/power", ""},
+            {"POST", "/api/power", "{\"type\":\"power.sleep\"}"},
+            {"GET", "/api/screenshot?monitor=DP-1&scale=1", ""}
+        };
+        for (String[] route : allowed) {
+            int before = remote.hits.get();
+            String headers = "Authorization: Bearer power-test-only\r\nOrigin: " + proxy.origin() + "\r\nContent-Type: application/json\r\nContent-Length: " + route[2].length() + "\r\n";
+            String response = raw(proxy, request(proxy, route[0], route[1], headers) + route[2]);
+            check(response.startsWith("HTTP/1.1 200"), "power/region route forwarded: " + route[0] + " " + route[1]);
+            check(remote.hits.get() == before + 1 && route[0].equals(remote.method.get()) && route[1].equals(remote.target.get()), "power/region method and target preserved");
+            check(Arrays.equals(route[2].getBytes(StandardCharsets.UTF_8), remote.body.get()), "power/region request bytes preserved");
+            check("Bearer power-test-only".equals(remote.auth.get()) && remote.origin.get() == null, "power/region bearer preserved and loopback Origin removed");
+        }
+        String region = "/api/stream?monitor=DP-1&fps=10&scale=0.5&x=100&y=80&w=640&h=360";
+        HttpURLConnection live = (HttpURLConnection) new URL(proxy.origin() + region).openConnection();
+        live.setRequestProperty("Authorization", "Bearer power-test-only");
+        live.setReadTimeout(3000);
+        try (InputStream input = live.getInputStream()) {
+            check(input.read() == 'f', "live region query is accepted");
+            check(region.equals(remote.target.get()), "live region query string is forwarded unchanged");
+        }
+        live.disconnect();
+        int before = remote.hits.get();
+        String[][] denied = {
+            {"GET", "/api/powerx"}, {"POST", "/api/powerx"},
+            {"GET", "/api/power/"}, {"POST", "/api/power/"},
+            {"PUT", "/api/power"}, {"DELETE", "/api/power"}, {"HEAD", "/api/power"},
+            {"GET", "/api/powers"}, {"POST", "/api/power-sleep"}, {"GET", "/api/power/sleep"}
+        };
+        for (String[] route : denied) check(raw(proxy, request(proxy, route[0], route[1], "")).startsWith("HTTP/1.1 404"), "unlisted power method/path denied: " + route[0] + " " + route[1]);
+        check(remote.hits.get() == before, "denied power requests never reach upstream");
+    }
     public static void main(String[] args) throws Exception {
         Path fixtures = Paths.get(args[0]);
         try (Remote remote = new Remote(fixtures.resolve("good.p12"))) {
@@ -154,6 +188,7 @@ public final class ProxyTest {
             check("Bearer test-only".equals(remote.auth.get()), "bearer preserved exactly");
             check(remote.origin.get() == null && remote.referer.get() == null, "local Origin and Referer removed upstream");
             terminalRoutes(proxy, remote);
+            powerAndRegionRoutes(proxy, remote);
             check(raw(proxy, request(proxy, "GET", "/api/state", "Origin: https://evil.example\r\n")).startsWith("HTTP/1.1 403"), "foreign Origin denied");
             check(raw(proxy, "GET /api/state HTTP/1.1\r\nHost: evil.example\r\n\r\n").startsWith("HTTP/1.1 403"), "foreign Host denied");
             check(raw(proxy, request(proxy, "GET", "https://evil.example/", "")).startsWith("HTTP/1.1 400"), "absolute URL denied");

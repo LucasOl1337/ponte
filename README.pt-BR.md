@@ -51,6 +51,7 @@ O Ponte inclui controles de energia no painel inicial do celular:
 - **Superbotão "Acordar":** Acende todos os monitores e restaura a iluminação RGB (`controller.py restore`).
 - **Desligar com confirmação dupla:** Desliga o sistema por completo (`systemctl poweroff`), exigindo confirmação na interface para evitar toques acidentais.
 - **Pré-requisitos de Wake-on-LAN (WoL):** Com a máquina desligada, o Ponte não roda e a Tailscale desconecta. Para religar o computador remotamente, envie um Magic Packet para a interface Ethernet física. O MAC (`d8:43:ae:8b:e8:a8`) e a interface (`enp12s0`) ficam expostos em `/api/state` e `/api/power`. Habilite "Power On By PCI-E" na BIOS/UEFI e confirme `Wake-on: g` com `ethtool`.
+- **APK no celular:** o card de energia usa `/api/power`. Instale o APK alpha.3 (version code 6) por cima do app atual, com a mesma chave de assinatura, para o proxy nativo encaminhar essa rota.
 
 A imagem usa MJPEG autenticado, com perfis de até 10 quadros por segundo. Não transmite o áudio do sistema. O teste local com três monitores ficou entre 7,1 e 7,3 quadros por segundo por transmissão. Ainda não medimos a experiência por rede celular ou fora de casa.
 
