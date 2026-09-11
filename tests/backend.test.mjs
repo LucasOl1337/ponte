@@ -495,16 +495,21 @@ test('absolute clicks map monitor pixels through the output origin without shell
   assert.deepEqual(ydotool.at(-1).args, ['click', '0xC0']);
 });
 
-test('live streaming allows three sessions, rejects a fourth, and frees slots after cancellation', async t => {
+test('a new live view evicts the oldest when the cap is reached, so a reopening device always gets in', async t => {
   const f = await fixture(t);
   const controllers = [new AbortController(), new AbortController(), new AbortController()];
   const responses = await Promise.all(controllers.map(controller => f.request('/api/stream?monitor=DP-1', { signal: controller.signal })));
   assert.ok(responses.every(response => response.status === 200));
-  const extra = await f.request('/api/stream?monitor=DP-1');
-  assert.equal(extra.status, 429);
-  assert.equal((await extra.json()).errorCode, 'STREAM_LIMIT_REACHED');
-  controllers.forEach(controller => controller.abort());
-  await Promise.all(responses.map(response => response.body.cancel().catch(() => {})));
+  // A fourth view is accepted; the oldest connection is dropped instead of 429.
+  const fourth = new AbortController();
+  const extra = await f.request('/api/stream?monitor=DP-1', { signal: fourth.signal });
+  assert.equal(extra.status, 200);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  // The oldest stream's body ends once it is aborted server-side.
+  const firstEnded = await responses[0].body.getReader().read().then(() => true, () => true);
+  assert.equal(firstEnded, true);
+  controllers.forEach(controller => controller.abort()); fourth.abort();
+  await Promise.all([...responses, extra].map(response => response.body.cancel().catch(() => {})));
   await new Promise(resolve => setTimeout(resolve, 20));
   const replacement = new AbortController();
   const response = await f.request('/api/stream?monitor=DP-1', { signal: replacement.signal });

@@ -106,7 +106,16 @@ export function createLiveStreaming(desktop, { maxStreams = 3, maxCaptures = 2, 
   async function stream(req, res, query) {
     const options = parseLiveOptions(query);
     if (closing) throw new ApiError(503, 'SERVER_RESTARTING');
-    if (sessions.size >= maxStreams) throw new ApiError(429, 'STREAM_LIMIT_REACHED');
+    // A personal remote has a handful of devices. When the cap is reached the
+    // newest view wins: abort the oldest so a phone reopening its screen (or one
+    // whose earlier connection is a half-open zombie) always gets in, instead of
+    // being told to retry forever.
+    while (sessions.size >= maxStreams) {
+      const oldest = sessions.values().next().value;
+      if (!oldest) break;
+      sessions.delete(oldest);
+      oldest.abort();
+    }
     const controller = new AbortController();
     const { signal } = controller;
     sessions.add(controller);
