@@ -183,6 +183,33 @@ test('The phone keyboard opens after a tap on a PC text field, forwards edits as
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'false');
 });
 
+test('the command composer sends text with an atomic Enter, records reusable history and reuses a past command',async()=>{
+ const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'x'};
+ const sent=[];
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path,options)=>{
+  if(path==='/api/terminals')return{ok:true,json:async()=>({available:true,sessions:[session],limit:4})};
+  if(path.endsWith('/input')){sent.push(JSON.parse(options.body));return{ok:true,json:async()=>({ok:true})};}
+  if(path.startsWith('/api/terminals/'))return{ok:true,json:async()=>({...session,text:'$ '})};
+  return{ok:true,json:async()=>fixture};
+ }});await flush();
+ h.run("navigate('terminais')");await flush();await flush();
+ const box=h.el('#terminal-input');
+ // Send types the command AND runs it in one call.
+ box.value='npm test';h.el('#terminal-send').click();await flush();await flush();
+ assert.deepEqual(sent.at(-1),{text:'npm test',enter:true});
+ assert.equal(box.value,'','the field clears after sending');
+ // Paste only sends the text without Enter.
+ box.value='cd ~/proj';h.el('#terminal-paste').click();await flush();await flush();
+ assert.deepEqual(sent.at(-1),{text:'cd ~/proj'});
+ // The sent command is remembered as a chip; a paste-only command is not.
+ const chips=h.el('#cmd-history').querySelectorAll('.cmd-chip').map(chip=>chip.textContent.trim());
+ assert.deepEqual(chips,['npm test']);
+ // Tapping a chip loads it back into the composer to edit and resend.
+ h.el('#cmd-history').querySelectorAll('.cmd-chip')[0].click();
+ assert.equal(box.value,'npm test');
+ assert.ok(h.calls.filter(call=>call.path.endsWith('/input')).every(call=>call.options.method==='POST'));
+});
+
 test('Terminal text remains readable above empty pane rows and relocalizes without losing input or pause',async()=>{
  const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'synthetic attachment'};
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async path=>({ok:true,json:async()=>path==='/api/terminals'?{available:true,sessions:[session],limit:4}:path.startsWith('/api/terminals/')?{...session,text:'Output belongs to the session\n$ '+ '\n'.repeat(23)}:fixture})});await flush();

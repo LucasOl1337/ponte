@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.6';
+const UI_VERSION = '0.1.0-alpha.7';
 let token = '';
 let state = null;
 let connected = false;
@@ -310,10 +310,14 @@ function syncRemoteViewport() {
   if (!Number.isFinite(width) || !Number.isFinite(height)) return;
   if (Math.abs(width - viewportBaseline.width) > 100) viewportBaseline = {width,height};
   else viewportBaseline.height = Math.max(viewportBaseline.height,height);
-  // The phone keyboard is open when our hidden input has focus and the visual
-  // viewport shrank; the fixed viewer then sizes itself to the visible area.
-  const keyboardOpen = document.activeElement === $('#remote-keys') && viewportBaseline.height - height > 100;
+  // The phone keyboard is open when an editable field has focus and the visual
+  // viewport shrank. That hides the bottom nav (which would otherwise cover the
+  // composer) and lets the immersive screen size itself to the visible area.
+  const active = document.activeElement;
+  const editing = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active === $('#remote-keys'));
+  const keyboardOpen = editing && viewportBaseline.height - height > 100;
   document.body.setAttribute('data-keyboard-open',String(keyboardOpen));
+  document.body.setAttribute('data-screen-keyboard',String(keyboardOpen && active === $('#remote-keys')));
   document.documentElement.style.setProperty('--remote-viewport-height',`${height}px`);
   document.documentElement.style.setProperty('--remote-viewport-top',`${window.visualViewport?.offsetTop || 0}px`);
   applyScreenZoom();
@@ -1119,7 +1123,7 @@ function terminalControls() {
   $('#terminal-pause').disabled = !terminalId;
   $('#terminal-pause').setAttribute('aria-pressed',String(terminalPaused));
   $('#terminal-pause').textContent = terminalPaused ? t('Retomar leitura') : t('Pausar leitura');
-  $$('#terminal-send,#terminal-input,#terminal-close,#terminal-size,[data-terminal-key]').forEach(element => { element.disabled = !ready; });
+  $$('#terminal-send,#terminal-paste,#terminal-clear,#terminal-input,#terminal-close,#terminal-size,[data-terminal-key]').forEach(element => { element.disabled = !ready; });
 }
 function renderDesktopTerminals() {
   const windows = (state?.windows || []).filter(w => appIcon(w.class) === 'terminal');
@@ -1140,6 +1144,7 @@ function selectTerminal(id) {
   terminalId = id; terminalText = null;
   $('#terminal-output').textContent = '';
   $('#terminal-input').value = terminalDrafts.get(id) || '';
+  growComposer();
   savePreference('ponte-terminal',id);
   const session = terminalSessions.find(item => item.id === id);
   $('#terminal-size').value = String(session?.cols || 40);
@@ -1159,7 +1164,7 @@ async function readTerminals(generation) {
     const active = terminalSessions.find(session => session.id === terminalId);
     $('#terminal-attach').value = active?.attachCommand || '';
     $('#terminal-mode').hidden = !active?.inMode;
-    $('#terminal-status').textContent = terminalAvailable ? terminalId ? t('Conectado à sessão de texto.') : t('Crie uma sessão para começar. Digitar e executar são ações separadas.') : t('Instale tmux no PC para usar sessões de texto.');
+    $('#terminal-status').textContent = terminalAvailable ? terminalId ? t('Conectado à sessão de texto.') : t('Crie uma sessão para começar.') : t('Instale tmux no PC para usar sessões de texto.');
     if (terminalId && !terminalPaused) {
       const requestedId = terminalId;
       const view = await (await api(`/terminals/${encodeURIComponent(requestedId)}`,{timeout:8000})).json();
@@ -1201,17 +1206,63 @@ $('#terminal-new').addEventListener('click',async () => {
 });
 $('#terminal-select').addEventListener('change',event => { selectTerminal(event.target.value); terminalPaused = false; updateTerminalNavigation(); });
 $('#terminal-pause').addEventListener('click',() => { terminalPaused = !terminalPaused; updateTerminalNavigation(); });
-$('#terminal-input-form').addEventListener('submit',async event => {
-  event.preventDefault();
-  const id = terminalId, text = $('#terminal-input').value;
-  if (!id || !text || terminalBusy) return;
-  const result = await terminalMutation(`/terminals/${encodeURIComponent(id)}/input`,{text});
+// Command composer: build a command with the full phone keyboard, then Send
+// (type + Enter in one atomic call) or Paste (type without running). Every sent
+// command joins a reusable history that survives across sessions.
+const CMD_HISTORY_KEY = 'ponte-cmd-history';
+let cmdHistory = [];
+try { const saved = JSON.parse(localStorage.getItem(CMD_HISTORY_KEY) || '[]'); if (Array.isArray(saved)) cmdHistory = saved.filter(item => typeof item === 'string').slice(0, 40); } catch {}
+function rememberCommand(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  cmdHistory = [trimmed, ...cmdHistory.filter(item => item !== trimmed)].slice(0, 40);
+  try { localStorage.setItem(CMD_HISTORY_KEY, JSON.stringify(cmdHistory)); } catch {}
+  renderCmdHistory();
+}
+function renderCmdHistory() {
+  const box = $('#cmd-history');
+  if (!box) return;
+  box.hidden = cmdHistory.length === 0;
+  box.innerHTML = cmdHistory.map((cmd, index) => `<button type="button" class="cmd-chip" data-cmd-index="${index}" title="${escaped(cmd)}"><span>${escaped(cmd)}</span></button>`).join('');
+}
+function growComposer() {
+  const box = $('#terminal-input');
+  box.style.height = 'auto';
+  box.style.height = `${Math.min(140, box.scrollHeight)}px`;
+}
+async function sendCommand(withEnter) {
+  const id = terminalId, box = $('#terminal-input'), text = box.value;
+  if (!id || !text.trim() || terminalBusy) return;
+  const result = await terminalMutation(`/terminals/${encodeURIComponent(id)}/input`, withEnter ? { text, enter: true } : { text });
   if (result) {
+    if (withEnter) rememberCommand(text);
     terminalDrafts.delete(id);
-    if (terminalId === id && $('#terminal-input').value === text) $('#terminal-input').value = '';
+    if (terminalId === id && box.value === text) { box.value = ''; growComposer(); }
     updateTerminalNavigation();
+  } else if (result === null && connected) {
+    toast(t("O comando não entrou. Tente de novo."), true);
   }
+}
+$('#terminal-send').addEventListener('click', () => sendCommand(true));
+$('#terminal-paste').addEventListener('click', () => sendCommand(false));
+$('#terminal-clear').addEventListener('click', () => { $('#terminal-input').value = ''; growComposer(); $('#terminal-input').focus(); });
+$('#terminal-input').addEventListener('input', growComposer);
+$('#terminal-input').addEventListener('focus', () => { setTimeout(syncRemoteViewport, 60); setTimeout(() => $('#terminal-input').scrollIntoView({block:'center',behavior:'smooth'}), 250); });
+$('#terminal-input').addEventListener('blur', () => setTimeout(syncRemoteViewport, 60));
+$('#terminal-input').addEventListener('keydown', event => {
+  // Enter runs the command; Shift+Enter inserts a newline for multi-line input.
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendCommand(true); }
 });
+$('#cmd-history').addEventListener('click', event => {
+  const chip = event.target.closest('[data-cmd-index]');
+  if (!chip) return;
+  const cmd = cmdHistory[Number(chip.dataset.cmdIndex)];
+  if (cmd === undefined) return;
+  const box = $('#terminal-input');
+  box.value = cmd; growComposer(); box.focus();
+  try { box.setSelectionRange(cmd.length, cmd.length); } catch {}
+});
+renderCmdHistory();
 $('#terminal-size').addEventListener('change',async event => {
   const id = terminalId;
   if (!id) return;
@@ -1735,9 +1786,10 @@ $('#terminal-dictate').addEventListener('click', () => {
   const id = terminalId;
   if (!id) { dictationStatus($('#terminal-dictate-status'),t("Crie ou escolha uma sessão antes de falar."),true); return; }
   toggleDictation($('#terminal-dictate'), $('#terminal-dictate-status'), async blob => {
-    const enter = $('#terminal-dictate-enter').checked;
-    const text = await uploadDictation(`/terminals/${encodeURIComponent(id)}/dictate?enter=${enter ? 1 : 0}`, blob);
-    updateTerminalNavigation();
+    // Speaking a command drops the transcript into the composer to review, not
+    // straight into the shell — you send it with the same button as typed text.
+    const text = await uploadDictation('/dictate', blob);
+    if (text) { const box = $('#terminal-input'); box.value = box.value ? `${box.value} ${text}` : text; growComposer(); box.focus(); }
     return text;
   });
 });

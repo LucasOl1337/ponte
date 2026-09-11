@@ -208,11 +208,17 @@ export function createTerminals(dataDir, options = {}) {
     },
     input(id, value) {
       validateId(id);
-      fields(value, ['text', 'key'], 'INVALID_TERMINAL_INPUT');
-      if (Object.keys(value).length !== 1) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
+      fields(value, ['text', 'key', 'enter'], 'INVALID_TERMINAL_INPUT');
       const textInput = Object.hasOwn(value, 'text');
+      const keyInput = Object.hasOwn(value, 'key');
+      // Exactly one of text/key; `enter` is an optional flag that goes with text
+      // so the phone can paste a command AND run it in one serialized operation,
+      // instead of a separate keypress that a busy client could drop.
+      if (textInput === keyInput) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
+      if (keyInput && Object.hasOwn(value, 'enter')) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
+      if (Object.hasOwn(value, 'enter') && typeof value.enter !== 'boolean') throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
       if (textInput && (typeof value.text !== 'string' || value.text.length < 1 || value.text.length > 4000 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(value.text) || !value.text.isWellFormed())) throw new ApiError(400, 'INVALID_TEXT');
-      if (!textInput && (typeof value.key !== 'string' || !Object.hasOwn(keys, value.key))) throw new ApiError(400, 'KEY_NOT_ALLOWED');
+      if (keyInput && (typeof value.key !== 'string' || !Object.hasOwn(keys, value.key))) throw new ApiError(400, 'KEY_NOT_ALLOWED');
       return run(async available => {
         const item = await target(id, available);
         if (item.inMode) throw new ApiError(409, 'TERMINAL_IN_COPY_MODE');
@@ -223,6 +229,7 @@ export function createTerminals(dataDir, options = {}) {
           try {
             await command(['load-buffer', '-b', buffer, '-'], value.text);
             await sendToPane(item, ['paste-buffer', '-d', '-p', '-r', '-b', buffer, '-t', item.paneId]);
+            if (value.enter === true) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
           }
           catch (error) { await command(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
         } else await sendToPane(item, ['send-keys', '-t', item.paneId, keys[value.key]]);

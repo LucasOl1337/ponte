@@ -62,7 +62,7 @@ test('dimensions, opaque targets, text controls and non-allowlisted keys fail be
     assert.throws(() => terminals.create(value), { code: 'INVALID_TERMINAL_SIZE' });
   }
   const id = 'a'.repeat(24);
-  for (const value of [null, [], {}, { text: 'a', key: 'Enter' }, { text: 'x', target: '%0' }, { text: '' }, { text: 'x'.repeat(4001) }, { text: 'a\nb' }, { text: 'a\rb' }, { text: '\x1b' }, { text: '\x7f' }, { text: '\x85' }, { text: '\u2028' }, { text: '\ud800' }, { key: '__proto__' }, { key: '-F' }, { key: 'Enter; run-shell true' }]) {
+  for (const value of [null, [], {}, { text: 'a', key: 'Enter' }, { text: 'a', enter: 'yes' }, { key: 'Enter', enter: true }, { enter: true }, { text: 'x', target: '%0' }, { text: '' }, { text: 'x'.repeat(4001) }, { text: 'a\nb' }, { text: 'a\rb' }, { text: '\x1b' }, { text: '\x7f' }, { text: '\x85' }, { text: '\u2028' }, { text: '\ud800' }, { key: '__proto__' }, { key: '-F' }, { key: 'Enter; run-shell true' }]) {
     assert.throws(() => terminals.input(id, value), ApiError);
   }
   for (const id of ['%0', '@1', '-a', 'ponte_abc', 'a'.repeat(24) + '; kill-server', '../token']) {
@@ -110,6 +110,20 @@ test('literal input goes through stdin and isolated tmux buffer, with no implici
   assert.equal(paste.args.at(-1), '%0');
   for (const key of ['Enter', 'Tab', 'Escape', 'BackSpace', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Interrupt']) await terminals.input(session.id, { key });
   assert.deepEqual(mock.calls.filter(call => call.args[0] === 'send-keys').map(call => call.args.at(-1)), ['Enter', 'Tab', 'Escape', 'BSpace', 'Up', 'Down', 'Left', 'Right', 'C-c']);
+});
+
+test('text with enter pastes then runs the command in one serialized operation', async t => {
+  const { mock, terminals } = await fixture(t);
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  mock.calls.length = 0;
+  assert.deepEqual(await terminals.input(session.id, { text: 'npm test', enter: true }), { ok: true });
+  const order = mock.calls.filter(call => ['load-buffer', 'paste-buffer', 'send-keys'].includes(call.args[0]) || call.args.includes('paste-buffer') || call.args.includes('send-keys'));
+  // load-buffer feeds the text, paste-buffer types it, send-keys Enter runs it — in that order.
+  assert.equal(mock.calls.find(call => call.args[0] === 'load-buffer').options.input, 'npm test');
+  const pasteIndex = mock.calls.findIndex(call => call.argv.includes('paste-buffer'));
+  const enterIndex = mock.calls.findIndex(call => call.argv.includes('send-keys') && call.argv.includes('Enter'));
+  assert.ok(pasteIndex >= 0 && enterIndex > pasteIndex, 'Enter is sent after the paste');
+  void order;
 });
 
 test('capture is plain and bounded; resize and deletion only target the verified managed pane/session', async t => {
