@@ -2,6 +2,11 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.6 — 2026-09-11
+
+- **Auto-pairing on your tailnet.** A phone on the same Tailscale account no longer types a key. `GET /api/pair`, served only over the native TLS listener, asks `tailscale whois` who owns the connecting peer and returns the pairing token when it is the same user that owns this PC. Machines shared with you by someone else, and tagged devices, still fall back to the typed key. The app tries this on boot when it has no saved key and enters straight away. Verified end to end on the emulator (cleared data → opened straight into the screen) and by unit tests for the identity logic and the route.
+- **A stale phone reloads itself** when the PC serves a newer interface: the app carries a version constant, `/api/health` and `/api/state` report the server's, and a mismatch triggers one guarded reload. The service-worker cache name is bumped so its network-first cache drops old files.
+
 ## 0.1.0-alpha.5 — 2026-09-11
 
 The screen page was rebuilt around one idea: the phone shows the monitor and you touch it like a phone. No control modes, no toolbar. Voice dictation, RGB and session control, and an SSH-friendly CLI arrived in the same cycle. Everything below was dogfooded on an Android 11 emulator (WebView 83) and installed on a Redmi Note 13 Pro+ (Android 14).
