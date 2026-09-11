@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.5';
+const UI_VERSION = '0.1.0-alpha.6';
 let token = '';
 let state = null;
 let connected = false;
@@ -1743,13 +1743,30 @@ $('#terminal-dictate').addEventListener('click', () => {
 });
 window.addEventListener('popstate', () => { const page = location.hash.slice(1); if (token && page) navigate(page); });
 
-updateInstalledState();
-if (token) {
+// A device already on the owner's tailnet is handed the key by the PC, so it
+// never sees the pairing screen. The typed key stays as the fallback.
+async function autoPair() {
+  try {
+    const response = await fetch('/api/pair', { headers: { 'Accept-Language': i18n.locale }, cache: 'no-store' });
+    if (!response.ok) return false;
+    const data = await response.json();
+    if (typeof data.token !== 'string' || !/^[a-zA-Z0-9_-]{32,128}$/.test(data.token)) return false;
+    token = data.token;
+    try { localStorage.setItem(storageKey, token); } catch {}
+    return true;
+  } catch { return false; }
+}
+function enterApp(page) {
   showApp(); setConnection(false,t("Conectando ao seu computador…"));
-  const first = location.hash.slice(1) || 'tela';
+  const first = page || location.hash.slice(1) || 'tela';
   if (first === 'tela') { navigate('inicio'); navigate('tela'); } else navigate(first);
   pollState();
 }
-else showPairing();
+updateInstalledState();
+if (token) enterApp();
+else {
+  showPairing();
+  autoPair().then(ok => { if (ok && !connected) { $('#pair-error').hidden = true; enterApp('tela'); toast(t("Conectado pela sua rede Tailscale.")); } });
+}
 setInterval(pollState,4000);
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});

@@ -386,6 +386,8 @@
   "Monitor desligado.": "Monitor turned off.",
   "Wake-on-LAN": "Wake-on-LAN",
   "MAC da Ethernet": "Ethernet MAC",
+  "Conectado pela sua rede Tailscale.": "Connected over your Tailscale network.",
+  "No mesmo Tailscale, o app entra sozinho. Precisando da chave, gere com ./ponte pair no PC. Ela fica só neste aparelho.": "On the same Tailscale, the app connects on its own. If you need the key, generate it with ./ponte pair on the PC. It stays on this device only.",
   "Trocar de monitor": "Switch monitor",
   "Forçar paisagem": "Force landscape",
   "Soltar orientação": "Release orientation",
@@ -843,6 +845,10 @@
   "INVALID_QUALITY": {
     "en": "JPEG quality must be between 30 and 90.",
     "pt": "A qualidade JPEG deve estar entre 30 e 90."
+  },
+  "AUTOPAIR_DENIED": {
+    "en": "This device is not on your tailnet, so it needs the pairing key.",
+    "pt": "Este aparelho não está no seu tailnet, então precisa da chave de pareamento."
   },
   "WOL_INSTRUCTIONS": {
     "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",

@@ -11,6 +11,7 @@ import { createAudioStore, MAX_AUDIO_BYTES } from './backend/audio.mjs';
 import { ApiError } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
 import { createTerminals } from './backend/terminals.mjs';
+import { createTailscaleIdentity, pairingRejection } from './backend/tailscale.mjs';
 import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
 import { message, publicErrorParameters, requestLocale } from './backend/i18n.mjs';
@@ -152,6 +153,7 @@ export async function createApp(options = {}) {
   const live = createLiveStreaming(desktop);
   const terminals = options.terminals || createTerminals(initialized.dataDir, { env });
   const transcriber = options.transcriber || createTranscriber(initialized.dataDir, { env });
+  const tailnetIdentity = options.tailnetIdentity || createTailscaleIdentity({ env, selfAddress: settings?.nativeTls?.host || env.OMARCHY_REMOTE_NATIVE_BIND });
   const activeRequests = new Set();
   let shuttingDown = false, closingPromise;
 
@@ -203,7 +205,14 @@ export async function createApp(options = {}) {
       // Pairing links may be opened from a different site. Public navigation
       // is allowed; cross-site requests to the private API are still rejected.
       if (pathname.startsWith('/api/') && req.headers['sec-fetch-site'] === 'cross-site') throw new ApiError(403, 'CROSS_SITE_NOT_ALLOWED');
-      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true, version: uiVersion }); return; }
+      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true, version: uiVersion, autoPair: !!req.ponteNative && tailnetIdentity.available }); return; }
+      if (pathname === '/api/pair' && req.method === 'GET') {
+        // Only over the tailnet TLS listener, and only for a device the daemon
+        // says belongs to this PC's owner. The loopback proxy preserves the
+        // phone's tailnet source address, so this identifies the real peer.
+        if (!req.ponteNative || !await tailnetIdentity.authorize(req.socket?.remoteAddress)) throw pairingRejection();
+        json(res, 200, { token: initialized.token }); return;
+      }
       if (!pathname.startsWith('/api/')) { await staticFile(req, res, pathname); return; }
       const provided = req.headers.authorization;
       const candidate = Buffer.from(typeof provided === 'string' && provided.startsWith('Bearer ') ? provided.slice(7) : '');
@@ -316,7 +325,7 @@ export async function createApp(options = {}) {
   }
   // The Android app trusts this PC's dedicated certificate. No public CA,
   // certificate-warning exception or tailnet account login is needed here.
-  const nativeServer = nativeTls ? https.createServer({ ...nativeTls, minVersion: 'TLSv1.2', handshakeTimeout: 5000 }, handleRequest) : null;
+  const nativeServer = nativeTls ? https.createServer({ ...nativeTls, minVersion: 'TLSv1.2', handshakeTimeout: 5000 }, (req, res) => { req.ponteNative = true; handleRequest(req, res); }) : null;
   const servers = [server, nativeServer].filter(Boolean);
   const sockets = new Set();
   for (const listener of servers) {

@@ -303,6 +303,10 @@ export const messages = {
     "en": "JPEG quality must be between 30 and 90.",
     "pt": "A qualidade JPEG deve estar entre 30 e 90."
   },
+  "AUTOPAIR_DENIED": {
+    "en": "This device is not on your tailnet, so it needs the pairing key.",
+    "pt": "Este aparelho não está no seu tailnet, então precisa da chave de pareamento."
+  },
   "WOL_INSTRUCTIONS": {
     "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",
     "pt": "Habilite Wake-on-LAN na BIOS/UEFI (Power On By PCI-E) e no Linux com sudo ethtool -s {interface} wol g. Acorde com Magic Packet para {mac} na porta UDP 9."
