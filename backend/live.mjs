@@ -13,12 +13,16 @@ function parseRegionPart(query, key) {
 }
 
 export function parseLiveOptions(query) {
-  const fields = ['monitor', 'fps', 'scale', 'x', 'y', 'w', 'h'];
+  const fields = ['monitor', 'fps', 'scale', 'q', 'x', 'y', 'w', 'h'];
   for (const key of fields) if (query.getAll(key).length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
   const fps = query.has('fps') ? Number(query.get('fps')) : 10;
   const scale = query.has('scale') ? Number(query.get('scale')) : 0.5;
-  if (!Number.isInteger(fps) || fps < 1 || fps > 10) throw new ApiError(400, 'INVALID_FRAME_RATE');
-  if (!Number.isFinite(scale) || scale < 0.2 || scale > 0.65) throw new ApiError(400, 'INVALID_SCALE');
+  const quality = query.has('q') ? Number(query.get('q')) : 65;
+  if (!Number.isInteger(fps) || fps < 1 || fps > 20) throw new ApiError(400, 'INVALID_FRAME_RATE');
+  // grim scales on the CPU (~60 ms at 0.5), while a full-size JPEG takes ~10 ms:
+  // scale 1 with a lower quality is the fast profile, not the expensive one.
+  if (!Number.isFinite(scale) || scale < 0.2 || scale > 1) throw new ApiError(400, 'INVALID_SCALE');
+  if (!Number.isInteger(quality) || quality < 30 || quality > 90) throw new ApiError(400, 'INVALID_QUALITY');
   const monitor = query.get('monitor') ?? undefined;
   if (monitor !== undefined && (monitor.length < 1 || monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(monitor))) throw new ApiError(400, 'INVALID_MONITOR');
   const x = parseRegionPart(query, 'x');
@@ -32,7 +36,7 @@ export function parseLiveOptions(query) {
     if (x < 0 || y < 0 || w < 1 || h < 1) throw new ApiError(400, 'INVALID_REGION');
     region = { x, y, w, h };
   }
-  return { monitor, fps, scale, region };
+  return { monitor, fps, scale, quality, region };
 }
 
 function aborted() { return new ApiError(499, 'STREAM_ENDED'); }

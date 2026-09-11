@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { access, stat } from 'node:fs/promises';
+import { access, stat, readFile } from 'node:fs/promises';
 import { constants, existsSync } from 'node:fs';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 import { message } from './i18n.mjs';
@@ -10,6 +10,7 @@ const keyCodes = {
   ArrowUp: [103], ArrowDown: [108], ArrowLeft: [105], ArrowRight: [106],
   Copy: [29, 46], Paste: [29, 47], Undo: [29, 44], SelectAll: [29, 30],
 };
+export const LIGHT_PRESETS = Object.freeze(['lava', 'brasa', 'oceano', 'aurora', 'floresta', 'lua']);
 const workspace = (value) => ({ id: Number(value?.id) || 0, name: String(value?.name ?? '').slice(0, 150) });
 const windowInfo = (value) => value?.address ? ({
   address: String(value.address), title: String(value.title ?? '').slice(0, 1000),
@@ -107,9 +108,56 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     await releasePromise;
   }
 
+  const pythonBin = env.PYTHON_BIN || 'python';
+  const lightsController = env.MAGMA_LIGHTS_CONTROLLER || path.join(env.HOME || os.homedir(), '.local/share/magma-lights/controller.py');
+  const lightsCommand = (...args) => run(pythonBin, [lightsController, ...args], { timeout: 45000 });
+  let lightsCache = { at: 0, value: null };
+  async function lightsInstalled() {
+    try { await access(lightsController, constants.R_OK); return true; } catch { return false; }
+  }
+  // The Magma controller reads its saved state; nothing touches OpenRGB here.
+  async function lightsStatus() {
+    if (Date.now() - lightsCache.at < 15000) return lightsCache.value;
+    let value = null;
+    try {
+      const last = JSON.parse(await run(pythonBin, [lightsController, 'status'], { timeout: 8000 }))?.last_applied || {};
+      value = { preset: LIGHT_PRESETS.includes(last.preset) ? last.preset : 'custom', sleeping: last.sleeping === true, brightness: Number.isFinite(Number(last.brightness)) ? Number(last.brightness) : null };
+    } catch {}
+    lightsCache = { at: Date.now(), value };
+    return value;
+  }
+  async function sessionLocked() {
+    try {
+      const output = String(await run('omarchy-shell', ['lock', 'isLocked'], { timeout: 2500 })).trim();
+      return output === 'true' ? true : output === 'false' ? false : null;
+    } catch { return null; }
+  }
+  // fcitx5 owns the compositor's input-method seat. Its DebugInfo lists every
+  // input context with focus:1 only while an *enabled* text field has focus
+  // (verified: a button-only dialog reports none). That is the cue to raise
+  // the phone keyboard after a tap.
+  async function textInputFocused() {
+    try {
+      const raw = String(await run('busctl', ['--user', '--timeout=1', 'call', 'org.fcitx.Fcitx5', '/controller', 'org.fcitx.Fcitx.Controller1', 'DebugInfo'], { timeout: 1500 }));
+      return { available: true, focused: /focus:1\b/.test(raw) };
+    } catch { return { available: false, focused: null }; }
+  }
+  const validMonitorName = (name) => typeof name === 'string' && name.length > 0 && name.length <= 150 && !/[\s;&|`$><()"\\]/u.test(name);
+  // Hyprland 0.56+ exposes only a dpms TOGGLE through the Lua dispatch bridge,
+  // and it ignores the on/off word. dpmsStatus is readable, so a monitor is set
+  // to an explicit state by toggling only when it is not already there.
+  async function toggleMonitor(name) {
+    await run('hyprctl', ['dispatch', `hl.dsp.dpms({ monitor = "${name}" })`]);
+  }
+  async function setMonitorDpms(name, desiredOn, monitors) {
+    const monitor = (monitors || await readHypr('monitors')).find(m => m.name === name);
+    if (!monitor) throw new ApiError(400, 'INVALID_MONITOR');
+    if ((monitor.dpmsStatus !== false) === desiredOn) return;
+    await toggleMonitor(name);
+  }
   async function capabilities() {
-    const [mouseBinary, keyboard, screenshot, audio] = await Promise.all([
-      exists('ydotool', env), exists('wtype', env), exists('grim', env), exists('ffplay', env),
+    const [mouseBinary, keyboard, screenshot, audio, lights, lock] = await Promise.all([
+      exists('ydotool', env), exists('wtype', env), exists('grim', env), exists('ffplay', env), lightsInstalled(), exists('omarchy-shell', env),
     ]);
     let mouse = false;
     if (mouseBinary) {
@@ -119,13 +167,13 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         mouse = socket.isSocket();
       } catch {}
     }
-    return { mouse, keyboard, screenshot, audio, live: screenshot };
+    return { mouse, keyboard, screenshot, audio, live: screenshot, lights, lock };
   }
 
   async function getState({ locale = 'en' } = {}) {
     const names = ['activewindow', 'monitors', 'workspaces', 'clients'];
     const values = await Promise.allSettled([
-      ...names.map(readHypr), run('wpctl', ['get-volume', '@DEFAULT_AUDIO_SINK@']), capabilities(),
+      ...names.map(readHypr), run('wpctl', ['get-volume', '@DEFAULT_AUDIO_SINK@']), capabilities(), sessionLocked(), lightsStatus(), textInputFocused(),
     ]);
     const warnings = [];
     const get = (index, fallback, warning) => {
@@ -135,13 +183,20 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     };
     const rawVolume = String(get(4, '', 'VOLUME_UNAVAILABLE'));
     const match = rawVolume.match(/Volume:\s*([\d.]+)/);
-    const caps = get(5, { mouse: false, keyboard: false, screenshot: false, audio: false, live: false });
+    const caps = get(5, { mouse: false, keyboard: false, screenshot: false, audio: false, live: false, lights: false, lock: false });
+    const locked = caps.lock ? get(6, null) : null;
+    const lights = caps.lights ? get(7, null) : null;
+    const textInput = get(8, { available: false, focused: null });
     if (!caps.mouse) warnings.push('INPUT_UNAVAILABLE');
     if (!caps.keyboard) warnings.push('TEXT_UNAVAILABLE');
     if (!caps.screenshot) warnings.push('SCREENSHOT_UNAVAILABLE');
     if (!caps.audio) warnings.push('PLAYBACK_UNAVAILABLE');
     const wol = getEthernetWolInfo(env);
     const wolInstructions = message('WOL_INSTRUCTIONS', locale, { mac: wol.mac || '—', interface: wol.interface || '—' });
+    let wolEnabled = null;
+    if (wol.interface && /^[A-Za-z0-9_.-]+$/.test(wol.interface)) {
+      try { wolEnabled = (await readFile(`/sys/class/net/${wol.interface}/device/power/wakeup`, 'utf8')).trim() === 'enabled'; } catch {}
+    }
     return {
       hostname: os.hostname(), uptime: Math.floor(os.uptime()),
       activeWindow: windowInfo(get(0, null, 'ACTIVE_WINDOW_UNAVAILABLE')),
@@ -154,8 +209,11 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       windows: get(3, [], 'WINDOWS_UNAVAILABLE').map(windowInfo).filter(Boolean),
       volume: { value: match ? Math.max(0, Math.min(1, Number(match[1]))) : 0, muted: rawVolume.includes('[MUTED]') },
       capabilities: caps, warningCodes: warnings, warnings: warnings.map(code => message(code, locale)),
-      wakeOnLan: { mac: wol.mac, interface: wol.interface, instructions: wolInstructions },
-      power: { wakeOnLan: { mac: wol.mac, interface: wol.interface, instructions: wolInstructions } },
+      wakeOnLan: { mac: wol.mac, interface: wol.interface, enabled: wolEnabled, instructions: wolInstructions },
+      power: { wakeOnLan: { mac: wol.mac, interface: wol.interface, enabled: wolEnabled, instructions: wolInstructions } },
+      session: { locked, lockAvailable: !!caps.lock },
+      textInput,
+      lights: lights ? { ...lights, presets: LIGHT_PRESETS } : null,
     };
   }
 
@@ -199,6 +257,19 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         const gy = (Number(monitor.y) || 0) + y;
         await run('ydotool', ['mousemove', '--absolute', '--', String(gx), String(gy)]);
         await run('ydotool', ['click', buttons[value.button]]);
+        break;
+      }
+      case 'mouse.moveTo': {
+        if (typeof value.monitor !== 'string' || value.monitor.length < 1 || value.monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
+        const x = numberIn(value.x, 0, 32767, true);
+        const y = numberIn(value.y, 0, 32767, true);
+        const monitors = await readHypr('monitors');
+        const monitor = monitors.find(item => item.name === value.monitor);
+        if (!monitor) throw new ApiError(400, 'INVALID_MONITOR');
+        const width = Number(monitor.width), height = Number(monitor.height);
+        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new ApiError(400, 'INVALID_MONITOR');
+        numberIn(x, 0, width - 1, true); numberIn(y, 0, height - 1, true);
+        await run('ydotool', ['mousemove', '--absolute', '--', String((Number(monitor.x) || 0) + x), String((Number(monitor.y) || 0) + y)]);
         break;
       }
       case 'mouse.scroll': {
@@ -261,31 +332,69 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       case 'monitor.dpms': {
         const stateStr = typeof value.enabled === 'boolean' ? (value.enabled ? 'on' : 'off') : value.state;
         if (stateStr !== 'on' && stateStr !== 'off') throw new ApiError(400, 'INVALID_POWER_STATE');
-        if (typeof value.monitor !== 'string' || !value.monitor.length || value.monitor.length > 150 || /[\s;&|`$><()]/u.test(value.monitor)) {
-          throw new ApiError(400, 'INVALID_MONITOR');
-        }
+        if (!validMonitorName(value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
+        await setMonitorDpms(value.monitor, stateStr === 'on'); break;
+      }
+      case 'power.dpms_all': {
+        const stateStr = typeof value.enabled === 'boolean' ? (value.enabled ? 'on' : 'off') : value.state;
+        if (stateStr !== 'on' && stateStr !== 'off') throw new ApiError(400, 'INVALID_POWER_STATE');
         const monitors = await readHypr('monitors');
-        if (!monitors.some(m => m.name === value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
-        await run('hyprctl', ['dispatch', 'dpms', stateStr, value.monitor]); break;
+        for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, stateStr === 'on', monitors);
+        break;
       }
       case 'power.sleep':
       case 'power.smart_sleep': {
-        await run('hyprctl', ['dispatch', 'dpms', 'off']);
-        const pythonBin = env.PYTHON_BIN || 'python';
-        const controller = env.MAGMA_LIGHTS_CONTROLLER || path.join(env.HOME || os.homedir(), '.local/share/magma-lights/controller.py');
-        await run(pythonBin, [controller, 'sleep']); break;
+        const monitors = await readHypr('monitors');
+        for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, false, monitors);
+        lightsCache.at = 0;
+        await lightsCommand('sleep'); break;
       }
       case 'power.wake':
       case 'power.restore': {
-        await run('hyprctl', ['dispatch', 'dpms', 'on']);
-        const pythonBin = env.PYTHON_BIN || 'python';
-        const controller = env.MAGMA_LIGHTS_CONTROLLER || path.join(env.HOME || os.homedir(), '.local/share/magma-lights/controller.py');
-        await run(pythonBin, [controller, 'restore']); break;
+        const monitors = await readHypr('monitors');
+        for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, true, monitors);
+        lightsCache.at = 0;
+        await lightsCommand('restore'); break;
+      }
+      case 'lights.preset': {
+        if (typeof value.preset !== 'string' || !LIGHT_PRESETS.includes(value.preset)) throw new ApiError(400, 'INVALID_PRESET');
+        if (!await lightsInstalled()) throw new ApiError(503, 'LIGHTS_UNAVAILABLE');
+        lightsCache.at = 0;
+        await lightsCommand('preset', value.preset); break;
+      }
+      case 'lights.sleep':
+      case 'lights.restore':
+      case 'lights.reapply': {
+        if (!await lightsInstalled()) throw new ApiError(503, 'LIGHTS_UNAVAILABLE');
+        lightsCache.at = 0;
+        await lightsCommand(value.type.slice('lights.'.length)); break;
+      }
+      case 'lights.screen': {
+        if (typeof value.enabled !== 'boolean') throw new ApiError(400, 'INVALID_POWER_STATE');
+        if (!await lightsInstalled()) throw new ApiError(503, 'LIGHTS_UNAVAILABLE');
+        await lightsCommand(value.enabled ? 'screen_on' : 'screen_off'); break;
+      }
+      case 'session.lock': {
+        if (!await exists('omarchy-system-lock', env)) throw new ApiError(503, 'LOCK_UNAVAILABLE');
+        await run('omarchy-system-lock', [], { timeout: 8000 }); break;
+      }
+      case 'session.unlock': {
+        // The Omarchy lock only opens through PAM, so the password is typed as
+        // real keystrokes through uinput. It is refused unless the lock is up,
+        // otherwise the secret could land in whichever window has focus.
+        if (typeof value.password !== 'string' || value.password.length < 1 || value.password.length > 256 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value.password) || !value.password.isWellFormed()) throw new ApiError(400, 'INVALID_PASSWORD');
+        if (!await exists('omarchy-shell', env)) throw new ApiError(503, 'LOCK_UNAVAILABLE');
+        if (await sessionLocked() !== true) throw new ApiError(409, 'SESSION_NOT_LOCKED');
+        try { const monitors = await readHypr('monitors'); for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, true, monitors); } catch {}
+        await run('ydotool', ['type', '--file', '-', '--key-delay', '12'], { input: value.password, timeout: 15000 });
+        await pressKeys([28]); break;
       }
       case 'power.poweroff':
       case 'power.off': {
         await run('systemctl', ['poweroff']); break;
       }
+      case 'power.reboot': await run('systemctl', ['reboot']); break;
+      case 'power.suspend': await run('systemctl', ['suspend'], { timeout: 10000 }); break;
       default: throw new ApiError(400, 'ACTION_NOT_ALLOWED');
     }
     return { ok: true };
@@ -299,8 +408,9 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     return run('grim', ['-c', '-t', 'jpeg', '-q', scale === 1 ? '90' : '72', '-s', String(scale), '-o', monitor, '-'], { binary: true, timeout: 8000, maxBuffer: 12 * 1024 * 1024 });
   }
 
-  async function prepareLive({ monitor: requestedMonitor, scale, region, signal }) {
-    numberIn(scale, 0.2, 0.65);
+  async function prepareLive({ monitor: requestedMonitor, scale, quality = 65, region, signal }) {
+    numberIn(scale, 0.2, 1);
+    numberIn(quality, 30, 90, true);
     const monitors = await readHypr('monitors', { signal });
     const selected = monitors.find(item => item.name === (requestedMonitor ?? monitors.find(m => m.focused)?.name ?? monitors[0]?.name));
     if (!selected || typeof selected.name !== 'string' || selected.name.length > 150) throw new ApiError(400, 'INVALID_MONITOR');
@@ -309,7 +419,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       monitor: selected.name,
       region: capture.region,
       capture: (captureSignal) => {
-        const args = ['-c', '-t', 'jpeg', '-q', '65', '-s', capture.geometry ? '1' : capture.scale.toFixed(2)];
+        const args = ['-c', '-t', 'jpeg', '-q', String(quality), '-s', capture.geometry ? '1' : capture.scale.toFixed(2)];
         if (capture.geometry) args.push('-g', capture.geometry);
         else args.push('-o', capture.output);
         args.push('-');
@@ -323,5 +433,5 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     clearTimeout(dragTimer);
     for (let attempt = 0; attempt < 3 && dragging; attempt++) await releaseDrag().catch(() => {});
   }
-  return { getState, action, screenshot, prepareLive, close, capabilities };
+  return { getState, action, screenshot, prepareLive, close, capabilities, textInputFocused };
 }

@@ -11,6 +11,7 @@ import { createAudioStore, MAX_AUDIO_BYTES } from './backend/audio.mjs';
 import { ApiError } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
 import { createTerminals } from './backend/terminals.mjs';
+import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
 import { message, publicErrorParameters, requestLocale } from './backend/i18n.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
@@ -148,6 +149,7 @@ export async function createApp(options = {}) {
   const limits = createLimits();
   const live = createLiveStreaming(desktop);
   const terminals = options.terminals || createTerminals(initialized.dataDir, { env });
+  const transcriber = options.transcriber || createTranscriber(initialized.dataDir, { env });
   const activeRequests = new Set();
   let shuttingDown = false, closingPromise;
 
@@ -205,7 +207,26 @@ export async function createApp(options = {}) {
       const candidate = Buffer.from(typeof provided === 'string' && provided.startsWith('Bearer ') ? provided.slice(7) : '');
       if (candidate.length !== tokenBytes.length || !timingSafeEqual(candidate, tokenBytes)) throw new ApiError(401, 'PAIRING_REQUIRED');
       if (pathname === '/api/state' && req.method === 'GET') {
-        json(res, 200, await limits.only('state', 2, () => desktop.getState({ locale }))); return;
+        const state = await limits.only('state', 2, () => desktop.getState({ locale }));
+        if (state?.capabilities) state.capabilities = { ...state.capabilities, stt: await transcriber.available() };
+        json(res, 200, state); return;
+      }
+      // Dictation audio is transcribed on the PC and discarded; only the text is
+      // typed, into a terminal session (optionally followed by Enter) or returned.
+      if (pathname === '/api/dictate' && req.method === 'POST') {
+        const result = await limits.only('stt', 1, async () => transcriber.transcribe(await readBody(req, MAX_DICTATION_BYTES, 60000), req.headers['content-type']));
+        json(res, 200, { ok: true, text: result.text, provider: result.provider }); return;
+      }
+      const dictateRoute = pathname.match(/^\/api\/terminals\/([^/]+)\/dictate$/);
+      if (dictateRoute && req.method === 'POST') {
+        await limits.only('stt', 1, async () => {
+          const body = await readBody(req, MAX_DICTATION_BYTES, 60000);
+          const result = await transcriber.transcribe(body, req.headers['content-type']);
+          const enter = query.get('enter') !== '0';
+          await terminals.input(dictateRoute[1], { text: result.text });
+          if (enter) await terminals.input(dictateRoute[1], { key: 'Enter' });
+          json(res, 200, { ok: true, text: result.text, entered: enter, provider: result.provider });
+        }); return;
       }
       if (pathname === '/api/action' && req.method === 'POST') {
         if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
@@ -214,6 +235,9 @@ export async function createApp(options = {}) {
           let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
           json(res, 200, await limits.action(() => desktop.action(value)));
         }); return;
+      }
+      if (pathname === '/api/textinput' && req.method === 'GET') {
+        json(res, 200, await limits.only('textinput', 2, () => desktop.textInputFocused())); return;
       }
       if (pathname === '/api/power' && req.method === 'GET') {
         const state = await limits.only('state', 2, () => desktop.getState({ locale }));

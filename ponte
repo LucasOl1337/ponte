@@ -408,6 +408,152 @@ def phone_view(config_file, data, screen_off=False, runner=run, which=command_pa
         ) from error
 
 
+DEFAULT_NOTEBOOK = '100.91.100.95'
+NOTEBOOK_NAME = 'notebook-omarchy'
+PC_TAILSCALE = '100.99.71.120'
+NOTEBOOK_VIEW_PIN = '7391'
+NOTEBOOK_SHARE_PIN = '4826'
+SUNSHINE_USER = 'grok'
+SUNSHINE_PASSWORD = 'tela-entre-nos'
+
+
+def notebook_moonlight_command(action, host=DEFAULT_NOTEBOOK):
+    if action == 'list':
+        return ['moonlight', 'list', host]
+    if action == 'pair':
+        return ['moonlight', 'pair', '--pin', NOTEBOOK_VIEW_PIN, host]
+    if action == 'stream':
+        return ['moonlight', 'stream', '--1080', '--display-mode', 'windowed', host, 'Desktop']
+    raise ValueError(f'Unknown Moonlight action: {action}')
+
+
+def sunshine_accept_command(pin=NOTEBOOK_SHARE_PIN, name=NOTEBOOK_NAME):
+    return [
+        'curl', '-sk', '-u', f'{SUNSHINE_USER}:{SUNSHINE_PASSWORD}',
+        '-H', 'Content-Type: application/json', '-X', 'POST',
+        'https://localhost:47990/api/pin',
+        '-d', json.dumps({'pin': pin, 'name': name}, separators=(',', ':')),
+    ]
+
+
+def notebook_status(runner=run, which=command_path):
+    moonlight = which('moonlight')
+    sunshine = which('sunshine')
+    lines = [
+        f'Ponte notebook screen for {NOTEBOOK_NAME}',
+        f'Notebook Tailscale: {DEFAULT_NOTEBOOK}',
+        f'This PC Tailscale: {PC_TAILSCALE}',
+        f'moonlight: {"yes — " + moonlight if moonlight else "no — install with: pacman -S moonlight-qt"}',
+        f'sunshine: {"yes — " + sunshine if sunshine else "no — install with: pacman -S sunshine"}',
+    ]
+    try:
+        active = (runner('systemctl', '--user', 'is-active', 'sunshine.service', capture=True).stdout or '').strip()
+    except subprocess.CalledProcessError as error:
+        active = (error.stdout or 'unknown').strip() or 'unknown'
+    except (OSError, subprocess.SubprocessError):
+        active = 'unknown'
+    if active == 'active':
+        lines.append('Sunshine service: active (this PC can share its screen)')
+    else:
+        lines.append(f'Sunshine service: {active}. Start with: systemctl --user enable --now sunshine.service')
+    online = tailscale_phone_online(DEFAULT_NOTEBOOK, runner=runner)
+    if online is True:
+        lines.append(f'Tailscale: {DEFAULT_NOTEBOOK} is online')
+    elif online is False:
+        lines.append(f'Tailscale: {DEFAULT_NOTEBOOK} is not reachable. Open Tailscale on the notebook.')
+    else:
+        lines.append('Tailscale: could not read `tailscale status`. Is Tailscale running on this PC?')
+    if moonlight:
+        try:
+            listed = runner(*notebook_moonlight_command('list'), capture=True).stdout or ''
+        except (OSError, subprocess.SubprocessError) as error:
+            listed = str(error)
+        if 'Desktop' in listed and 'not been paired' not in listed:
+            lines.append('Moonlight pairing: yes — Desktop is available')
+        else:
+            lines.append('Moonlight pairing: no — run ./ponte notebook pair')
+    lines.append('To watch the notebook: ./ponte notebook view')
+    lines.append(f'The notebook watches this PC with: moonlight stream {PC_TAILSCALE} Desktop')
+    lines.append(f'PINs: notebook→PC {NOTEBOOK_SHARE_PIN}; PC→notebook {NOTEBOOK_VIEW_PIN}')
+    print('\n'.join(lines))
+
+
+def notebook_pair(runner=run, which=command_path):
+    if not which('moonlight'):
+        raise ValueError('moonlight is not installed. Install it with: pacman -S moonlight-qt')
+    try:
+        runner(*notebook_moonlight_command('pair'))
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f'Could not pair with {DEFAULT_NOTEBOOK}. On the notebook confirm PIN {NOTEBOOK_VIEW_PIN} in Sunshine, then retry ./ponte notebook pair'
+        ) from error
+    print(f'Paired Moonlight with {NOTEBOOK_NAME} ({DEFAULT_NOTEBOOK}) using PIN {NOTEBOOK_VIEW_PIN}.')
+    print('Open the notebook screen with: ./ponte notebook view')
+
+
+def sunshine_clients(runner=run):
+    try:
+        return (runner(
+            'curl', '-sk', '-u', f'{SUNSHINE_USER}:{SUNSHINE_PASSWORD}',
+            'https://localhost:47990/api/clients/list', capture=True,
+        ).stdout or '')
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def notebook_accept(runner=run, which=command_path):
+    if not which('curl'):
+        raise ValueError('curl is not installed.')
+    try:
+        response = (runner(*sunshine_accept_command(), capture=True).stdout or '').strip()
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f'Could not confirm PIN {NOTEBOOK_SHARE_PIN} on local Sunshine. Is sunshine running on https://localhost:47990?'
+        ) from error
+    accepted = '"status":true' in response.replace(' ', '')
+    already = NOTEBOOK_NAME in sunshine_clients(runner=runner)
+    if not accepted and not already:
+        raise ValueError(
+            f'Sunshine did not accept PIN {NOTEBOOK_SHARE_PIN}. On the notebook run: moonlight pair --pin {NOTEBOOK_SHARE_PIN} {PC_TAILSCALE}'
+        )
+    if already and not accepted:
+        print(f'PIN {NOTEBOOK_SHARE_PIN} already paired ({NOTEBOOK_NAME} is a Sunshine client). The notebook can stream with: moonlight stream {PC_TAILSCALE} Desktop')
+        return
+    print(f'Confirmed PIN {NOTEBOOK_SHARE_PIN} on this PC. The notebook can stream with: moonlight stream {PC_TAILSCALE} Desktop')
+
+
+def notebook_view(runner=run, which=command_path):
+    if not which('moonlight'):
+        raise ValueError('moonlight is not installed. Install it with: pacman -S moonlight-qt')
+    try:
+        runner(*notebook_moonlight_command('stream'), timeout=None)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f'moonlight could not stream {DEFAULT_NOTEBOOK}. Pair first with ./ponte notebook pair'
+        ) from error
+
+
+def notebook_main(argv):
+    parser = argparse.ArgumentParser(
+        prog='ponte notebook',
+        description='Watch the paired Omarchy notebook over Tailscale with Sunshine and Moonlight.',
+    )
+    sub = parser.add_subparsers(dest='action', required=True)
+    sub.add_parser('status', help='Check Moonlight, Sunshine, Tailscale and pairing.')
+    sub.add_parser('pair', help=f'Pair Moonlight to the notebook Sunshine with PIN {NOTEBOOK_VIEW_PIN}.')
+    sub.add_parser('accept', help=f'Confirm PIN {NOTEBOOK_SHARE_PIN} so the notebook can watch this PC.')
+    sub.add_parser('view', help='Open a 1080p windowed Moonlight stream of the notebook Desktop.')
+    args = parser.parse_args(argv)
+    if args.action == 'status':
+        notebook_status()
+    elif args.action == 'pair':
+        notebook_pair()
+    elif args.action == 'accept':
+        notebook_accept()
+    elif args.action == 'view':
+        notebook_view()
+
+
 def phone_main(argv):
     parser = argparse.ArgumentParser(
         prog='ponte phone',
@@ -434,10 +580,34 @@ def phone_main(argv):
         phone_view(config_file, data, screen_off=args.screen_off)
 
 
+def pc_main(argv):
+    # SSH-friendly local control over Tailscale. Reuses the Node desktop actions
+    # (power, lock, unlock, monitors, RGB) validated by the server, so `ssh
+    # lol@<tailscale-ip> ponte pc <command>` needs no HTTP server or pairing.
+    helper = Path(__file__).resolve().parent / 'bin' / 'ponte-pc.mjs'
+    node = os.environ.get('PONTE_NODE', 'node')
+    if not argv or argv[0] in ('-h', '--help'):
+        print('Usage: ./ponte pc <lock|unlock|sleep|wake|suspend|reboot|off|monitors on|off [NAME]|lights NAME>')
+        print("unlock reads the password from stdin: echo -n 'pw' | ./ponte pc unlock")
+        if argv:
+            return
+        raise SystemExit(2)
+    try:
+        raise SystemExit(subprocess.call([node, str(helper), *argv]))
+    except FileNotFoundError:
+        raise ValueError('node was not found. Install Node.js 22+ or set PONTE_NODE.')
+
+
 def main():
     os.umask(0o077)
     if sys.argv[1:2] == ['phone']:
         phone_main(sys.argv[2:])
+        return
+    if sys.argv[1:2] == ['notebook']:
+        notebook_main(sys.argv[2:])
+        return
+    if sys.argv[1:2] == ['pc']:
+        pc_main(sys.argv[2:])
         return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'pair', 'serve', 'android-config'])

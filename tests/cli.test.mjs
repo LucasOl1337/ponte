@@ -225,6 +225,101 @@ test('phone status reports installed tools, online peer and connected device thr
   assert.deepEqual(calls, [['tailscale', 'status', '--json'], ['adb', 'devices']]);
 });
 
+const notebookStub = `#!${python3}
+import json, os, sys
+name = os.path.basename(sys.argv[0])
+with open(os.environ['PONTE_TEST_LOG'], 'a') as f:
+    f.write(json.dumps([name] + sys.argv[1:]) + '\\n')
+fail = os.environ.get('PONTE_TEST_NOTEBOOK_FAIL')
+if name == 'moonlight':
+    if sys.argv[1] == 'list':
+        if fail == 'list':
+            sys.stderr.write('Computer lol has not been paired. Please open Moonlight to pair before retrieving games list.\\n')
+            sys.exit(1)
+        print('Desktop')
+        print('Low Res Desktop')
+    elif sys.argv[1] == 'pair':
+        if fail == 'pair':
+            sys.stderr.write('Pairing failed\\n'); sys.exit(1)
+        print('Paired')
+    elif sys.argv[1] == 'stream':
+        if fail == 'stream':
+            sys.exit(1)
+elif name == 'curl':
+    if fail == 'pin':
+        print('{"status":false}')
+        sys.exit(0)
+    print('{"status":true}')
+elif name == 'systemctl':
+    print('active')
+elif name == 'tailscale':
+    if sys.argv[1:] == ['status', '--json']:
+        online = os.environ.get('PONTE_TEST_TS_ONLINE', '1') == '1'
+        print(json.dumps({'Peer': {'nb': {'Online': online, 'TailscaleIPs': ['100.91.100.95']}}}))
+`;
+
+async function notebookFixture(t, { tools = ['moonlight', 'curl', 'tailscale', 'systemctl', 'sunshine'] } = {}) {
+  const f = await fixture(t);
+  for (const name of tools) await writeFile(path.join(f.bin, name), notebookStub, { mode: 0o755 });
+  const cli = (args, extraEnv = {}) => run(python3, [path.join(root, 'ponte'), ...args], {
+    env: { ...f.env, PATH: f.bin, ...extraEnv }, timeout: 15000,
+  });
+  return { ...f, cli };
+}
+
+test('notebook status reports missing moonlight without launching a stream', async t => {
+  const f = await notebookFixture(t, { tools: ['tailscale', 'systemctl'] });
+  const result = await f.cli(['notebook', 'status']);
+  assert.match(result.stdout, /moonlight: no — install with: pacman -S moonlight-qt/);
+  assert.match(result.stdout, /100\.91\.100\.95/);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls, [['systemctl', '--user', 'is-active', 'sunshine.service'], ['tailscale', 'status', '--json']]);
+});
+
+test('notebook status reports Sunshine, online peer and Moonlight Desktop list', async t => {
+  const f = await notebookFixture(t);
+  const result = await f.cli(['notebook', 'status']);
+  assert.match(result.stdout, /moonlight: yes —/);
+  assert.match(result.stdout, /Sunshine service: active/);
+  assert.match(result.stdout, /Tailscale: 100\.91\.100\.95 is online/);
+  assert.match(result.stdout, /Moonlight pairing: yes — Desktop is available/);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls, [
+    ['systemctl', '--user', 'is-active', 'sunshine.service'],
+    ['tailscale', 'status', '--json'],
+    ['moonlight', 'list', '100.91.100.95'],
+  ]);
+});
+
+test('notebook pair uses PIN 7391 and view launches windowed 1080p Desktop', async t => {
+  const f = await notebookFixture(t);
+  const paired = await f.cli(['notebook', 'pair']);
+  assert.match(paired.stdout, /PIN 7391/);
+  await f.cli(['notebook', 'view']);
+  await assert.rejects(f.cli(['notebook', 'pair'], { PONTE_TEST_NOTEBOOK_FAIL: 'pair' }), error => /confirm PIN 7391/.test(error.stderr));
+  await assert.rejects(f.cli(['notebook', 'view'], { PONTE_TEST_NOTEBOOK_FAIL: 'stream' }), error => /could not stream/.test(error.stderr));
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.filter(call => call[0] === 'moonlight'), [
+    ['moonlight', 'pair', '--pin', '7391', '100.91.100.95'],
+    ['moonlight', 'stream', '--1080', '--display-mode', 'windowed', '100.91.100.95', 'Desktop'],
+    ['moonlight', 'pair', '--pin', '7391', '100.91.100.95'],
+    ['moonlight', 'stream', '--1080', '--display-mode', 'windowed', '100.91.100.95', 'Desktop'],
+  ]);
+});
+
+test('notebook accept posts PIN 4826 to local Sunshine', async t => {
+  const f = await notebookFixture(t);
+  const ok = await f.cli(['notebook', 'accept']);
+  assert.match(ok.stdout, /Confirmed PIN 4826/);
+  await assert.rejects(f.cli(['notebook', 'accept'], { PONTE_TEST_NOTEBOOK_FAIL: 'pin' }), error => /did not accept PIN 4826/.test(error.stderr));
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse).filter(call => call[0] === 'curl');
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls[0].slice(0, 4), ['curl', '-sk', '-u', 'grok:tela-entre-nos']);
+  assert.ok(calls[0].includes('https://localhost:47990/api/pin'));
+  assert.ok(calls[0].some(part => part.includes('"pin":"4826"')));
+  assert.ok(calls[1].includes('https://localhost:47990/api/clients/list'));
+});
+
 test('portable start.sh reads the generated private config and serves health only on its configured loopback port', async t => {
   const f = await fixture(t);
   const reservation = net.createServer();
@@ -247,4 +342,15 @@ test('portable start.sh reads the generated private config and serves health onl
   assert.equal(output.includes(token), false); assert.equal(errors.includes(token), false);
   child.kill('SIGTERM'); assert.deepEqual(await exited, { code: 0, signal: null });
   await assert.rejects(readFile(f.log), error => error.code === 'ENOENT', 'no desktop/service commands should have run');
+});
+
+test('pc subcommand shows help, rejects unknown commands, and requires a password on stdin for unlock', async t => {
+  const f = await fixture(t);
+  const help = await f.cli(['pc', '--help']);
+  assert.match(help.stdout, /ponte pc <lock\|unlock/);
+  await assert.rejects(f.cli(['pc']), error => error.code === 2);
+  await assert.rejects(f.cli(['pc', 'definitely-not-a-command']), error => error.code === 2);
+  await assert.rejects(f.cli(['pc', 'monitors', 'sideways']), error => error.code === 2);
+  // unlock with no stdin exits 2 before any desktop command runs.
+  await assert.rejects(run('bash', ['-c', `printf '' | python3 ${JSON.stringify(path.join(root, 'ponte'))} pc unlock`], { env: f.env, timeout: 15000 }), error => error.code === 2);
 });

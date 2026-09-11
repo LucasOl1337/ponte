@@ -21,7 +21,7 @@ function mockRunner() {
     if (command === 'hyprctl') {
       if (args[1] === 'clients') return JSON.stringify([window]);
       if (args[1] === 'activewindow') return JSON.stringify(window);
-      if (args[1] === 'monitors') return JSON.stringify([{ name: 'DP-1', width: 1920, height: 1080, focused: true }]);
+      if (args[1] === 'monitors') return JSON.stringify([{ name: 'DP-1', width: 1920, height: 1080, focused: true, dpmsStatus: true }]);
       if (args[1] === 'workspaces') return JSON.stringify([{ id: 3, name: '3', windows: 1 }]);
     }
     if (command === 'wpctl' && args[0] === 'get-volume') return 'Volume: 0.67 [MUTED]\n';
@@ -160,7 +160,7 @@ test('actions reject shell injection and bounds before launching any process', a
     { type: 'window.focus', address: '0xabc;dispatch exec true' },
     { type: 'volume.set', value: 1.1 }, { type: 'volume.set', value: '0.5' },
     { type: 'app.launch', app: 'terminal; touch /tmp/never' }, { type: 'app.launch', app: '__proto__' },
-    { type: 'power.dpms', monitor: 'DP-1; reboot', state: 'off' }, { type: 'power.dpms', monitor: 'DP-1', state: 'standby' },
+    { type: 'power.dpms', monitor: 'DP-1; reboot', state: 'off' }, { type: 'power.dpms', monitor: 'DP-1', state: 'standby' }, { type: 'power.dpms', monitor: 'DP-1") os.execute("x', state: 'off' },
     { type: 'power.dpms', monitor: '', state: 'off' }, { type: 'power.dpms', monitor: 'DP-1', state: 123 },
   ]) {
     assert.equal((await f.action(value)).status, 400, JSON.stringify(value));
@@ -200,7 +200,8 @@ test('reading at original resolution uses a bounded full-size screenshot without
   assert.equal(f.calls.filter(call => call.command === 'grim').length, 0);
   assert.equal((await f.request('/api/screenshot?monitor=DP-1&scale=1')).status, 200);
   assert.deepEqual(f.calls.at(-1).args, ['-c', '-t', 'jpeg', '-q', '90', '-s', '1', '-o', 'DP-1', '-']);
-  assert.equal((await f.request('/api/stream?monitor=DP-1&scale=1')).status, 400);
+  assert.equal((await f.request('/api/stream?monitor=DP-1&scale=1.5')).status, 400);
+  assert.equal((await f.request('/api/stream?monitor=DP-1&scale=1&q=95')).status, 400);
   assert.equal(f.calls.filter(call => call.command === 'grim').length, 1);
 });
 
@@ -209,33 +210,30 @@ test('power actions control monitors, smart sleep, wake, and poweroff with valid
   // Invalid monitor name (not in live state)
   assert.equal((await f.action({ type: 'power.dpms', monitor: 'UNKNOWN-1', state: 'off' })).status, 400);
   assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1; reboot', state: 'off' })).status, 400);
-  // Valid monitor DPMS off and on
-  assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1', state: 'off' })).status, 200);
-  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'off', 'DP-1']);
-  assert.equal(f.calls.at(-1).command, 'hyprctl');
-
+  // The dpms dispatcher only toggles, so a monitor already in the requested
+  // state is left alone and one that differs is toggled exactly once.
+  const before = f.calls.filter(call => call.command === 'hyprctl' && String(call.args[1]).includes('dpms')).length;
   assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1', state: 'on' })).status, 200);
-  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'on', 'DP-1']);
-
-  // Boolean enabled form
+  assert.equal(f.calls.filter(call => call.command === 'hyprctl' && String(call.args[1]).includes('dpms')).length, before, 'already-on monitor is not toggled');
+  assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1', state: 'off' })).status, 200);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'hl.dsp.dpms({ monitor = "DP-1" })']);
+  assert.equal(f.calls.at(-1).command, 'hyprctl');
   assert.equal((await f.action({ type: 'power.dpms', monitor: 'DP-1', enabled: false })).status, 200);
-  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'off', 'DP-1']);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'hl.dsp.dpms({ monitor = "DP-1" })']);
 
-  // Smart sleep
+  // Smart sleep turns each on monitor off, then sleeps the lights.
   assert.equal((await f.action({ type: 'power.sleep' })).status, 200);
   const sleepCalls = f.calls.slice(-2);
-  assert.deepEqual(sleepCalls[0].args, ['dispatch', 'dpms', 'off']);
+  assert.deepEqual(sleepCalls[0].args, ['dispatch', 'hl.dsp.dpms({ monitor = "DP-1" })']);
   assert.equal(sleepCalls[1].command, 'python');
   assert.match(sleepCalls[1].args[0], /controller\.py$/);
   assert.equal(sleepCalls[1].args[1], 'sleep');
 
-  // Wake
+  // Wake: DP-1 already reads on in the mock, so only the lights are restored.
   assert.equal((await f.action({ type: 'power.wake' })).status, 200);
-  const wakeCalls = f.calls.slice(-2);
-  assert.deepEqual(wakeCalls[0].args, ['dispatch', 'dpms', 'on']);
-  assert.equal(wakeCalls[1].command, 'python');
-  assert.match(wakeCalls[1].args[0], /controller\.py$/);
-  assert.equal(wakeCalls[1].args[1], 'restore');
+  assert.equal(f.calls.at(-1).command, 'python');
+  assert.match(f.calls.at(-1).args[0], /controller\.py$/);
+  assert.equal(f.calls.at(-1).args[1], 'restore');
 
   // Poweroff
   assert.equal((await f.action({ type: 'power.poweroff' })).status, 200);
@@ -255,7 +253,7 @@ test('power actions control monitors, smart sleep, wake, and poweroff with valid
     body: JSON.stringify({ type: 'power.dpms', monitor: 'DP-1', state: 'off' }),
   });
   assert.equal(postPower.status, 200);
-  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'dpms', 'off', 'DP-1']);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'hl.dsp.dpms({ monitor = "DP-1" })']);
 });
 
 test('drag renews its lease and auto-releases; shortcut keys release modifiers', async t => {
@@ -386,7 +384,7 @@ test('request-scoped command runner bounds execution and treats arguments litera
 
 test('live stream authenticates, validates query/live monitor, then sends continuous length-delimited JPEG frames', async t => {
   const f = await fixture(t);
-  for (const query of ['fps=11', 'fps=0', 'fps=1.5', 'scale=1', 'scale=NaN', 'scale=0.1', 'fps=5&fps=6', 'monitor=DP-1%3Bexec%20sh']) {
+  for (const query of ['fps=21', 'fps=0', 'fps=1.5', 'scale=1.5', 'scale=NaN', 'scale=0.1', 'q=29', 'q=91', 'q=50.5', 'q=60&q=61', 'fps=5&fps=6', 'monitor=DP-1%3Bexec%20sh']) {
     assert.equal((await f.request(`/api/stream?${query}`)).status, 400, query);
   }
   assert.equal(f.calls.filter(call => call.command === 'grim').length, 0);
@@ -431,9 +429,10 @@ test('live region is validated, clamped to the monitor, and captured at scale 1'
   assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=10')), error => error.status === 400 && error.code === 'INVALID_REGION');
   assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=-1&y=0&w=10&h=10')), error => error.code === 'INVALID_REGION');
   assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=1&y=1&w=10&h=10&x=2')), error => error.code === 'REPEATED_PARAMETER');
-  assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=1&y=1&w=10&h=10&scale=1')), error => error.code === 'INVALID_SCALE');
+  assert.throws(() => parseLiveOptions(new URLSearchParams('monitor=DP-1&x=1&y=1&w=10&h=10&scale=1.5')), error => error.code === 'INVALID_SCALE');
+  assert.deepEqual(parseLiveOptions(new URLSearchParams('monitor=DP-1&fps=20&scale=1&q=45')), { monitor: 'DP-1', fps: 20, scale: 1, quality: 45, region: undefined });
   assert.deepEqual(parseLiveOptions(new URLSearchParams('monitor=DP-1&fps=6&scale=0.65&x=100&y=80&w=640&h=360')), {
-    monitor: 'DP-1', fps: 6, scale: 0.65, region: { x: 100, y: 80, w: 640, h: 360 },
+    monitor: 'DP-1', fps: 6, scale: 0.65, quality: 65, region: { x: 100, y: 80, w: 640, h: 360 },
   });
 
   const f = await fixture(t);
@@ -580,7 +579,7 @@ test('API uses stable error codes, English by default, and explicit Portuguese l
   }
   const invalidNumber = await f.request('/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept-Language': 'pt' }, body: JSON.stringify({ type: 'volume.set', value: 2 }) });
   assert.deepEqual(await invalidNumber.json(), { errorCode: 'NUMBER_OUT_OF_RANGE', errorParameters: { min: 0, max: 1 }, error: 'Valor numérico deve estar entre 0 e 1.' });
-  const invalidStream = await f.request('/api/stream?fps=20', { headers: { 'Accept-Language': 'pt-BR' } });
+  const invalidStream = await f.request('/api/stream?fps=25', { headers: { 'Accept-Language': 'pt-BR' } });
   assert.deepEqual(await invalidStream.json(), { errorCode: 'INVALID_FRAME_RATE', errorParameters: {}, error: messages.INVALID_FRAME_RATE.pt });
 });
 
@@ -615,3 +614,135 @@ test('API error parameters expose only public scalar placeholders already used b
   assert.deepEqual(body, { errorCode: 'NUMBER_OUT_OF_RANGE', errorParameters: { min: 1, max: 10 }, error: 'The number must be between 1 and 10.' });
   assert.equal(JSON.stringify(body).includes('must-remain-private'), false);
 });
+
+test('lights, all-monitor DPMS, reboot and suspend map to the Magma controller, hyprctl and systemctl with validation', async t => {
+  const base = await fixture(t);
+  const controller = path.join(base.root, 'controller.py');
+  await writeFile(controller, '# fake Magma controller\n');
+  const withEnv = async (env, dataDir) => {
+    const desktop = createDesktop({ runner: base.runner, exists: async () => true, env: { ...process.env, ...env } });
+    const app = await createApp({ rootDir: base.root, dataDir: path.join(base.root, dataDir), token: TOKEN, desktop, audio: base.audio, trustedHosts: ['phone.tailnet.test'] });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    t.after(() => app.close());
+    const url = `http://127.0.0.1:${app.server.address().port}`;
+    return {
+      action: value => fetch(`${url}/api/action`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(value) }),
+      state: async () => (await fetch(`${url}/api/state`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json(),
+    };
+  };
+  const f = { ...base, ...(await withEnv({ MAGMA_LIGHTS_CONTROLLER: controller }, 'private-lights')) };
+  for (const value of [
+    { type: 'lights.preset', preset: 'lava; rm -rf /' }, { type: 'lights.preset', preset: '__proto__' }, { type: 'lights.preset' },
+    { type: 'lights.screen', enabled: 'on' }, { type: 'power.dpms_all', state: 'standby' }, { type: 'power.dpms_all' },
+  ]) {
+    assert.equal((await f.action(value)).status, 400, JSON.stringify(value));
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.action({ type: 'lights.preset', preset: 'oceano' })).status, 200);
+  assert.equal(f.calls.at(-1).command, 'python');
+  assert.match(f.calls.at(-1).args[0], /controller\.py$/);
+  assert.deepEqual(f.calls.at(-1).args.slice(1), ['preset', 'oceano']);
+  for (const [type, expected] of [['lights.sleep', 'sleep'], ['lights.restore', 'restore'], ['lights.reapply', 'reapply']]) {
+    assert.equal((await f.action({ type })).status, 200);
+    assert.deepEqual(f.calls.at(-1).args.slice(1), [expected]);
+  }
+  assert.equal((await f.action({ type: 'lights.screen', enabled: false })).status, 200);
+  assert.deepEqual(f.calls.at(-1).args.slice(1), ['screen_off']);
+  assert.equal((await f.action({ type: 'power.dpms_all', state: 'off' })).status, 200);
+  assert.deepEqual(f.calls.at(-1).args, ['dispatch', 'hl.dsp.dpms({ monitor = "DP-1" })']);
+  const allOnBefore = f.calls.filter(call => call.command === 'hyprctl' && String(call.args[1]).includes('dpms')).length;
+  assert.equal((await f.action({ type: 'power.dpms_all', enabled: true })).status, 200);
+  assert.equal(f.calls.filter(call => call.command === 'hyprctl' && String(call.args[1]).includes('dpms')).length, allOnBefore, 'monitors already on are not toggled');
+  assert.equal((await f.action({ type: 'power.reboot' })).status, 200);
+  assert.deepEqual([f.calls.at(-1).command, f.calls.at(-1).args], ['systemctl', ['reboot']]);
+  assert.equal((await f.action({ type: 'power.suspend' })).status, 200);
+  assert.deepEqual([f.calls.at(-1).command, f.calls.at(-1).args], ['systemctl', ['suspend']]);
+  const state = await f.state();
+  assert.equal(state.capabilities.lights, true);
+  assert.equal(state.lights, null, 'a controller answer that is not JSON degrades to no light status');
+  assert.equal(state.session.lockAvailable, true);
+  const missing = await withEnv({ MAGMA_LIGHTS_CONTROLLER: path.join(base.root, 'absent.py') }, 'private-nolights');
+  assert.equal((await missing.state()).capabilities.lights, false);
+  const denied = await missing.action({ type: 'lights.preset', preset: 'lua' });
+  assert.equal(denied.status, 503);
+  assert.equal((await denied.json()).errorCode, 'LIGHTS_UNAVAILABLE');
+});
+
+test('session lock runs the Omarchy locker and unlock types the password only while the lock is up', async t => {
+  const f = await fixture(t);
+  let locked = 'false';
+  const base = f.runner;
+  f.desktop = createDesktop({ runner: async (command, args, options) => { if (command === 'omarchy-shell') { f.calls.push({ command, args, options }); return `${locked}\n`; } return base(command, args, options); }, exists: async () => true });
+  const app = await createApp({ rootDir: f.root, dataDir: path.join(f.root, 'private2'), token: TOKEN, desktop: f.desktop, audio: f.audio, trustedHosts: ['phone.tailnet.test'] });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => app.close());
+  const act = value => fetch(`http://127.0.0.1:${app.server.address().port}/api/action`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  for (const value of [{ type: 'session.unlock' }, { type: 'session.unlock', password: '' }, { type: 'session.unlock', password: 'a'.repeat(257) }, { type: 'session.unlock', password: 'x\ny' }]) {
+    assert.equal((await act(value)).status, 400, JSON.stringify(value));
+  }
+  const notLocked = await act({ type: 'session.unlock', password: 'segredo' });
+  assert.equal(notLocked.status, 409);
+  assert.equal((await notLocked.json()).errorCode, 'SESSION_NOT_LOCKED');
+  assert.equal(f.calls.filter(call => call.command === 'ydotool').length, 0, 'no keystrokes while unlocked');
+  assert.equal((await act({ type: 'session.lock' })).status, 200);
+  assert.deepEqual([f.calls.at(-1).command, f.calls.at(-1).args], ['omarchy-system-lock', []]);
+  locked = 'true';
+  assert.equal((await act({ type: 'session.unlock', password: 'seg redo!' })).status, 200);
+  const typed = f.calls.filter(call => call.command === 'ydotool');
+  assert.deepEqual(typed[0].args, ['type', '--file', '-', '--key-delay', '12']);
+  assert.equal(typed[0].options.input, 'seg redo!');
+  assert.deepEqual(typed[1].args, ['key', '--key-delay', '1', '28:1', '28:0']);
+  const state = await (await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+  assert.deepEqual(state.session, { locked: true, lockAvailable: true });
+});
+
+test('dictation transcribes on the PC, types into the chosen terminal, and presses Enter unless disabled', async t => {
+  const inputs = [];
+  const terminals = {
+    list: async () => ({ available: true, sessions: [], limit: 4 }), create: async () => { throw new Error('unused'); },
+    read: async () => { throw new Error('unused'); }, resize: async () => ({ ok: true }), remove: async () => ({ ok: true }),
+    input: async (id, value) => { inputs.push([id, value]); return { ok: true }; }, close: () => {},
+  };
+  const transcripts = [];
+  const transcriber = { available: async () => true, transcribe: async (body, contentType) => { transcripts.push({ size: body.length, contentType }); return { text: 'echo oi', provider: 'fake', duration: 1 }; } };
+  const f = await fixture(t, { terminals, transcriber });
+  const audio = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(40, 3)]);
+  const id = 'abcdefabcdefabcdefabcdef';
+  const sent = await f.request(`/api/terminals/${id}/dictate`, { method: 'POST', headers: { 'Content-Type': 'audio/webm;codecs=opus' }, body: audio });
+  assert.equal(sent.status, 200);
+  assert.deepEqual(await sent.json(), { ok: true, text: 'echo oi', entered: true, provider: 'fake' });
+  assert.deepEqual(inputs, [[id, { text: 'echo oi' }], [id, { key: 'Enter' }]]);
+  assert.deepEqual(transcripts, [{ size: audio.length, contentType: 'audio/webm;codecs=opus' }]);
+  const typedOnly = await f.request(`/api/terminals/${id}/dictate?enter=0`, { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: audio });
+  assert.deepEqual(await typedOnly.json(), { ok: true, text: 'echo oi', entered: false, provider: 'fake' });
+  assert.deepEqual(inputs.slice(2), [[id, { text: 'echo oi' }]]);
+  const plain = await f.request('/api/dictate', { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: audio });
+  assert.deepEqual(await plain.json(), { ok: true, text: 'echo oi', provider: 'fake' });
+  assert.equal(inputs.length, 3, 'plain dictation types nothing');
+  const unauthenticated = await fetch(`${f.base}/api/dictate`, { method: 'POST', headers: { 'Content-Type': 'audio/webm' }, body: audio });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(transcripts.length, 3);
+  const state = await (await f.request('/api/state')).json();
+  assert.equal(state.capabilities.stt, true);
+});
+
+test('absolute pointer moves and the text-input probe back the phone screen without clicking', async t => {
+  const base = mockRunner();
+  let debug = 'Group [wayland:] has 2 InputContext(s)\n  IC [a] program:foot frontend:wayland_v2 cap:1 focus:0\n  IC [b] program:chromium frontend:wayland_v2 cap:1 focus:1\n';
+  const runner = async (command, args, options) => { base.calls.push({ command, args, options }); if (command === 'busctl') return debug; return base.runner(command, args, options); };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  const f = await fixture(t, { desktop });
+  assert.equal((await f.action({ type: 'mouse.moveTo', monitor: 'DP-1', x: 10, y: 20 })).status, 200);
+  assert.deepEqual([base.calls.at(-1).command, base.calls.at(-1).args], ['ydotool', ['mousemove', '--absolute', '--', '10', '20']]);
+  assert.equal(base.calls.filter(call => call.command === 'ydotool' && call.args[0] === 'click').length, 0, 'moveTo never clicks');
+  for (const value of [{ type: 'mouse.moveTo', monitor: 'DP-1', x: 1920, y: 0 }, { type: 'mouse.moveTo', monitor: 'NOPE', x: 0, y: 0 }, { type: 'mouse.moveTo', monitor: 'DP-1', x: 1.5, y: 0 }]) {
+    assert.equal((await f.action(value)).status, 400, JSON.stringify(value));
+  }
+  assert.deepEqual(await (await f.request('/api/textinput')).json(), { available: true, focused: true });
+  debug = debug.replace('focus:1', 'focus:0');
+  assert.deepEqual(await (await f.request('/api/textinput')).json(), { available: true, focused: false });
+  const state = await (await f.request('/api/state')).json();
+  assert.deepEqual(state.textInput, { available: true, focused: false });
+  assert.equal((await fetch(`${f.base}/api/textinput`)).status, 401);
+});
+
