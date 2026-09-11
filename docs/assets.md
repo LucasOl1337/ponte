@@ -8,6 +8,8 @@ The `redmi-*.png` images are original device screenshots from the September 5, 2
 
 `screen-1to1-before.png` and `screen-direct-touch-before.png` are emulator captures (Android 11, `emulator-5554`) of the 1:1 letterboxing bug and Direct touch without a visible mode cue. `screen-1to1-after.png` and `screen-direct-touch-after.png` are matching shots on the same emulator after the fix, with a native-pixel 1:1 crop and Direct touch badge, help text and first-time toast.
 
+`screen-single-mode.png`, `screen-keyboard.png`, `screen-landscape.png`, `home-lights-session.png` and `terminal-dictation.png` are Android 11 emulator captures (`emulator-5554`) from the September 11, 2026 session, connected to the author's real PC. The streamed desktop area and the Ethernet MAC address were pixelated before publishing; nothing else was edited.
+
 Ponte's code and UI assets are MIT licensed. Android build tools, Amazon Corretto, system packages and their respective licenses remain with their publishers. Build scripts download those tools separately with pinned checksums.
 
 ## Cover generation

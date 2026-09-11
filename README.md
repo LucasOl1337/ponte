@@ -10,31 +10,36 @@ This is an independent **experimental alpha**. Live video and persistent pairing
 
 ## The interface
 
-<p align="center"><img src="docs/assets/app-en-control.png" width="31%" alt="English browser preview of the Ponte touchpad"> <img src="docs/assets/app-en-screen.png" width="31%" alt="English browser preview of the monitor controls"> <img src="docs/assets/app-en-voice.png" width="31%" alt="English browser preview of the voice recording interface, idle"></p>
+<p align="center"><img src="docs/assets/screen-single-mode.png" width="23%" alt="Screen page: the monitor fills the phone, with switch-monitor, rotate and mic buttons above the app navigation"> <img src="docs/assets/screen-keyboard.png" width="23%" alt="Screen page with the Android keyboard raised after tapping a text field on the PC"> <img src="docs/assets/home-lights-session.png" width="23%" alt="Home page: monitors all on/off, RGB presets, session lock, suspend and restart"> <img src="docs/assets/terminal-dictation.png" width="23%" alt="Terminals page with the Speak to terminal button and Run with Enter"></p>
 
-These English previews show the running app connected to a read-only review instance on the PC. The [original Redmi captures](docs/evidence.md#physical-android-device) document the physical-device test in Portuguese. The cover is AI-generated concept art. The voice screenshot shows the idle interface, not proof of a successful recording.
+<p align="center"><img src="docs/assets/screen-landscape.png" width="72%" alt="Forced landscape: the monitor edge to edge with the floating buttons on the right"></p>
+
+These are Android 11 emulator captures of the current interface in Portuguese; the streamed desktop is pixelated because it is a real work session. The [original Redmi captures](docs/evidence.md#physical-android-device) document the first physical-device test. The cover is AI-generated concept art. See the [changelog](CHANGELOG.md) for what each alpha added and how it was verified.
 
 ## What it does
 
 | Control | Behavior |
 | --- | --- |
-| Touchpad | Pointer movement, tap to click, two-finger scrolling, drag and right click |
-| Keyboard | Send text and common shortcuts to the current PC window |
+| Screen | Opens first. The monitor fills the phone: tap clicks, long-press right-clicks or drags, pinch zooms, one finger pans while zoomed, two fingers scroll the PC. Tap a text field on the PC and the phone keyboard rises; what you type goes to the PC live |
+| Screen buttons | Switch to the next monitor, force landscape edge to edge (and release it), dictate into the focused field |
+| Terminals | Read and type in dedicated text sessions, or **speak**: the PC transcribes and types into the selected session, then presses Enter |
 | Windows | Browse windows and workspaces, then focus the one you want |
-| Monitor view | Opens first. Watch live, rotate, pinch a real-resolution crop, tap the image in Direct touch, or freeze a full-resolution frame to read |
-| Terminals | Read and type in dedicated text sessions, with explicit Enter and desktop attachment |
 | Media | Volume, mute, playback and track controls |
-| Power | Per-monitor on/off toggles, Smart sleep and Wake up superbuttons, double-confirmed power off; WoL metadata exposed for remote wake |
-| Voice | Record, review, send to the PC and play back. Android recording verification is still in progress |
+| Power | Per-monitor on/off, all monitors on/off, Smart sleep and Wake up, suspend, restart, double-confirmed power off; Wake-on-LAN status |
+| Lights | Six RGB presets, lights off/restore, water-cooler screen on/off (through the Magma controller, optional) |
+| Session | Lock, and unlock by typing your password through the app while the Omarchy lock is up |
+| Voice | Record, review, send to the PC and play back |
 | Pairing | Pair once. The app remembers the connection across restarts |
 
-Live view uses authenticated MJPEG with profiles up to 10 frames per second. It does not stream system audio. This is intended for desktop control and checking progress, not gaming or high-frame-rate remote video.
+Live view is authenticated MJPEG. The default *Sharp* profile streams native pixels at up to 15 fps; *Balanced* and *Light* trade resolution for bandwidth. Zoom is a continuous transform on the phone, like Chrome Remote Desktop: the frame never gets re-cropped mid-pinch, and the *Sharp* profile stays crisp up to 1:1. It does not stream system audio. This is intended for desktop control and checking progress, not gaming.
 
-View, Direct touch, Touchpad and Keyboard share the monitor, so you can watch the PC while controlling it. Zooming the live image captures only the visible region at full resolution. 1:1 shows that crop at native pixels, without letterboxing. Direct touch outlines the monitor and clicks that image; the separate touchpad remains available. The image sits above the controls in portrait and beside them in landscape. The combined layout is browser-tested; its physical Android keyboard check remains pending.
+The keyboard raise relies on fcitx5 running on the PC, which is how Ponte learns that a text field has focus. Dictation uses the Sussurro socket when it is running, or any OpenAI-compatible transcription endpoint (`PONTE_STT_URL`, OmniVoice Studio by default). Audio is transcribed and discarded. See the [screen and terminal guide](docs/screen-and-terminals.md).
 
-See the [screen and terminal guide](docs/screen-and-terminals.md) for the new navigation and session behavior. These changes target the next alpha. Its personalized Android update has been installed and checked on the Redmi for live Screen entry, landscape fullscreen and terminal execution. Soft-keyboard completion and microphone recording remain pending.
+From any device on your tailnet, `ssh user@<tailscale-ip> ./ponte pc <lock|unlock|sleep|wake|suspend|reboot|off|monitors on|off [NAME]|lights NAME>` runs the same validated actions without the app; `unlock` reads the password from stdin.
 
 To see and control the phone from this PC over Tailscale, use `./ponte phone status`, then `./ponte phone connect` (default `100.111.221.82:5555`) and `./ponte phone view`. Step-by-step: [PC controls phone](docs/pc-controls-phone.md).
+
+To watch the Omarchy notebook over the same tailnet, use `./ponte notebook status` and `./ponte notebook view` (Sunshine + Moonlight, host `100.91.100.95`).
 
 ## Try it
 
@@ -91,7 +96,7 @@ Tests use temporary data and synthetic servers. They do not need a real phone or
 
 ## What comes next
 
-The first priorities are a simpler pairing flow, completion of recording verification on physical Android devices, additional translations, and measurements over cellular or geographically remote Tailscale connections. Contributions that include a reproducible test are welcome. The [PC-controls-phone spec](docs/pc-controls-phone.md) evaluates the reverse direction: operating the paired phone from the PC over the same Tailscale network. Validate new builds on the device with the [manual test checklist](docs/manual-test-checklist.md).
+The first priorities are a simpler pairing flow, a live check of unlock on a locked session, a keyboard-raise signal that does not depend on fcitx5, additional translations, and measurements over cellular or geographically remote Tailscale connections. Contributions that include a reproducible test are welcome. The [PC-controls-phone spec](docs/pc-controls-phone.md) evaluates the reverse direction: operating the paired phone from the PC over the same Tailscale network. Validate new builds on the device with the [manual test checklist](docs/manual-test-checklist.md).
 
 This project is independent of Omarchy. Any upstream integration is a proposal until Omarchy's maintainers accept it. [Omarchy](https://github.com/omacom/omarchy) is created by [DHH](https://dhh.dk/).
 
