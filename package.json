@@ -1,6 +1,6 @@
 {
   "name": "ponte-omarchy-remote",
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0-alpha.13",
   "private": true,
   "type": "module",
   "description": "Android remote control and live monitor views for Omarchy over Tailscale",

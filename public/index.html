@@ -8,7 +8,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=0.1.0-alpha.13">
   <title data-i18n="Ponte — seu Omarchy, por perto">Ponte — your Omarchy, within reach</title>
 </head>
 <body>
@@ -35,6 +35,7 @@
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="i-enter" viewBox="0 0 24 24"><path d="M20 5v6a3 3 0 0 1-3 3H5"/><path d="M8 10l-4 4 4 4"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="12" rx="3"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 15v3"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4M8 16l-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0M16 8l2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(1 -1) scale(.92)"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
@@ -65,14 +66,13 @@
         <h1><span data-i18n="Dois dispositivos.">Two devices.</span><br><em data-i18n="Um só lugar.">One place.</em></h1>
         <p data-i18n="Uma ponte para o seu computador. Navegue, troque de janela e envie sua voz de onde estiver.">A bridge to your computer. Navigate, switch windows and send your voice from wherever you are.</p>
         <div class="pair-illustration" aria-hidden="true"><div class="illustration-pc"><div></div></div><div class="illustration-link">······</div><div class="illustration-phone"><div></div><span></span></div></div>
-        <form id="pair-form" class="card pair-card">
-          <div class="card-label"><svg><use href="#i-lock"/></svg> <span data-i18n="CONECTAR COM SEGURANÇA">CONNECT SECURELY</span></div>
-          <label for="pair-token" data-i18n="Chave de pareamento">Pairing key</label>
-          <input id="pair-token" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the key from your PC" data-i18n-placeholder="Cole a chave gerada no PC">
-          <button type="submit" class="button primary full" id="pair-submit"><span data-i18n="Conectar ao meu PC">Connect to my PC</span> <svg><use href="#i-arrow"/></svg></button>
-          <p class="hint" data-i18n="No mesmo Tailscale, o app entra sozinho. Precisando da chave, gere com ./ponte pair no PC. Ela fica só neste aparelho.">On the same Tailscale, the app connects on its own. If you need the key, generate it with ./ponte pair on the PC. It stays on this device only.</p>
+        <div class="card pair-card">
+          <div class="card-label"><svg><use href="#i-link"/></svg> <span data-i18n="SEM SENHA, PELO TAILSCALE">NO PASSWORD, OVER TAILSCALE</span></div>
+          <p id="pair-status" class="pair-status" role="status" data-i18n="Conectando ao seu PC pela rede Tailscale…">Connecting to your PC over Tailscale…</p>
+          <button type="button" class="button primary full" id="pair-retry" hidden><span data-i18n="Tentar de novo">Try again</span> <svg><use href="#i-refresh"/></svg></button>
+          <p class="hint" data-i18n="Nada de chave nem senha. Estando os dois no mesmo Tailscale e o PC acordado, o app entra sozinho.">No key, no password. With both on the same Tailscale and the PC awake, the app connects on its own.</p>
           <p id="pair-error" class="inline-error" role="alert" hidden></p>
-        </form>
+        </div>
         <div class="privacy-note"><svg><use href="#i-link"/></svg><span data-i18n="Acesso privado pela sua rede Tailscale.">Private access over your Tailscale network.</span></div>
       </section>
       <div id="paired-app" hidden>
@@ -112,11 +112,14 @@
         <section id="page-tela" class="page viewer-page" data-page="tela" hidden>
             <section id="control-panel-screen" class="screen-card">
               <div class="screen-stage" id="screen-stage" data-screen-mode="idle">
-                <div class="screen-preview" id="screen-preview" tabindex="0" role="region" aria-label="PC screen. Tap clicks, long-press right-clicks or drags, pinch zooms, two fingers scroll." data-i18n-aria-label="Tela do PC. Toque clica, toque longo é botão direito ou arrasta, pinça amplia, dois dedos rolam."><div class="screen-empty" id="screen-empty"><svg><use href="#i-monitor"/></svg><strong data-i18n="Acompanhe seu computador">Keep up with your computer</strong><span data-i18n="Escolha um monitor e inicie a transmissão.">Choose a monitor and start streaming.</span></div><img id="screen-image" alt="Image of the PC monitor" hidden data-i18n-alt="Imagem do monitor do PC"><p id="drag-indicator" class="direct-touch-indicator drag-indicator" hidden data-i18n="Arrastando · solte para largar">Dragging · lift to drop</p><div id="live-overlay" class="live-overlay" hidden><svg><use href="#i-refresh"/></svg><strong id="live-overlay-text" data-i18n="Conectando ao monitor…">Connecting to the monitor…</strong></div><div class="screen-hud" id="screen-hud"><span id="live-dot" class="live-dot"></span><strong id="viewer-monitor-name" data-i18n="Monitor do PC">PC monitor</strong><span id="capture-time" data-i18n="Pronto para iniciar">Ready to start</span><span id="live-badge" class="capture-badge" data-i18n="PRONTO">READY</span></div></div>
+                <div class="screen-preview" id="screen-preview" tabindex="0" role="region" aria-label="PC screen. Tap clicks, long-press right-clicks or drags, pinch zooms, two fingers scroll." data-i18n-aria-label="Tela do PC. Toque clica, toque longo é botão direito ou arrasta, pinça amplia, dois dedos rolam."><div class="screen-empty" id="screen-empty"><svg><use href="#i-monitor"/></svg><strong data-i18n="Acompanhe seu computador">Keep up with your computer</strong><span data-i18n="Toque para iniciar a transmissão.">Tap to start streaming.</span></div><img id="screen-image" alt="Image of the PC monitor" hidden data-i18n-alt="Imagem do monitor do PC"><p id="drag-indicator" class="direct-touch-indicator drag-indicator" hidden data-i18n="Arrastando · solte para largar">Dragging · lift to drop</p><div id="live-overlay" class="live-overlay" hidden><svg><use href="#i-refresh"/></svg><strong id="live-overlay-text" data-i18n="Conectando ao monitor…">Connecting to the monitor…</strong></div><div class="screen-hud" id="screen-hud"><span id="live-dot" class="live-dot"></span><strong id="viewer-monitor-name" data-i18n="Monitor do PC">PC monitor</strong><span id="capture-time" data-i18n="Pronto para iniciar">Ready to start</span><span id="live-badge" class="capture-badge" data-i18n="PRONTO">READY</span></div></div>
                 <p id="live-note" class="live-note screen-note" role="status" hidden></p>
-                <input id="remote-keys" class="remote-keys" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Type on the PC" data-i18n-aria-label="Digitar no PC" tabindex="-1">
-                <div class="screen-fabs"><button id="screen-switch-monitor" class="screen-fab" aria-label="Switch monitor" data-i18n-aria-label="Trocar de monitor"><svg><use href="#i-monitors"/></svg></button><button id="screen-rotate" class="screen-fab" aria-pressed="false" aria-label="Force landscape" data-i18n-aria-label="Forçar paisagem"><svg><use href="#i-rotate"/></svg></button><button id="screen-dictate" class="screen-mic dictate-button" aria-label="Dictate to the PC" data-i18n-aria-label="Ditar para o PC"><svg><use href="#i-mic"/></svg></button></div>
+                <div class="screen-fabs"><button id="screen-switch-monitor" class="screen-fab" aria-label="Switch monitor" data-i18n-aria-label="Trocar de monitor"><svg><use href="#i-monitors"/></svg></button><button id="screen-rotate" class="screen-fab" aria-pressed="false" aria-label="Force landscape" data-i18n-aria-label="Forçar paisagem"><svg><use href="#i-rotate"/></svg></button><button id="screen-keyboard" class="screen-fab" aria-pressed="false" aria-label="Type on the PC" data-i18n-aria-label="Digitar no PC"><svg><use href="#i-keyboard"/></svg></button><button id="screen-dictate" class="screen-mic dictate-button" aria-label="Dictate to the PC" data-i18n-aria-label="Ditar para o PC"><svg><use href="#i-mic"/></svg></button></div>
                 <p id="screen-dictate-status" class="dictate-status screen-dictate-status" role="status" hidden></p>
+                <div id="screen-composer" class="screen-composer" hidden>
+                  <div class="screen-composer-row"><textarea id="screen-input" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="4000" enterkeyhint="send" placeholder="Type here: it goes straight to the PC…" data-i18n-placeholder="Digite aqui: vai direto pro PC…"></textarea><button id="screen-input-send" class="screen-composer-btn primary" type="button" aria-label="Enter" data-i18n-aria-label="Enter"><svg><use href="#i-enter"/></svg></button><button id="screen-input-more" class="screen-composer-btn" type="button" aria-pressed="false" aria-label="History and options" data-i18n-aria-label="Histórico e opções"><svg><use href="#i-history"/></svg></button></div>
+                  <div id="screen-composer-tools" class="screen-composer-tools" hidden><button id="screen-input-clear" class="button small" type="button" data-i18n="Novo">New</button><button id="screen-input-close" class="button small" type="button" data-i18n="Fechar">Close</button></div>
+                </div>
               </div>
             </section>
         </section>
@@ -164,7 +167,7 @@
   <dialog id="reboot-dialog"><h2 data-i18n="Reiniciar o computador?">Restart the computer?</h2><p data-i18n="Programas abertos serão fechados. O Ponte volta quando o PC terminar de reiniciar.">Open programs will close. Ponte returns when the PC finishes restarting.</p><div class="terminal-tools"><button class="button" id="reboot-cancel" data-i18n="Cancelar">Cancel</button><button class="button danger-subtle" id="reboot-confirm" data-i18n="Reiniciar agora">Restart now</button></div></dialog>
   <dialog id="suspend-dialog"><h2 data-i18n="Suspender o computador?">Suspend the computer?</h2><p data-i18n="Para acordar depois, use Wake-on-LAN no mesmo Wi-Fi ou o botão do gabinete.">To wake it later, use Wake-on-LAN on the same Wi-Fi or the case button.</p><div class="terminal-tools"><button class="button" id="suspend-cancel" data-i18n="Cancelar">Cancel</button><button class="button danger-subtle" id="suspend-confirm" data-i18n="Suspender agora">Suspend now</button></div></dialog>
   <dialog id="poweroff-dialog"><div class="dialog-heading"><span class="small-label" data-i18n="ENERGIA DO PC">PC POWER</span><button class="icon-button subtle" id="poweroff-dialog-close" aria-label="Close connection details" data-i18n-aria-label="Fechar conexão"><svg aria-hidden="true"><use href="#i-close"/></svg></button></div><h2 data-i18n="Desligar o computador?">Turn off computer?</h2><p data-i18n="A máquina será completamente desligada. Para religar, use Wake-on-LAN ou o botão físico no gabinete.">The machine will be completely shut down. To turn it back on, use Wake-on-LAN or the physical power button on the case.</p><div class="terminal-tools"><button class="button" id="poweroff-cancel" data-i18n="Cancelar">Cancel</button><button class="button danger-subtle" id="poweroff-confirm" data-i18n="Confirmar e desligar">Confirm & power off</button></div></dialog>
-  <script src="/i18n.js" defer></script>
-  <script src="/app.js" defer></script>
+  <script src="/i18n.js?v=0.1.0-alpha.13" defer></script>
+  <script src="/app.js?v=0.1.0-alpha.13" defer></script>
 </body>
 </html>

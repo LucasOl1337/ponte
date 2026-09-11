@@ -86,7 +86,8 @@ export async function writeLiveFrame(res, bytes, signal, { timeout = 5000, now =
   const packet = Buffer.concat([header, bytes, Buffer.from('\r\n')]);
   if (res.write(packet)) return;
   // Never accumulate frames behind a slow receiver. Only resume after its
-  // current frame drains; disconnect a receiver that stalls for five seconds.
+  // current frame drains, so the stream self-throttles to the phone's real
+  // bandwidth; only a receiver that stalls past the timeout is disconnected.
   await new Promise((resolve, reject) => {
     const cleanup = () => { clearTimeout(timer); res.off('drain', drained); res.off('close', closed); res.off('error', closed); signal.removeEventListener('abort', closed); };
     const drained = () => { cleanup(); resolve(); };
@@ -98,7 +99,9 @@ export async function writeLiveFrame(res, bytes, signal, { timeout = 5000, now =
   });
 }
 
-export function createLiveStreaming(desktop, { maxStreams = 3, maxCaptures = 2, slowClientTimeout = 5000 } = {}) {
+function peerCount(sessions, peer) { let n = 0; for (const s of sessions) if (s.peer === peer) n++; return n; }
+
+export function createLiveStreaming(desktop, { maxStreams = 4, maxPerPeer = 2, maxCaptures = 2, slowClientTimeout = 15000 } = {}) {
   const sessions = new Set();
   const capture = createCaptureSlots(maxCaptures);
   let closing = false;
@@ -106,17 +109,27 @@ export function createLiveStreaming(desktop, { maxStreams = 3, maxCaptures = 2, 
   async function stream(req, res, query) {
     const options = parseLiveOptions(query);
     if (closing) throw new ApiError(503, 'SERVER_RESTARTING');
-    // A personal remote has a handful of devices. When the cap is reached the
-    // newest view wins: abort the oldest so a phone reopening its screen (or one
-    // whose earlier connection is a half-open zombie) always gets in, instead of
-    // being told to retry forever.
+    // Slots are scarce (each stream runs its own capture loop). A device that
+    // reconnects replaces its own earlier stream, so a half-open zombie never
+    // locks it out; and a preview open on the PC itself (loopback) yields to a
+    // remote phone. Never evict another remote device: two phones taking turns
+    // killing each other just look like "reconnecting" forever on both.
+    const peer = req.socket?.remoteAddress;
+    const isLoopback = address => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+    const oldestOfPeer = () => { for (const candidate of sessions) if (candidate.peer === peer) return candidate; return null; };
+    // No single peer may hold more than maxPerPeer slots: a device reopening
+    // its screen (or leaking tabs) replaces its own oldest instead of starving a
+    // second device out of the remaining slots.
+    while (peerCount(sessions, peer) >= maxPerPeer) { const own = oldestOfPeer(); if (!own) break; sessions.delete(own); own.abort(); }
     while (sessions.size >= maxStreams) {
-      const oldest = sessions.values().next().value;
-      if (!oldest) break;
-      sessions.delete(oldest);
-      oldest.abort();
+      let victim = oldestOfPeer();
+      if (!victim) for (const candidate of sessions) if (isLoopback(candidate.peer)) { victim = candidate; break; }
+      if (!victim) throw new ApiError(429, 'STREAM_LIMIT_REACHED');
+      sessions.delete(victim);
+      victim.abort();
     }
     const controller = new AbortController();
+    controller.peer = peer;
     const { signal } = controller;
     sessions.add(controller);
     const disconnect = () => controller.abort();

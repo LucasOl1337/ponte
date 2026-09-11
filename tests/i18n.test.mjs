@@ -39,9 +39,9 @@ test('Every app page works in English, including internal Windows navigation and
 });
 
 test('Changing language preserves drafted text, selection, active controls, preview and live session without sending actions',async()=>{
- const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();h.run("navigate('tela')");const textarea=h.el('#terminal-input');textarea.value='Draft with accents: Olá 👋';textarea.selectionStart=6;textarea.selectionEnd=10;textarea.focus();h.el('#pair-token').value='an unfinished key';h.el('#window-search').value='Notes';h.el('#live-quality').value='sharp';h.el('#record-audio').src='blob:preview';h.el('#record-preview').hidden=false;
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();h.run("navigate('tela')");const textarea=h.el('#terminal-input');textarea.value='Draft with accents: Olá 👋';textarea.selectionStart=6;textarea.selectionEnd=10;textarea.focus();h.el('#window-search').value='Notes';h.el('#live-quality').value='sharp';h.el('#record-audio').src='blob:preview';h.el('#record-preview').hidden=false;
  h.run("recordingURL='blob:preview';recordingBlob=new Blob(['synthetic']);screenMode='live';screenStatusMessage='';lastScreenTimestamp=1770000000000;liveSession={monitor:'TEST-1',profileLabel:'Mais nítido · até 6 quadros/s'};screenshotURL='blob:screen';screenZoomed=true;$('#record-state').textContent=t('PRÉVIA');$('#record-hint').textContent=t('Ouça antes. O envio é sua escolha.');");const live=h.run('liveSession');const blob=h.run('recordingBlob');h.i18n.setLanguage('pt');await flush();
- assert.equal(textarea.value,'Draft with accents: Olá 👋');assert.equal(textarea.selectionStart,6);assert.equal(textarea.selectionEnd,10);assert.equal(h.document.activeElement,textarea);assert.equal(h.el('#pair-token').value,'an unfinished key');assert.equal(h.el('#window-search').value,'Notes');assert.equal(h.el('#live-quality').value,'sharp');assert.equal(h.el('#record-audio').src,'blob:preview');assert.equal(h.el('#record-preview').hidden,false);assert.equal(h.run('recordingBlob'),blob);assert.equal(h.run('liveSession'),live);assert.equal(h.run('currentPage'),'tela');assert.equal(h.el('#record-state').textContent,'PRÉVIA');assert.equal(h.el('#live-badge').textContent,'AO VIVO');assert.match(h.el('#capture-time').textContent,/^Quadro às /);assert.equal(h.saved.get('ponte-pair-token'),'synthetic-test-token');assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
+ assert.equal(textarea.value,'Draft with accents: Olá 👋');assert.equal(textarea.selectionStart,6);assert.equal(textarea.selectionEnd,10);assert.equal(h.document.activeElement,textarea);assert.equal(h.el('#window-search').value,'Notes');assert.equal(h.el('#live-quality').value,'sharp');assert.equal(h.el('#record-audio').src,'blob:preview');assert.equal(h.el('#record-preview').hidden,false);assert.equal(h.run('recordingBlob'),blob);assert.equal(h.run('liveSession'),live);assert.equal(h.run('currentPage'),'tela');assert.equal(h.el('#record-state').textContent,'PRÉVIA');assert.equal(h.el('#live-badge').textContent,'AO VIVO');assert.match(h.el('#capture-time').textContent,/^Quadro às /);assert.equal(h.saved.get('ponte-pair-token'),'synthetic-test-token');assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
  h.i18n.setLanguage('en');assert.equal(h.el('#record-state').textContent,'PREVIEW');assert.match(h.el('#live-note').textContent,/Sharper/);
 });
 
@@ -134,13 +134,13 @@ test('Zoom is a continuous client-side transform on the whole frame and never re
  assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
 });
 
-test('Leaving the screen page stops the stream and closes the phone keyboard; returning restarts it',async()=>{
+test('Leaving the screen page stops the stream and closes the typing bar; returning restarts it',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
- h.run("stopLive();liveSession={monitor:'TEST-1'};screenMode='live';liveWanted=true;keyboardOpen=true;$('#remote-keys').focus()");
- assert.equal(h.document.activeElement,h.el('#remote-keys'));
+ h.run("stopLive();liveSession={monitor:'TEST-1'};screenMode='live';liveWanted=true;openScreenComposer()");
+ assert.equal(h.document.activeElement,h.el('#screen-input'));assert.equal(h.el('#screen-composer').hidden,false);
  h.run("navigate('inicio')");
  assert.equal(h.el('#page-tela').hidden,true);assert.equal(h.run('liveSession'),null);
- assert.equal(h.run('keyboardOpen'),false);assert.equal(h.document.activeElement,null);
+ assert.equal(h.el('#screen-composer').hidden,true);assert.equal(h.document.activeElement,null);
  h.run("navigate('tela')");
  assert.equal(h.el('#page-tela').hidden,false);assert.equal(h.run('screenIsVisible()'),true);assert.equal(h.run('liveWanted'),true);
  assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
@@ -155,16 +155,23 @@ test('Leaving the screen discards queued scroll and releases a held drag',async(
  assert.deepEqual(actions,[{type:'mouse.drag',pressed:false}]);
 });
 
-test('The phone keyboard opens after a tap on a PC text field, forwards edits as keystrokes, and closes when focus leaves',async()=>{
+test('A tap on a PC text field only lights the keyboard button; the typing bar opens from that button, streams edits as keystrokes, and never persists what is typed',async()=>{
  let focused=true;
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path,options)=>path==='/api/textinput'?{ok:true,json:async()=>({available:true,focused})}:{ok:true,json:async()=>path==='/api/audio'?{recordings:[]}:fixture}});await flush();
  h.window.innerWidth=390;h.window.innerHeight=844;
- assert.equal(h.el('#remote-keys').getAttribute('enterkeyhint'),'send');
+ // Android only raises the keyboard inside a user gesture, so a detected PC text field never focuses anything by itself.
  await h.run('checkTextInput()');await flush();
- assert.equal(h.run('keyboardOpen'),true);assert.equal(h.document.activeElement,h.el('#remote-keys'));
+ assert.equal(h.el('#screen-keyboard').getAttribute('data-text-focused'),'true');
+ assert.notEqual(h.document.activeElement,h.el('#screen-input'));assert.equal(h.el('#screen-composer').hidden,true);
+ assert.equal(h.el('#screen-input').getAttribute('enterkeyhint'),'send');
+ // The keyboard button opens the bar and focuses its field in the same tap.
+ h.el('#screen-keyboard').click();
+ assert.equal(h.el('#screen-composer').hidden,false);assert.equal(h.document.activeElement,h.el('#screen-input'));
+ assert.equal(h.document.body.getAttribute('data-screen-composer'),'true');
  h.window.innerHeight=420;h.run('syncRemoteViewport()');
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'true');
- const keys=h.el('#remote-keys');
+ assert.equal(h.document.body.getAttribute('data-screen-keyboard'),'true');
+ const keys=h.el('#screen-input');
  keys.value='ola';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
  keys.value='ol';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
  keys.value='olá mundo';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
@@ -176,11 +183,49 @@ test('The phone keyboard opens after a tap on a PC text field, forwards edits as
   {type:'keyboard.text',text:'á mundo'},
   {type:'keyboard.key',key:'Enter'},
  ]);
- assert.equal(keys.value,'','Enter starts a fresh line buffer');
+ assert.equal(keys.value,'','Enter starts a fresh line');
+ assert.equal(h.document.activeElement,keys,'the field keeps focus so the keyboard stays up');
+ // Security: the screen bar types into arbitrary PC fields (passwords included),
+ // so nothing typed there is ever saved to the command history.
+ assert.equal(h.run('cmdHistory.length'),0,'screen typing is never persisted to history');
+ assert.equal(h.el('#screen-cmd-history'),null,'the screen bar has no history list');
+ // The options button just reveals New/Close, no history.
+ h.el('#screen-input-more').click();
+ assert.equal(h.el('#screen-composer-tools').hidden,false);
+ // Focus leaving the PC field only dims the cue; the bar stays until closed.
  focused=false;await h.run('checkTextInput()');await flush();
- assert.equal(h.run('keyboardOpen'),false);assert.equal(h.document.activeElement,null);
+ assert.equal(h.el('#screen-keyboard').getAttribute('data-text-focused'),'false');assert.equal(h.el('#screen-composer').hidden,false);
+ h.el('#screen-input-close').click();
+ assert.equal(h.el('#screen-composer').hidden,true);assert.equal(h.document.activeElement,null);
  h.window.innerHeight=844;h.run('syncRemoteViewport()');
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'false');
+});
+
+test('the screen typing bar holds keys during IME composition and resets its mirror when a keystroke fails to reach the PC',async()=>{
+ let failAction=false;
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path)=>{
+  if(path==='/api/action'&&failAction)return{ok:false,status:503,json:async()=>({error:'x'})};
+  if(path==='/api/textinput')return{ok:true,json:async()=>({available:true,focused:false})};
+  return{ok:true,json:async()=>path==='/api/audio'?{recordings:[]}:fixture};
+ }});await flush();
+ h.window.innerWidth=390;h.window.innerHeight=844;
+ h.el('#screen-keyboard').click();
+ const keys=h.el('#screen-input');
+ assert.equal(h.el('#screen-composer').hidden,false);
+ // Mid-composition: nothing is forwarded and Enter is swallowed (isComposing/keycode 229).
+ keys.dispatchEvent({type:'compositionstart'});
+ keys.value='码';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
+ keys.dispatchEvent({type:'keydown',key:'Enter',isComposing:true,preventDefault(){}});await flush();
+ let actions=()=>h.calls.filter(c=>c.path==='/api/action').map(c=>JSON.parse(c.options.body));
+ assert.equal(actions().length,0,'nothing sent while the IME is composing');
+ // compositionend commits the candidate as a single forward.
+ keys.dispatchEvent({type:'compositionend'});await h.run('keyQueue');await flush();
+ assert.deepEqual(actions().at(-1),{type:'keyboard.text',text:'码'});
+ // A delivery failure resets the field and the mirror, so a later New/Backspace can't delete unrelated text.
+ failAction=true;
+ keys.value='码x';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
+ assert.equal(keys.value,'','the composer resets after a delivery failure');
+ assert.equal(h.run('screenSent'),'');
 });
 
 test('the command composer sends text with an atomic Enter, records reusable history and reuses a past command',async()=>{

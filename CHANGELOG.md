@@ -2,6 +2,26 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.13 — 2026-09-11
+
+The screen keyboard was rebuilt as a real keyboard, the live stream stopped dropping, pairing lost its last password, and a full pass of adversarial review (a second model reading the diff) hardened the input path. Verified on an Android 11 emulator against an isolated recording server, so keystrokes, taps, drags and terminal input could be checked without touching a live desktop.
+
+### Type on the screen
+- **A typing bar instead of an invisible field.** Tapping the keyboard button opens a thin bar and focuses its text field inside the same tap, which is the only way Android raises the soft keyboard. Every edit is sent to the PC's focused window as it is typed; Enter presses Enter. The bar shrinks the monitor to the space above it so nothing is covered, and the floating switch-monitor and rotate buttons step aside while it is open. A tap on a PC text field lights the keyboard button (fcitx focus) as a cue rather than trying to open the keyboard on its own.
+- **Safer input.** The bar never saves what you type — it goes to arbitrary fields, passwords included, so there is no history there (the terminal composer keeps its own command history). IME composition is respected: keys are held until the candidate commits, and confirming a candidate no longer sends a stray Enter. Deletion counts whole characters, so an emoji is one backspace and surrogate pairs are never split. A keystroke that fails to reach the PC resets the bar instead of letting a later edit delete unrelated text, and the bar only opens when the PC can actually accept typing.
+
+### Live view stability
+- **No more "reconnecting" every few seconds.** A slow frame is given far longer to drain and the stream self-throttles to the phone's real bandwidth instead of being killed. Stream slots are shared fairly: a device reopening its screen replaces only its own stream, a preview on the PC yields to a remote phone, and no single device can take every slot, so two devices never knock each other off.
+- **Smoother rendering.** Per-frame DOM work is down to the image swap; labels, geometry and status only change when they actually change, and only the visible page is re-rendered each poll.
+- **Tap to start.** With no toolbar, tapping the idle screen begins streaming — the way back if a monitor was unplugged or the stream stopped.
+
+### No password
+- **Pairing has no key to type.** A device on your Tailscale account connects automatically; the typed-key fallback screen is gone. If the PC can't be reached the app says so and offers to try again, never a password box.
+
+## 0.1.0-alpha.7 — 2026-09-11
+
+- **A terminal command composer.** Build a command with the full phone keyboard, then Send types it and runs it in one atomic operation (paste-buffer then Enter), fixing a race where a busy client dropped the Enter. Sent commands join a reusable, on-device history shown as chips; Paste-only sends the text without running it. Terminal dictation drops its transcript into the composer to review before sending.
+
 ## 0.1.0-alpha.6 — 2026-09-11
 
 - **Auto-pairing on your tailnet.** A phone on the same Tailscale account no longer types a key. `GET /api/pair`, served only over the native TLS listener, asks `tailscale whois` who owns the connecting peer and returns the pairing token when it is the same user that owns this PC. Machines shared with you by someone else, and tagged devices, still fall back to the typed key. The app tries this on boot when it has no saved key and enters straight away. Verified end to end on the emulator (cleared data → opened straight into the screen) and by unit tests for the identity logic and the route.

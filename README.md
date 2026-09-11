@@ -53,7 +53,7 @@ cd ponte
 ./android/build.sh
 ```
 
-Setup creates private local configuration and a certificate for your Tailscale address. Installation explicitly enables a user service. The build downloads verified, pinned Android tools into `.work/` and writes `.work/Ponte.apk`. Transfer that file privately to your phone, install it, open Ponte, and enter the pairing key from `./ponte pair`. Add the app icon to your first home screen. Future launches remember the pairing.
+Setup creates private local configuration and a certificate for your Tailscale address. Installation explicitly enables a user service. The build downloads verified, pinned Android tools into `.work/` and writes `.work/Ponte.apk`. Transfer that file privately to your phone, install it, and open Ponte. There is no password: a phone on the same Tailscale account connects automatically (the Tailscale daemon authenticates it and the server hands it the access token over the pinned TLS listener). Add the app icon to your first home screen. Future launches reconnect on their own.
 
 The first alpha still requires this one-time build and pairing step. Improving that first connection is a priority. Your customized APK contains your server address and public certificate, so build it locally rather than redistributing somebody else's APK.
 

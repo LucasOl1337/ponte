@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.7';
+const UI_VERSION = '0.1.0-alpha.13';
 let token = '';
 let state = null;
 let connected = false;
@@ -63,10 +63,12 @@ async function api(path, options = {}) {
       let details;
       try { details = await response.json(); message = details.error || message; } catch {}
       if (response.status === 401 && token === requestToken) {
+        // The token rotated on the PC. No password to re-enter: drop it and let
+        // the tailnet hand us a fresh one.
         connected = false;
         token = '';
         try { localStorage.removeItem(storageKey); } catch {}
-        showPairing(t("A chave não foi aceita. Cole a chave atual do PC para reconectar."));
+        showPairing(); connectOverTailscale();
       }
       throw Object.assign(new Error(message),{errorCode:details?.errorCode,errorParameters:details?.errorParameters});
     }
@@ -107,7 +109,8 @@ function showApp() {
   $('#pairing').hidden = true;
   $('#paired-app').hidden = false;
   $('#bottom-nav').hidden = false;
-  $('#unpair-button').hidden = false;
+  // No password/key to manage, so there is nothing to "unpair".
+  $('#unpair-button').hidden = true;
 }
 
 function setConnection(isConnected, error = '') {
@@ -118,11 +121,11 @@ function setConnection(isConnected, error = '') {
   $('#dialog-status').textContent = isConnected ? t("Conexão privada · navegador pareado") : t("Aguardando resposta do computador");
   $('#connection-banner').hidden = isConnected || !token;
   if (!isConnected) i18n.write($('#connection-banner-text'),error || t("Conexão interrompida. Tentando reconectar…"));
-  $$('[data-app],[data-action],[data-key],[data-monitor-toggle],#mute-button,#stop-pc-audio,#btn-poweroff,#btn-unlock,#btn-suspend,#btn-reboot,#terminal-dictate,#screen-dictate').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
+  $$('[data-app],[data-action],[data-key],[data-monitor-toggle],#mute-button,#stop-pc-audio,#btn-poweroff,#btn-unlock,#btn-suspend,#btn-reboot,#terminal-dictate,#screen-dictate,#screen-keyboard').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
   $('#volume').disabled = !isConnected;
   updateScreenButtons();
   if (isConnected && state) updateCapabilities();
-  if (!isConnected) closeRemoteKeyboard();
+  if (!isConnected) { closeScreenComposer(); markTextFocus(false); }
 }
 
 function formatUptime(seconds) {
@@ -161,11 +164,7 @@ function renderState() {
   $('#mute-button').setAttribute('aria-label', muted ? t("Ativar som do PC") : t("Silenciar som do PC"));
   $('#mute-button').setAttribute('aria-pressed', String(muted));
   $('#mute-button').innerHTML = icon(muted ? 'muted' : 'volume');
-  renderWorkspaces();
-  renderWindows();
-  renderPowerMonitors();
-  renderLights();
-  renderSession();
+  renderVisiblePage();
   const wolSection = $('#power-wol-section');
   if (wolSection) {
     if (state.wakeOnLan?.mac) {
@@ -264,10 +263,23 @@ async function pollState() {
     setConnection(true);
     renderState();
     if (currentPage === 'voz' && !audioLoaded) loadAudio();
-    if (keyboardOpen && state.textInput?.focused === false) closeRemoteKeyboard();
+    if (typeof state.textInput?.focused === 'boolean') markTextFocus(state.textInput.focused);
     if (currentPage === 'terminais') renderDesktopTerminals();
   } catch (error) { if (token && requestToken === token) setConnection(false, error); }
   finally { polling = false; }
+}
+
+// Each poll used to rebuild every page's lists (windows, workspaces, lights,
+// session) even while only the monitor was on screen. Only the visible page
+// is rendered per poll; the others catch up when navigated to.
+let renderedAllOnce = false;
+function renderVisiblePage() {
+  if (!state) return;
+  // The first state (and a language change) fills every page so nothing is
+  // empty when navigated to; after that only the visible page is refreshed.
+  if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
+  if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
+  else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
 }
 
 function isScreenPage(page) { return page === 'tela'; }
@@ -297,7 +309,8 @@ function navigate(page) {
   if (nextScreen && !wasScreen) liveWanted = true;
   setPageLocation(page);
   $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
-  if (!nextScreen) closeRemoteKeyboard();
+  if (!nextScreen) closeScreenComposer();
+  renderVisiblePage();
   window.scrollTo({top:0,behavior:'instant'});
   if (page === 'voz' && connected) loadAudio();
   reconcileLive();
@@ -314,10 +327,13 @@ function syncRemoteViewport() {
   // viewport shrank. That hides the bottom nav (which would otherwise cover the
   // composer) and lets the immersive screen size itself to the visible area.
   const active = document.activeElement;
-  const editing = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active === $('#remote-keys'));
+  const editing = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   const keyboardOpen = editing && viewportBaseline.height - height > 100;
   document.body.setAttribute('data-keyboard-open',String(keyboardOpen));
-  document.body.setAttribute('data-screen-keyboard',String(keyboardOpen && active === $('#remote-keys')));
+  document.body.setAttribute('data-screen-keyboard',String(keyboardOpen && active === $('#screen-input')));
+  // The typing bar's height is what the monitor must leave free above it.
+  const composer = $('#screen-composer');
+  document.documentElement.style.setProperty('--screen-composer-h',`${composer && !composer.hidden ? (composer.offsetHeight || 60) : 0}px`);
   document.documentElement.style.setProperty('--remote-viewport-height',`${height}px`);
   document.documentElement.style.setProperty('--remote-viewport-top',`${window.visualViewport?.offsetTop || 0}px`);
   applyScreenZoom();
@@ -364,24 +380,18 @@ document.addEventListener('click', event => {
 });
 
 $('.brand').addEventListener('click', event => { event.preventDefault(); if(token) navigate('inicio'); });
-$('#pair-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  const value = $('#pair-token').value.trim();
-  if (!value) return;
-  token = value;
-  try { localStorage.setItem(storageKey, token); } catch {}
-  $('#pair-submit').disabled = true;
-  $('#pair-submit').innerHTML = h('Conectando…');
+// No password, ever. A device on the owner's tailnet is authenticated by the
+// Tailscale daemon; the server hands it the token automatically. There is no
+// key to type — the only control here is to try connecting again.
+async function connectOverTailscale() {
   $('#pair-error').hidden = true;
-  try {
-    const response = await api('/state');
-    state = await response.json();
-    $('#pair-token').value = '';
-    showApp(); setConnection(true); renderState(); navigate('tela');
-    toast(t("Sua ponte está pronta."));
-  } catch(error) { i18n.write($('#pair-error'),error); $('#pair-error').hidden = false; }
-  finally { $('#pair-submit').disabled = false; $('#pair-submit').innerHTML = `${h('Conectar ao meu PC')} ${icon('arrow')}`; }
-});
+  $('#pair-retry').hidden = true;
+  i18n.write($('#pair-status'), t("Conectando ao seu PC pela rede Tailscale…"));
+  if (await autoPair()) { enterApp('tela'); toast(t("Conectado pela sua rede Tailscale.")); return; }
+  i18n.write($('#pair-status'), t("Não achei seu PC. Confira que os dois estão no mesmo Tailscale e que o PC está ligado."));
+  $('#pair-retry').hidden = false;
+}
+$('#pair-retry').addEventListener('click', connectOverTailscale);
 $('#retry-button').addEventListener('click', pollState);
 $('#window-search').addEventListener('input', renderWindows);
 $('#mute-button').addEventListener('click', () => action('volume.mute'));
@@ -413,6 +423,7 @@ let screenZoomed = false;
 let screenScale = 1;
 let screenPanX = 0, screenPanY = 0;
 let screenBaseW = 0, screenBaseH = 0;
+let screenStyledSize = '', screenImageMonitor = '';
 let screenMaxScale = 6;
 let screenSourceSize = '';
 let liveRegionTimer = 0;
@@ -618,11 +629,17 @@ function clampScreenPan() {
 function applyScreenTransform() {
   const image = $('#screen-image');
   if (!screenBaseW) computeScreenBase();
-  image.style.position = 'absolute'; image.style.left = '0'; image.style.top = '0';
-  image.style.maxWidth = 'none'; image.style.maxHeight = 'none';
-  image.style.width = `${Math.round(screenBaseW)}px`;
-  image.style.height = `${Math.round(screenBaseH)}px`;
-  image.style.transformOrigin = '0 0';
+  // Size styles trigger layout; only rewrite them when the fitted size changed.
+  // The transform alone is handled by the compositor.
+  const sizeKey = `${Math.round(screenBaseW)}x${Math.round(screenBaseH)}`;
+  if (screenStyledSize !== sizeKey) {
+    screenStyledSize = sizeKey;
+    image.style.position = 'absolute'; image.style.left = '0'; image.style.top = '0';
+    image.style.maxWidth = 'none'; image.style.maxHeight = 'none';
+    image.style.width = `${Math.round(screenBaseW)}px`;
+    image.style.height = `${Math.round(screenBaseH)}px`;
+    image.style.transformOrigin = '0 0';
+  }
   image.style.transform = `translate(${screenPanX}px, ${screenPanY}px) scale(${screenScale})`;
   screenZoomed = screenScale > 1.001;
   $('#screen-stage').classList.toggle('zoomed', screenZoomed);
@@ -697,18 +714,23 @@ function setScreenZoom(value, point) {
 function showScreenImage(url,timestamp,monitor) {
   const oldURL = screenshotURL;
   screenshotURL = url; lastScreenTimestamp = timestamp;
-  $('#screen-image').src = url;
-  $('#screen-image').alt = t('Monitor {monitor}',{monitor});
-  $('#screen-image').hidden = false; $('#screen-empty').hidden = true;
-  $('#viewer-monitor-name').textContent = monitor;
+  const image = $('#screen-image');
+  image.src = url;
+  // Per-frame DOM work stays at the src swap: labels only change with the
+  // monitor, and geometry is handled by the load handler when the size changes.
+  if (screenImageMonitor !== monitor) { screenImageMonitor = monitor; image.alt = t('Monitor {monitor}',{monitor}); $('#viewer-monitor-name').textContent = monitor; }
+  if (image.hidden) { image.hidden = false; $('#screen-empty').hidden = true; }
   if (oldURL) URL.revokeObjectURL(oldURL);
-  applyScreenZoom(); updateScreenButtons();
 }
 function clearScreenImage() {
   if (screenshotURL) URL.revokeObjectURL(screenshotURL);
-  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenScale = 1; screenPanX = screenPanY = 0; screenBaseW = screenBaseH = 0;
+  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenScale = 1; screenPanX = screenPanY = 0; screenBaseW = screenBaseH = 0; screenImageMonitor = '';
+  // Also forget the tracked source/styled sizes: otherwise switching to a
+  // different monitor of the SAME resolution string skips the load-handler
+  // recompute and draws the new frame at the previous fit.
+  screenSourceSize = ''; screenStyledSize = '';
   $('#screen-image').removeAttribute('src'); $('#screen-image').hidden = true; $('#screen-empty').hidden = false;
-  applyScreenZoom(); updateScreenButtons();
+  $('#screen-stage').classList.remove('zoomed'); updateScreenButtons();
 }
 function stopLive(message = '') {
   const session = liveSession;
@@ -723,7 +745,7 @@ function stopLive(message = '') {
 }
 function cancelSnapshot() { snapshotRequest = null; }
 function exitScreenFullscreen() {}
-function leaveScreen() { resetRemoteInput(); stopLive(); cancelSnapshot(); closeRemoteKeyboard(); if (landscapeForced) requestOrientation('auto'); }
+function leaveScreen() { resetRemoteInput(); stopLive(); cancelSnapshot(); closeScreenComposer(); markTextFocus(false); if (landscapeForced) requestOrientation('auto'); }
 async function screenResponse(path,controller) {
   const requestToken = token;
   let response;
@@ -736,7 +758,7 @@ async function screenResponse(path,controller) {
     if (response.status === 401 && token === requestToken) {
       stopLive(); token = ''; connected = false;
       try { localStorage.removeItem(storageKey); } catch {}
-      showPairing(t("A chave não foi aceita. Cole a chave atual do PC para reconectar."));
+      showPairing(); connectOverTailscale();
     }
     throw Object.assign(new Error(message),{status:response.status,errorCode:details?.errorCode,errorParameters:details?.errorParameters});
   }
@@ -755,7 +777,8 @@ async function renderLiveFrames(session,attempt) {
       if (!sessionIsCurrent(session) || session.attempt !== attempt || !session.receiving) { URL.revokeObjectURL(url); return; }
       showScreenImage(url,frame.timestamp,session.monitor);
       session.hasFrame = true; session.failures = 0;
-      setScreenStatus('live');
+      // The status pass rewrites a dozen nodes; once live it only matters on change.
+      if (screenMode !== 'live') setScreenStatus('live');
     }
   } catch(error) {
     if (sessionIsCurrent(session) && session.attempt === attempt) { session.error = error; session.controller?.abort(); }
@@ -771,8 +794,8 @@ async function runLiveSession(session) {
     session.pendingFrame = null; session.lastReceived = Date.now();
     if (!refreshing || !session.hasFrame) setScreenStatus(session.attempt > 1 ? 'reconnecting' : 'connecting');
     session.watchdog = setInterval(() => {
-      if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 2500 && screenMode === 'live') setScreenStatus('reconnecting',t("Aguardando novos quadros do monitor…"));
-      if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 10000) { session.error = new Error(t("O monitor ficou sem enviar imagens.")); session.controller.abort(); }
+      if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 6000 && screenMode === 'live') setScreenStatus('reconnecting',t("Aguardando novos quadros do monitor…"));
+      if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 18000) { session.error = new Error(t("O monitor ficou sem enviar imagens.")); session.controller.abort(); }
     },1000);
     try {
       const response = await screenResponse(liveStreamPath(session),session.controller);
@@ -837,15 +860,17 @@ const LIVE_PROFILES = {
   balanced:{fps:10,scale:0.5,quality:65,label:'Equilibrado · até 10 quadros/s'},
   light:{fps:8,scale:0.35,quality:55,label:'Leve · até 8 quadros/s'},
 };
-$('#live-quality').value = LIVE_PROFILES[savedPreference('ponte-quality','sharp')] ? savedPreference('ponte-quality','sharp') : 'sharp';
+$('#live-quality').value = LIVE_PROFILES[savedPreference('ponte-quality','balanced')] ? savedPreference('ponte-quality','balanced') : 'balanced';
 $('#live-quality').addEventListener('change',() => { savePreference('ponte-quality',$('#live-quality').value); if (liveSession) startLive(); });
 $('#screen-image').addEventListener('load',() => {
   const image = $('#screen-image');
   const size = `${image.naturalWidth}x${image.naturalHeight}`;
   // A new monitor/source resets zoom; live frames keep the current zoom & pan.
-  if (size !== screenSourceSize) { screenScale = 1; screenPanX = screenPanY = 0; screenSourceSize = size; computeScreenBase(); centerScreenPan(); }
-  else computeScreenBase();
-  applyScreenTransform();
+  // Measuring layout on every frame is what made the phone stutter, so the
+  // base size is only recomputed when the source changed (viewport changes
+  // arrive through syncRemoteViewport → applyScreenZoom).
+  if (size !== screenSourceSize) { screenScale = 1; screenPanX = screenPanY = 0; screenSourceSize = size; computeScreenBase(); centerScreenPan(); applyScreenTransform(); }
+  else if (!screenBaseW) applyScreenZoom();
 });
 window.addEventListener('resize',applyScreenZoom);
 if (window.ResizeObserver) new window.ResizeObserver(applyScreenZoom).observe($('#screen-preview'));
@@ -1018,56 +1043,27 @@ screenPreview.addEventListener('keydown',event => {
 // text field took focus (fcitx5 input contexts). If so, a hidden input gets
 // focus, Android raises its keyboard, and every edit is forwarded live as
 // keystrokes. Back/blur closes it; a tap on a non-text area closes it too.
-const remoteKeys = $('#remote-keys');
-let remoteKeysValue = '';
+// Android only raises the soft keyboard from inside a user gesture, so the app
+// never tries to open it on its own after a tap on the PC. Instead, a tap that
+// lands on a PC text field (fcitx reports focus) lights up the keyboard button
+// as the cue: one tap on it opens the typing bar with the keyboard.
 let keyboardCheckTimer = 0;
-let keyboardOpen = false;
 let keyQueue = Promise.resolve();
 function sendKeys(work) { keyQueue = keyQueue.then(work).catch(() => {}); return keyQueue; }
 function scheduleKeyboardCheck() {
   clearTimeout(keyboardCheckTimer);
   keyboardCheckTimer = setTimeout(checkTextInput, 220);
 }
+function markTextFocus(focused) {
+  $('#screen-keyboard').setAttribute('data-text-focused', String(focused === true));
+}
 async function checkTextInput() {
   if (!connected || !screenIsVisible()) return;
   let info;
   try { info = await (await api('/textinput',{timeout:3000})).json(); } catch { return; }
   if (!screenIsVisible()) return;
-  if (info.focused === true) openRemoteKeyboard();
-  else if (info.focused === false) closeRemoteKeyboard();
+  if (typeof info.focused === 'boolean') markTextFocus(info.focused);
 }
-function openRemoteKeyboard() {
-  remoteKeysValue = ''; remoteKeys.value = '';
-  keyboardOpen = true;
-  remoteKeys.focus({preventScroll:true});
-  syncRemoteViewport();
-}
-function closeRemoteKeyboard() {
-  clearTimeout(keyboardCheckTimer);
-  if (!keyboardOpen && document.activeElement !== remoteKeys) return;
-  keyboardOpen = false;
-  remoteKeysValue = ''; remoteKeys.value = '';
-  remoteKeys.blur();
-  syncRemoteViewport();
-}
-remoteKeys.addEventListener('input', () => {
-  const next = remoteKeys.value, prev = remoteKeysValue;
-  remoteKeysValue = next;
-  let common = 0;
-  while (common < prev.length && common < next.length && prev[common] === next[common]) common++;
-  const removed = prev.length - common, added = next.slice(common);
-  if (removed || added) sendKeys(async () => {
-    for (let i = 0; i < removed; i++) await quietAction('keyboard.key',{key:'BackSpace'});
-    if (added) await quietAction('keyboard.text',{text:added});
-  });
-  // Keep a buffer so autocorrect can revise the last word, but never let it grow.
-  if (next.length > 400) { remoteKeysValue = ''; remoteKeys.value = ''; }
-});
-remoteKeys.addEventListener('keydown', event => {
-  if (event.key === 'Enter') { event.preventDefault(); remoteKeysValue = ''; remoteKeys.value = ''; sendKeys(() => quietAction('keyboard.key',{key:'Enter'})); }
-  else if (event.key === 'Backspace' && !remoteKeys.value) { event.preventDefault(); sendKeys(() => quietAction('keyboard.key',{key:'BackSpace'})); }
-});
-remoteKeys.addEventListener('blur', () => { keyboardOpen = false; syncRemoteViewport(); });
 // Cycle the streamed monitor; the select on Início stays the source of truth.
 $('#screen-switch-monitor').addEventListener('click', () => {
   const monitors = state?.monitors || [];
@@ -1101,6 +1097,17 @@ $('#screen-dictate').addEventListener('click', () => {
     if (text) { await quietAction('keyboard.text',{text}); await quietAction('keyboard.key',{key:'Enter'}); }
     return text;
   });
+});
+// Single-mode has no toolbar Start button, so tapping the idle screen begins the
+// stream. This is the way back when the stream stopped (a monitor was
+// unplugged, the saved monitor vanished, or too many views hit the cap).
+$('#screen-empty').addEventListener('click', () => {
+  if (!connected || !state?.capabilities?.live) return;
+  const select = $('#monitor-select');
+  if (!select.value && state?.monitors?.length) { select.value = (state.monitors.find(m => m.focused) || state.monitors[0]).name; }
+  if (!select.value) { toast(t("Nenhum monitor disponível.")); return; }
+  liveWanted = true;
+  startLive();
 });
 
 // These sessions use Ponte's tmux socket. They never inject desktop input.
@@ -1220,6 +1227,8 @@ function rememberCommand(text) {
   renderCmdHistory();
 }
 function renderCmdHistory() {
+  // History belongs to the terminal composer only. The screen typing bar types
+  // into arbitrary PC fields (passwords included), so it never saves anything.
   const box = $('#cmd-history');
   if (!box) return;
   box.hidden = cmdHistory.length === 0;
@@ -1263,6 +1272,117 @@ $('#cmd-history').addEventListener('click', event => {
   try { box.setSelectionRange(cmd.length, cmd.length); } catch {}
 });
 renderCmdHistory();
+
+// Screen typing bar. It works like a keyboard, not like a form: the keyboard
+// button opens a thin bar and focuses its field inside the same tap (the only
+// way Android shows the soft keyboard), and every edit goes to the PC as it
+// happens — the field only mirrors what was sent, so autocorrect fixes turn
+// into backspaces on the PC too. Enter presses Enter on the PC, remembers the
+// line in the command history shared with the terminal, and clears the field.
+// The clock button reveals that history plus New/Close; a chip types its line.
+const screenInput = $('#screen-input');
+let screenSent = '';
+let screenComposing = false;
+let screenComposerH = -1;
+const MAX_SCREEN_BACKSPACES = 500;
+function screenComposerOpen() { return !$('#screen-composer').hidden; }
+function screenKeyboardAvailable() { return connected && state?.capabilities?.keyboard !== false; }
+// The bar's height is what the monitor must leave free above it. Recompute it
+// (and re-fit the stream) only when the textarea actually changed height.
+function growScreenInput() {
+  screenInput.style.height = 'auto';
+  screenInput.style.height = `${Math.min(96, screenInput.scrollHeight)}px`;
+  const h = screenComposerOpen() ? ($('#screen-composer').offsetHeight || 0) : 0;
+  if (h !== screenComposerH) { screenComposerH = h; syncRemoteViewport(); }
+}
+function measureScreenComposer() { screenComposerH = -1; growScreenInput(); setTimeout(() => { screenComposerH = -1; growScreenInput(); }, 80); }
+function openScreenComposer() {
+  // A general keyboard that silently drops keys is worse than none: only open
+  // when the PC can actually accept typed input (wtype present, connected).
+  if (!screenKeyboardAvailable()) { toast(connected ? t("Digitação indisponível neste PC.") : t("Reconecte ao PC para usar este controle."), true); return; }
+  screenSent = ''; screenInput.value = ''; screenComposing = false;
+  $('#screen-composer').hidden = false;
+  document.body.setAttribute('data-screen-composer', 'true');
+  $('#screen-keyboard').setAttribute('aria-pressed', 'true');
+  screenInput.focus({ preventScroll: true });
+  measureScreenComposer();
+}
+function closeScreenComposer() {
+  clearTimeout(keyboardCheckTimer);
+  if (!screenComposerOpen()) return;
+  $('#screen-composer').hidden = true;
+  $('#screen-composer-tools').hidden = true;
+  $('#screen-input-more').setAttribute('aria-pressed', 'false');
+  document.body.setAttribute('data-screen-composer', 'false');
+  $('#screen-keyboard').setAttribute('aria-pressed', 'false');
+  screenSent = ''; screenInput.value = ''; screenComposing = false; screenComposerH = -1;
+  screenInput.blur();
+  syncRemoteViewport();
+}
+// A send failed (a Tailscale flap, a 401). We can no longer trust our mirror of
+// the PC field, so reset instead of risking that a later New deletes text that
+// was already there. Never persist or backspace blindly past a failure.
+function failScreenInput() { screenSent = ''; screenInput.value = ''; growScreenInput(); toast(t("O texto não entrou. Comece de novo."), true); }
+// Diff by Unicode code point (not UTF-16 unit) so an emoji is one backspace and
+// surrogate pairs are never split. Advance the mirror only on a confirmed send.
+function forwardScreenInput() {
+  if (screenComposing) return; // wait for the IME to commit its candidate
+  const prev = [...screenSent], next = [...screenInput.value];
+  const target = screenInput.value;
+  let common = 0;
+  while (common < prev.length && common < next.length && prev[common] === next[common]) common++;
+  const removed = prev.length - common, added = next.slice(common).join('');
+  if (!removed && !added) return;
+  sendKeys(async () => {
+    for (let i = 0; i < removed; i++) { if (!(await quietAction('keyboard.key',{key:'BackSpace'}))) return failScreenInput(); }
+    if (added && !(await quietAction('keyboard.text',{text:added}))) return failScreenInput();
+    if (screenInput.value === target) screenSent = target; // only if nothing newer typed meanwhile
+  });
+}
+function sendScreenEnter() {
+  if (screenComposing || !screenKeyboardAvailable()) return;
+  screenSent = ''; screenInput.value = ''; growScreenInput();
+  // The screen bar types into arbitrary PC fields (including password fields),
+  // so its lines are NEVER saved to history. Only the terminal composer keeps a
+  // command history.
+  sendKeys(async () => { if (!(await quietAction('keyboard.key',{key:'Enter'}))) failScreenInput(); });
+  screenInput.focus({ preventScroll: true });
+}
+// A button tap must not steal focus from the field: that would close the
+// keyboard, shift the bar under the finger and lose the tap itself.
+for (const name of ['pointerdown','mousedown']) {
+  $$('#screen-input-send,#screen-input-more,#screen-input-clear').forEach(element => element.addEventListener(name, event => event.preventDefault()));
+}
+$('#screen-keyboard').addEventListener('click', () => { if (screenComposerOpen()) closeScreenComposer(); else openScreenComposer(); });
+$('#screen-input-close').addEventListener('click', closeScreenComposer);
+$('#screen-input-send').addEventListener('click', sendScreenEnter);
+$('#screen-input-more').addEventListener('click', () => {
+  const open = $('#screen-composer-tools').hidden;
+  $('#screen-composer-tools').hidden = !open;
+  $('#screen-input-more').setAttribute('aria-pressed', String(open));
+  measureScreenComposer();
+});
+$('#screen-input-clear').addEventListener('click', () => {
+  // New line: erase what was typed on the PC too, so the field stays a mirror.
+  // Bounded so a huge unsent buffer cannot queue thousands of backspaces.
+  const count = Math.min(MAX_SCREEN_BACKSPACES, [...screenSent].length);
+  screenSent = ''; screenInput.value = ''; growScreenInput();
+  if (count) sendKeys(async () => { for (let i = 0; i < count; i++) { if (!(await quietAction('keyboard.key',{key:'BackSpace'}))) return failScreenInput(); } });
+  screenInput.focus({ preventScroll: true });
+});
+screenInput.addEventListener('input', () => { forwardScreenInput(); growScreenInput(); });
+screenInput.addEventListener('compositionstart', () => { screenComposing = true; });
+screenInput.addEventListener('compositionend', () => { screenComposing = false; forwardScreenInput(); });
+screenInput.addEventListener('keydown', event => {
+  // Ignore Enter/Backspace mid-IME-composition (isComposing, or Android's 229
+  // placeholder keycode): otherwise confirming a candidate sends a stray Enter.
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendScreenEnter(); }
+  else if (event.key === 'Backspace' && !screenInput.value) { event.preventDefault(); sendKeys(() => quietAction('keyboard.key',{key:'BackSpace'})); }
+});
+screenInput.addEventListener('focus', measureScreenComposer);
+screenInput.addEventListener('blur', measureScreenComposer);
+
 $('#terminal-size').addEventListener('change',async event => {
   const id = terminalId;
   if (!id) return;
@@ -1582,7 +1702,7 @@ $('#unpair-button').addEventListener('click', async () => {
   audioURLs.clear(); audioLoaded = false; audioSignature = ''; workspaceSignature = ''; windowSignature = ''; monitorSignature = '';
   $('#connection-dialog').close();
   history.replaceState(null,'',location.pathname+location.search);
-  showPairing(); toast(t("Chave removida deste navegador."));
+  showPairing(); connectOverTailscale();
 });
 function updateInstalledState() {
   const installed = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true || navigator.userAgent.includes('PonteAndroid/');
@@ -1623,7 +1743,7 @@ document.addEventListener('ponte-language-change', () => {
   $$(ownedText).forEach(element => { element.textContent = t(element.textContent); });
   const bannerError = i18n.read($('#connection-banner-text'));
   setConnection(connected,bannerError);
-  if (state) { renderState(); updateCapabilities(); renderDesktopTerminals(); }
+  if (state) { renderedAllOnce = false; renderState(); updateCapabilities(); renderDesktopTerminals(); }
   else {
     $('#hostname').textContent = t('Conectando…');
     $('#dialog-hostname').textContent = t('Seu Omarchy');
@@ -1816,10 +1936,7 @@ function enterApp(page) {
 }
 updateInstalledState();
 if (token) enterApp();
-else {
-  showPairing();
-  autoPair().then(ok => { if (ok && !connected) { $('#pair-error').hidden = true; enterApp('tela'); toast(t("Conectado pela sua rede Tailscale.")); } });
-}
+else { showPairing(); connectOverTailscale(); }
 setInterval(pollState,4000);
 // No service worker: a live remote gains nothing from an offline cache and a
 // stale one only pinned old code. Register the kill-switch sw once to evict any

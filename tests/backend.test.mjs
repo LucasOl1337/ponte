@@ -495,20 +495,20 @@ test('absolute clicks map monitor pixels through the output origin without shell
   assert.deepEqual(ydotool.at(-1).args, ['click', '0xC0']);
 });
 
-test('a new live view evicts the oldest when the cap is reached, so a reopening device always gets in', async t => {
+test('a reopening device replaces its own oldest live view when the cap is reached, instead of a 429', async t => {
   const f = await fixture(t);
-  const controllers = [new AbortController(), new AbortController(), new AbortController()];
+  const controllers = [new AbortController(), new AbortController(), new AbortController(), new AbortController()];
   const responses = await Promise.all(controllers.map(controller => f.request('/api/stream?monitor=DP-1', { signal: controller.signal })));
   assert.ok(responses.every(response => response.status === 200));
-  // A fourth view is accepted; the oldest connection is dropped instead of 429.
-  const fourth = new AbortController();
-  const extra = await f.request('/api/stream?monitor=DP-1', { signal: fourth.signal });
+  // A fifth view from the same peer is accepted; its own oldest connection is dropped.
+  const fifth = new AbortController();
+  const extra = await f.request('/api/stream?monitor=DP-1', { signal: fifth.signal });
   assert.equal(extra.status, 200);
   await new Promise(resolve => setTimeout(resolve, 20));
   // The oldest stream's body ends once it is aborted server-side.
   const firstEnded = await responses[0].body.getReader().read().then(() => true, () => true);
   assert.equal(firstEnded, true);
-  controllers.forEach(controller => controller.abort()); fourth.abort();
+  controllers.forEach(controller => controller.abort()); fifth.abort();
   await Promise.all([...responses, extra].map(response => response.body.cancel().catch(() => {})));
   await new Promise(resolve => setTimeout(resolve, 20));
   const replacement = new AbortController();
@@ -553,6 +553,47 @@ test('aggregate live capture concurrency is capped and shutdown aborts active ca
   assert.equal(peak, 2); assert.equal(signals.length, 2);
   live.close(); await Promise.all(streams);
   assert.ok(signals.every(signal => signal.aborted)); assert.equal(completed, 2); assert.equal(active, 0);
+});
+
+test('live slots: a device replaces only its own stream, a PC-local preview yields to a remote device, and remote devices never evict each other', async () => {
+  const desktop = { prepareLive: async () => ({ capture: signal => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })) }) };
+  const live = createLiveStreaming(desktop, { maxStreams: 3 });
+  const open = peer => { const res = new FakeStreamResponse(); const done = live.stream({ socket: { remoteAddress: peer } }, res, new URLSearchParams('monitor=DP-1')); done.catch(() => {}); return { res, done }; };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 5));
+  const local = open('127.0.0.1'), phone = open('100.111.221.82'), other = open('100.88.0.9');
+  await settle();
+  // The cap is full. A new remote device takes the PC-local slot, never a remote one.
+  const third = open('100.77.0.1');
+  await settle();
+  assert.equal(local.res.destroyed, true, 'the loopback preview yields');
+  assert.equal(phone.res.destroyed, false); assert.equal(other.res.destroyed, false); assert.equal(third.res.destroyed, false);
+  // Three remote devices fill the cap: a fourth is refused and nobody is dropped.
+  await assert.rejects(open('100.66.0.1').done, error => error.status === 429);
+  assert.equal(phone.res.destroyed, false); assert.equal(other.res.destroyed, false); assert.equal(third.res.destroyed, false);
+  // The phone reopening its screen replaces only its own earlier stream.
+  const phoneAgain = open('100.111.221.82');
+  await settle();
+  assert.equal(phone.res.destroyed, true); assert.equal(other.res.destroyed, false); assert.equal(third.res.destroyed, false); assert.equal(phoneAgain.res.destroyed, false);
+  live.close(); await Promise.allSettled([local.done, phone.done, other.done, third.done, phoneAgain.done]);
+});
+
+test('no single peer can monopolize the live slots: a third stream from one device replaces its own oldest', async () => {
+  const desktop = { prepareLive: async () => ({ capture: signal => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })) }) };
+  const live = createLiveStreaming(desktop, { maxStreams: 4, maxPerPeer: 2 });
+  const open = peer => { const res = new FakeStreamResponse(); const done = live.stream({ socket: { remoteAddress: peer } }, res, new URLSearchParams('monitor=DP-1')); done.catch(() => {}); return { res, done }; };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 5));
+  const a1 = open('100.1.1.1'), a2 = open('100.1.1.1');
+  await settle();
+  const a3 = open('100.1.1.1'); // same peer's 3rd → drops its own oldest, never a slot war
+  await settle();
+  assert.equal(a1.res.destroyed, true, 'the peer replaced its own oldest');
+  assert.equal(a2.res.destroyed, false); assert.equal(a3.res.destroyed, false);
+  // A second device still has room even though the first keeps reopening.
+  const b1 = open('100.2.2.2'), b2 = open('100.2.2.2');
+  await settle();
+  assert.equal(b1.res.destroyed, false); assert.equal(b2.res.destroyed, false);
+  assert.equal(a2.res.destroyed, false); assert.equal(a3.res.destroyed, false, 'the second device did not evict the first');
+  live.close(); await Promise.allSettled([a1.done, a2.done, a3.done, b1.done, b2.done]);
 });
 
 test('runCommand abort signal kills a capture-like child promptly', async () => {
