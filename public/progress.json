@@ -20,6 +20,16 @@
     },
     {
       "title": {
+        "en": "Single-mode screen, dictation, lights and session",
+        "pt": "Tela em modo único, ditado, luzes e sessão"
+      },
+      "status": {
+        "en": "Available (alpha.5)",
+        "pt": "Disponível (alfa.5)"
+      }
+    },
+    {
+      "title": {
         "en": "Android recording",
         "pt": "Gravação no Android"
       },

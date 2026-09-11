@@ -17,9 +17,6 @@ let liveWanted = true;
 let nativePaused = false;
 const savedPreference = (key, fallback = '') => { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } };
 const savePreference = (key,value) => { try { localStorage.setItem(key,value); } catch {} };
-let controlMode = 'view';
-let lastInputMode = 'mouse';
-let lastScreenMode = 'view';
 let remoteInputGeneration = 0;
 let viewportBaseline = {width:0,height:0};
 let chosenWorkspace = 'all';
@@ -118,15 +115,11 @@ function setConnection(isConnected, error = '') {
   $('#dialog-status').textContent = isConnected ? t("Conexão privada · navegador pareado") : t("Aguardando resposta do computador");
   $('#connection-banner').hidden = isConnected || !token;
   if (!isConnected) i18n.write($('#connection-banner-text'),error || t("Conexão interrompida. Tentando reconectar…"));
-  $$('[data-app],[data-action],[data-key],[data-monitor-toggle],#mute-button,#send-text,#left-click,#right-click,#drag-button,#stop-pc-audio,#btn-poweroff').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
+  $$('[data-app],[data-action],[data-key],[data-monitor-toggle],#mute-button,#stop-pc-audio,#btn-poweroff,#btn-unlock,#btn-suspend,#btn-reboot,#terminal-dictate,#screen-dictate').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
   $('#volume').disabled = !isConnected;
-  $('#capture-button').disabled = !isConnected || !state?.capabilities?.screenshot || busyControls.has('capture-button');
   updateScreenButtons();
   if (isConnected && state) updateCapabilities();
-  if (!isConnected) {
-    $('#touchpad').setAttribute('aria-disabled', 'true');
-    $('#touchpad-state').textContent = t("AGUARDANDO CONEXÃO");
-  }
+  if (!isConnected) closeRemoteKeyboard();
 }
 
 function formatUptime(seconds) {
@@ -138,18 +131,10 @@ function formatUptime(seconds) {
 
 function updateCapabilities() {
   const caps = state.capabilities || {};
-  const hasMouse = connected && !!caps.mouse;
-  const hasKeyboard = connected && !!caps.keyboard;
-  $('#touchpad').setAttribute('aria-disabled', String(!hasMouse));
-  $('#touchpad-state').textContent = hasMouse ? t("PRONTO PARA O TOQUE") : t("INDISPONÍVEL NO PC");
-  $('#mouse-unavailable').hidden = !!caps.mouse;
-  $('#keyboard-unavailable').hidden = !!caps.keyboard;
-  $$('#left-click,#right-click,#drag-button').forEach(button => { button.disabled = !hasMouse; });
-  $$('[data-key],#send-text,#keyboard-text').forEach(element => { element.disabled = !hasKeyboard || busyControls.has(element.id); });
-  $('#capture-button').disabled = !connected || !caps.screenshot || !(state.monitors?.length) || busyControls.has('capture-button');
   $('#stop-pc-audio').disabled = !connected || !caps.audio;
   updateScreenButtons();
-  const labels = {mouse:t("Mouse"), keyboard:t("Teclado"), screenshot:t("Foto do monitor"), live:t("Tela ao vivo"), audio:t("Áudio no PC")};
+  const labels = {mouse:t("Mouse"), keyboard:t("Teclado"), screenshot:t("Foto do monitor"), live:t("Tela ao vivo"), audio:t("Áudio no PC"), stt:t("Ditado por voz"), lights:t("Luzes RGB"), lock:t("Bloqueio da sessão")};
+  $$('#terminal-dictate,#screen-dictate').forEach(button => { button.disabled = !connected || !caps.stt || busyControls.has(button.id); });
   $('#capability-list').innerHTML = Object.entries(labels).map(([key,label]) => `<div class="capability ${caps[key] ? '' : 'unavailable'}">${icon(caps[key] ? 'check' : 'close')}<span>${label}</span></div>`).join('');
   const warnings = state.warnings || [];
   $('#warnings').hidden = !warnings.length;
@@ -162,7 +147,6 @@ function renderState() {
   $('#stat-windows').textContent = state.windows?.length ?? 0;
   $('#stat-workspaces').textContent = (state.workspaces || []).filter(ws => Number.isInteger(ws.id) && ws.id >= 1 && ws.id <= 100).length;
   $('#stat-uptime').textContent = formatUptime(state.uptime);
-  $('#keyboard-target').textContent = t('Texto vai para a janela em foco: {title}',{title:state.activeWindow?.title || t('Nenhuma janela em foco')});
   $('#focus-summary').textContent = state.activeWindow?.title || t("Nenhuma janela em foco");
   if (!volumeEditing) {
     const volume = Math.round((state.volume?.value || 0) * 100);
@@ -177,12 +161,15 @@ function renderState() {
   renderWorkspaces();
   renderWindows();
   renderPowerMonitors();
+  renderLights();
+  renderSession();
   const wolSection = $('#power-wol-section');
   if (wolSection) {
     if (state.wakeOnLan?.mac) {
       wolSection.hidden = false;
       $('#wol-mac-address').textContent = state.wakeOnLan.mac;
       $('#wol-interface').textContent = state.wakeOnLan.interface || '';
+      $('#wol-enabled').textContent = state.wakeOnLan.enabled === true ? t("ativo na placa de rede") : state.wakeOnLan.enabled === false ? t("desativado na placa de rede") : t("estado desconhecido");
     } else {
       wolSection.hidden = true;
     }
@@ -269,64 +256,44 @@ async function pollState() {
     setConnection(true);
     renderState();
     if (currentPage === 'voz' && !audioLoaded) loadAudio();
+    if (keyboardOpen && state.textInput?.focused === false) closeRemoteKeyboard();
     if (currentPage === 'terminais') renderDesktopTerminals();
   } catch (error) { if (token && requestToken === token) setConnection(false, error); }
   finally { polling = false; }
 }
 
-function isScreenPage(page) { return page === 'tela' || page === 'controle'; }
+function isScreenPage(page) { return page === 'tela'; }
 
 function setPageLocation(page) {
   currentPage = page;
   document.body.setAttribute('data-current-page',page);
-  $$('.nav-item').forEach(element => { const active = element.dataset.nav === page; element.classList.toggle('active', active); if (active) element.setAttribute('aria-current','page'); else element.removeAttribute('aria-current'); });
-  if (location.hash !== `#${page}`) history.replaceState(null,'',`${location.pathname}${location.search}#${page}`);
+  const navPage = page;
+  $$('.nav-item').forEach(element => { const active = element.dataset.nav === navPage; element.classList.toggle('active', active); if (active) element.setAttribute('aria-current','page'); else element.removeAttribute('aria-current'); });
+  // Each page is a history entry so the Android Back button returns to the
+  // previous page instead of closing the app; the first page replaces.
+  if (location.hash !== `#${page}`) {
+    const url = `${location.pathname}${location.search}#${page}`;
+    if (historyReady && typeof history.pushState === 'function') history.pushState(null,'',url);
+    else history.replaceState(null,'',url);
+  }
+  historyReady = true;
 }
+let historyReady = false;
 
 function navigate(page) {
-  if (!['inicio','tela','controle','terminais','janelas','voz'].includes(page)) return;
+  if (page === 'controle') page = 'tela';
+  if (!['inicio','tela','terminais','janelas','voz'].includes(page)) return;
   const wasScreen = isScreenPage(currentPage), nextScreen = isScreenPage(page);
   if (currentPage !== page) resetRemoteInput();
   if (wasScreen && !nextScreen) leaveScreen();
   if (nextScreen && !wasScreen) liveWanted = true;
   setPageLocation(page);
-  const visiblePage = page === 'controle' ? 'tela' : page;
-  $$('.page').forEach(element => { element.hidden = element.dataset.page !== visiblePage; });
-  if (nextScreen) selectControlMode(page === 'tela' ? lastScreenMode : lastInputMode);
+  $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
+  if (!nextScreen) closeRemoteKeyboard();
   window.scrollTo({top:0,behavior:'instant'});
   if (page === 'voz' && connected) loadAudio();
   reconcileLive();
   updateTerminalNavigation();
-}
-
-function selectControlMode(mode, focusTab = false) {
-  if (!['view','touch','mouse','keyboard'].includes(mode)) return;
-  const previous = controlMode;
-  if (mode !== controlMode) resetRemoteInput();
-  if (mode !== 'keyboard' && document.activeElement === $('#keyboard-text')) $('#keyboard-text').blur();
-  controlMode = mode;
-  if (mode === 'view' || mode === 'touch') lastScreenMode = mode;
-  else lastInputMode = mode;
-  $('#screen-stage').setAttribute('data-input-mode',mode);
-  $('#screen-stage').classList.remove('controls-hidden');
-  $('#remote-controls').hidden = mode === 'view' || mode === 'touch';
-  $$('[data-control-panel]').forEach(panel => { panel.hidden = panel.dataset.controlPanel !== mode; });
-  $$('[data-control-mode]').forEach(tab => {
-    const active = tab.dataset.controlMode === mode;
-    tab.classList.toggle('active',active);
-    tab.setAttribute('aria-pressed',String(active));
-    tab.tabIndex = active ? 0 : -1;
-    if (active && focusTab) tab.focus({preventScroll:true});
-  });
-  if (isScreenPage(currentPage)) setPageLocation(mode === 'view' || mode === 'touch' ? 'tela' : 'controle');
-  updateScreenModeChrome();
-  syncRemoteViewport();
-  applyScreenZoom();
-  window.scrollTo({top:0,behavior:'instant'});
-  if (mode === 'touch' && previous !== 'touch' && savedPreference('ponte-direct-touch-seen') !== '1') {
-    savePreference('ponte-direct-touch-seen', '1');
-    toast(t('Toque agora clica no PC.'));
-  }
 }
 
 function syncRemoteViewport() {
@@ -335,7 +302,9 @@ function syncRemoteViewport() {
   if (!Number.isFinite(width) || !Number.isFinite(height)) return;
   if (Math.abs(width - viewportBaseline.width) > 100) viewportBaseline = {width,height};
   else viewportBaseline.height = Math.max(viewportBaseline.height,height);
-  const keyboardOpen = controlMode === 'keyboard' && viewportBaseline.height - height > 100;
+  // The phone keyboard is open when our hidden input has focus and the visual
+  // viewport shrank; the fixed viewer then sizes itself to the visible area.
+  const keyboardOpen = document.activeElement === $('#remote-keys') && viewportBaseline.height - height > 100;
   document.body.setAttribute('data-keyboard-open',String(keyboardOpen));
   document.documentElement.style.setProperty('--remote-viewport-height',`${height}px`);
   document.documentElement.style.setProperty('--remote-viewport-top',`${window.visualViewport?.offsetTop || 0}px`);
@@ -344,30 +313,8 @@ function syncRemoteViewport() {
 window.visualViewport?.addEventListener('resize',syncRemoteViewport);
 window.visualViewport?.addEventListener('scroll',syncRemoteViewport);
 window.addEventListener('resize',syncRemoteViewport);
-$('#keyboard-text').addEventListener('focus',syncRemoteViewport);
-$('#keyboard-text').addEventListener('blur',syncRemoteViewport);
-document.addEventListener('pointerdown',event => {
-  if (document.activeElement === $('#keyboard-text') && event.target.closest('#send-text,[data-key]')) event.preventDefault();
-});
-
-$('.control-tabs').addEventListener('keydown', event => {
-  const modes = ['view','touch','mouse','keyboard'];
-  const current = modes.indexOf(controlMode);
-  let next;
-  if (event.key === 'ArrowRight') next = (current+1)%modes.length;
-  else if (event.key === 'ArrowLeft') next = (current+modes.length-1)%modes.length;
-  else if (event.key === 'Home') next = 0;
-  else if (event.key === 'End') next = modes.length-1;
-  else return;
-  event.preventDefault(); selectControlMode(modes[next],true);
-});
 
 document.addEventListener('click', event => {
-  const controlTab = event.target.closest('[data-control-mode]');
-  if (controlTab) {
-    selectControlMode(controlTab.dataset.controlMode);
-    if (controlMode === 'keyboard') $('#keyboard-text').focus({preventScroll:true});
-  }
   const nav = event.target.closest('[data-nav]');
   if (nav) navigate(nav.dataset.nav);
   const app = event.target.closest('[data-app]');
@@ -382,9 +329,17 @@ document.addEventListener('click', event => {
   const generic = event.target.closest('[data-action]');
   if (generic) {
     let feedback = '';
-    if (generic.dataset.action === 'power.sleep') feedback = t("Dormindo: monitores e luzes apagados.");
-    else if (generic.dataset.action === 'power.wake') feedback = t("PC acordado: monitores e luzes restaurados.");
-    action(generic.dataset.action, {}, feedback);
+    const type = generic.dataset.action;
+    const payload = {};
+    if (type === 'power.sleep') feedback = t("Dormindo: monitores e luzes apagados.");
+    else if (type === 'power.wake') feedback = t("PC acordado: monitores e luzes restaurados.");
+    else if (type === 'power.dpms_all') { payload.state = generic.dataset.state; feedback = generic.dataset.state === 'on' ? t("Todos os monitores ligados.") : t("Todos os monitores desligados."); }
+    else if (type === 'lights.preset') { payload.preset = generic.dataset.preset; feedback = t('Luzes no preset {preset}.',{preset:generic.dataset.preset}); }
+    else if (type === 'lights.sleep') feedback = t("Luzes apagadas.");
+    else if (type === 'lights.restore') feedback = t("Luzes restauradas.");
+    else if (type === 'lights.screen') { payload.enabled = generic.dataset.enabled === 'true'; feedback = payload.enabled ? t("Telinha do cooler ligada.") : t("Telinha do cooler apagada."); }
+    else if (type === 'session.lock') feedback = t("PC bloqueado.");
+    runBusy(generic, () => action(type, payload, feedback));
   }
   const key = event.target.closest('[data-key]');
   if (key) action('keyboard.key',{key:key.dataset.key});
@@ -433,16 +388,6 @@ $('#poweroff-confirm').addEventListener('click', async () => {
   $('#poweroff-dialog').close();
   await action('power.poweroff', {}, t("Desligando o PC…"));
 });
-$('#send-text').addEventListener('click', async () => {
-  if (busyControls.has('send-text')) return;
-  const text = $('#keyboard-text').value;
-  if (!text) { $('#keyboard-text').focus(); toast(t("Escreva o texto que deseja enviar.")); return; }
-  busyControls.add('send-text'); $('#send-text').disabled = true;
-  const success = await action('keyboard.text',{text},t("Texto digitado no PC."));
-  if (success && $('#keyboard-text').value === text) $('#keyboard-text').value = '';
-  busyControls.delete('send-text'); $('#send-text').disabled = !connected || !state?.capabilities?.keyboard;
-});
-
 // Live monitor transport: authenticated MJPEG. A photo is always labelled separately.
 let liveSession = null;
 let screenMode = 'idle';
@@ -450,10 +395,14 @@ let screenStatusMessage = '';
 let lastScreenTimestamp = null;
 let snapshotRequest = null;
 let screenZoomed = false;
-let screenZoom = 1;
+// Chrome-Remote-Desktop-style zoom: the whole native frame is streamed and the
+// pinch is a continuous CSS transform on the client (no server re-crop, no
+// reconnect), so it is smooth and stays sharp up to 1:1 native pixels.
+let screenScale = 1;
+let screenPanX = 0, screenPanY = 0;
+let screenBaseW = 0, screenBaseH = 0;
+let screenMaxScale = 6;
 let screenSourceSize = '';
-let readAtOriginal = false;
-let viewRegion = null;
 let liveRegionTimer = 0;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const LONG_PRESS_MS = 500;
@@ -543,6 +492,7 @@ function isFullMonitorRegion(region, monitorWidth, monitorHeight) {
 
 function liveStreamPath(session) {
   let path = `/stream?monitor=${encodeURIComponent(session.monitor)}&fps=${session.fps}&scale=${session.scale}`;
+  if (Number.isInteger(session.quality)) path += `&q=${session.quality}`;
   const region = session.region;
   if (region && [region.x, region.y, region.w, region.h].every(value => Number.isInteger(value))) {
     path += `&x=${region.x}&y=${region.y}&w=${region.w}&h=${region.h}`;
@@ -603,89 +553,106 @@ function selectedMonitor() {
 function previewLayout() {
   const preview = $('#screen-preview');
   const image = $('#screen-image');
+  // The image carries a CSS transform, so its on-screen box (getBoundingClientRect)
+  // already includes zoom and pan; touch mapping uses those real dimensions.
+  const rect = image.getBoundingClientRect?.() || { width: 0, height: 0 };
   return {
     previewWidth: preview.clientWidth || 390,
     previewHeight: preview.clientHeight || 300,
-    scrollLeft: preview.scrollLeft || 0,
-    scrollTop: preview.scrollTop || 0,
-    imageWidth: parseFloat(image.style.width) || image.clientWidth || image.naturalWidth || 0,
-    imageHeight: parseFloat(image.style.height) || image.clientHeight || image.naturalHeight || 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+    imageWidth: rect.width || screenBaseW * screenScale || image.naturalWidth || 0,
+    imageHeight: rect.height || screenBaseH * screenScale || image.naturalHeight || 0,
   };
 }
 function mappingLayout() {
   const monitor = selectedMonitor();
   if (!monitor) return null;
-  return { ...previewLayout(), monitorWidth: monitor.width, monitorHeight: monitor.height, region: viewRegion };
+  return { ...previewLayout(), monitorWidth: monitor.width, monitorHeight: monitor.height, region: null };
 }
-function currentViewRegion() {
-  const monitor = selectedMonitor();
-  if (!monitor) return null;
-  const layout = mappingLayout();
-  if (viewRegion && screenZoom <= 1) return viewRegion;
-  if (screenZoom <= 1 && !viewRegion) return null;
-  const visible = visibleMonitorRegion(layout);
-  if (!visible || isFullMonitorRegion(visible, monitor.width, monitor.height)) return null;
-  return visible;
+// The whole monitor is always streamed; zoom is client-side, so these are inert.
+function currentViewRegion() { return null; }
+function applyLiveRegion() {}
+function syncLiveRegion() { clearTimeout(liveRegionTimer); liveRegionTimer = 0; }
+function scheduleLiveRegion() {}
+// --- client-side zoom/pan (CSS transform on the frame) ---
+function screenPreviewSize() {
+  const preview = $('#screen-preview');
+  return { w: preview.clientWidth || 390, h: preview.clientHeight || 220 };
 }
-function applyLiveRegion(region) {
-  if (!liveSession || screenMode === 'snapshot') return;
-  const next = region && region.w > 0 ? region : null;
-  if (regionsClose(liveSession.region || null, next)) return;
-  liveSession.region = next;
-  liveSession.refreshing = true;
-  liveSession.controller?.abort();
+function computeScreenBase() {
+  const image = $('#screen-image');
+  const { w: pw, h: ph } = screenPreviewSize();
+  const nw = image.naturalWidth || 16, nh = image.naturalHeight || 9;
+  const ratio = nw / nh;
+  let w = pw, h = pw / ratio;
+  if (h > ph) { h = ph; w = ph * ratio; }
+  screenBaseW = w; screenBaseH = h;
+  // Allow zooming a little past native 1:1 so text stays legible; never so far
+  // that it is only upscale blur.
+  screenMaxScale = Math.max(2, Math.min(8, (nw / (w || 1)) * 1.3));
 }
-function syncLiveRegion() {
-  clearTimeout(liveRegionTimer); liveRegionTimer = 0;
-  applyLiveRegion(currentViewRegion());
+function centerScreenPan() {
+  const { w: pw, h: ph } = screenPreviewSize();
+  screenPanX = (pw - screenBaseW * screenScale) / 2;
+  screenPanY = (ph - screenBaseH * screenScale) / 2;
 }
-function scheduleLiveRegion() {
-  clearTimeout(liveRegionTimer);
-  liveRegionTimer = setTimeout(() => { liveRegionTimer = 0; syncLiveRegion(); }, 120);
+function clampScreenPan() {
+  const { w: pw, h: ph } = screenPreviewSize();
+  const sw = screenBaseW * screenScale, sh = screenBaseH * screenScale;
+  screenPanX = sw <= pw ? (pw - sw) / 2 : Math.min(0, Math.max(pw - sw, screenPanX));
+  screenPanY = sh <= ph ? (ph - sh) / 2 : Math.min(0, Math.max(ph - sh, screenPanY));
+}
+function applyScreenTransform() {
+  const image = $('#screen-image');
+  if (!screenBaseW) computeScreenBase();
+  image.style.position = 'absolute'; image.style.left = '0'; image.style.top = '0';
+  image.style.maxWidth = 'none'; image.style.maxHeight = 'none';
+  image.style.width = `${Math.round(screenBaseW)}px`;
+  image.style.height = `${Math.round(screenBaseH)}px`;
+  image.style.transformOrigin = '0 0';
+  image.style.transform = `translate(${screenPanX}px, ${screenPanY}px) scale(${screenScale})`;
+  screenZoomed = screenScale > 1.001;
+  $('#screen-stage').classList.toggle('zoomed', screenZoomed);
+}
+function zoomScreenAround(nextScale, clientX, clientY) {
+  const preview = $('#screen-preview');
+  const rect = preview.getBoundingClientRect?.() || { left: 0, top: 0 };
+  const { w: pw, h: ph } = screenPreviewSize();
+  const px = (Number.isFinite(clientX) ? clientX - rect.left : pw / 2);
+  const py = (Number.isFinite(clientY) ? clientY - rect.top : ph / 2);
+  const s0 = screenScale || 1;
+  const s1 = Math.max(1, Math.min(screenMaxScale, nextScale));
+  if (s1 === s0) return;
+  // Keep the point under the fingers fixed on screen: T1 = P - (P - T0)*(s1/s0).
+  screenPanX = px - (px - screenPanX) * (s1 / s0);
+  screenPanY = py - (py - screenPanY) * (s1 / s0);
+  screenScale = s1;
+  if (screenScale <= 1.001) { screenScale = 1; centerScreenPan(); }
+  else clampScreenPan();
+  applyScreenTransform();
+}
+function panScreen(dx, dy) {
+  if (screenScale <= 1.001) return false;
+  screenPanX += dx; screenPanY += dy;
+  clampScreenPan(); applyScreenTransform();
+  return true;
+}
+function nativeScreenScale() {
+  const image = $('#screen-image');
+  return (image.naturalWidth || screenBaseW) / (screenBaseW || 1);
 }
 function sendMonitorClick(pixel, button) {
   const monitor = selectedMonitor();
   if (!pixel || !monitor || !connected || !state?.capabilities?.mouse) return false;
   return action('mouse.clickAt', { monitor: monitor.name, x: pixel.x, y: pixel.y, button });
 }
-function updatePreviewAria() {
-  $('#screen-preview').setAttribute('aria-label', controlMode === 'touch'
-    ? t('Tela do PC. Toque para clicar, toque longo para botão direito, arraste para mover e pinça para ampliar.')
-    : t('Tela do PC. Pinça amplia em resolução real. Arraste para mover o recorte.'));
-}
-function updateScreenModeChrome() {
-  const touch = controlMode === 'touch';
-  const indicator = $('#direct-touch-indicator');
-  if (indicator) indicator.hidden = !touch;
-  const tip = $('.viewer-tip');
-  if (tip) {
-    const key = touch
-      ? 'Toque = clique, toque longo = clique direito, arraste = mover a imagem, pinça = zoom.'
-      : 'Abra o toque direto, o touchpad ou o teclado sem perder a imagem. Use Ver para expandir o monitor.';
-    tip.setAttribute('data-i18n', key);
-    tip.textContent = t(key);
-  }
-  updatePreviewAria();
-}
 function reconcileLive() { if (liveWanted && !liveSession && screenIsVisible() && connected && state?.capabilities?.live && $('#monitor-select').value) startLive(); }
 function sessionIsCurrent(session) { return liveSession === session && screenIsVisible(); }
-function updateScreenButtons() {
-  const canCapture = connected && !!state?.capabilities?.screenshot && !!$('#monitor-select').value;
-  const canStream = connected && !!state?.capabilities?.live && !!$('#monitor-select').value;
-  $('#live-toggle').disabled = !liveSession && !canStream;
-  $('#live-toggle').innerHTML = liveSession ? `${icon('pause')}<span>${h("Pausar ao vivo")}</span>` : `${icon('play')}<span>${h("Iniciar ao vivo")}</span>`;
-  $('#capture-button').disabled = !canCapture || busyControls.has('capture-button');
-  $('#stage-capture-button').disabled = $('#capture-button').disabled;
-  $('#fullscreen-button').disabled = !screenshotURL;
-  $('#zoom-button').disabled = !screenshotURL;
-  $('#zoom-out-button').disabled = !screenshotURL || (screenZoom <= 1 && !viewRegion);
-  $('#stage-live-toggle').hidden = !liveSession && !screenshotURL;
-  $('#stage-live-toggle').disabled = !liveSession && !canStream;
-  $('#stage-live-toggle').setAttribute('aria-label',liveSession ? t("Pausar transmissão") : t("Retomar transmissão ao vivo"));
-  $('#stage-live-toggle').innerHTML = icon(liveSession ? 'pause' : 'play');
-}
+function updateScreenButtons() {}
 function setScreenStatus(mode,message = '') {
   screenMode = mode; screenStatusMessage = message;
+  $('#screen-stage').setAttribute('data-screen-mode', mode);
   const labels = {idle:t("PRONTO"),connecting:t("CONECTANDO"),live:t("AO VIVO"),reconnecting:t("RECONECTANDO"),paused:t("PAUSADO"),snapshot:t("FOTO")};
   $('#live-badge').textContent = labels[mode] || t("PAUSADO");
   $('#live-badge').classList.toggle('live',mode === 'live');
@@ -700,40 +667,20 @@ function setScreenStatus(mode,message = '') {
   else $('#capture-time').textContent = t("Pronto para iniciar");
   i18n.write($('#live-note'),message || (mode === 'live' ? t('Ao vivo · {profile}. O ritmo depende da conexão e do monitor.',{profile:t(liveSession?.profileLabel || 'Equilibrado')}) : mode === 'paused' ? t("Transmissão pausada. Toque em iniciar para acompanhar novamente.") : mode === 'snapshot' ? t("Esta é uma foto. Inicie ao vivo para ver as mudanças do monitor.") : t("Veja as mudanças do monitor enquanto esta tela estiver aberta.")));
   $('#live-note').classList.toggle('error',mode === 'reconnecting');
+  $('#live-note').hidden = mode === 'live' || mode === 'idle';
   updateScreenButtons();
 }
 function applyScreenZoom() {
-  const stage = $('#screen-stage'), preview = $('#screen-preview'), image = $('#screen-image');
-  const regionFill = !!viewRegion && screenZoom <= 1 && screenMode !== 'snapshot';
-  screenZoomed = screenZoom > 1 || !!viewRegion;
-  stage.classList.toggle('zoomed',screenZoom > 1);
-  stage.classList.toggle('region-zoom', regionFill);
-  if (regionFill) {
-    image.style.width = `${Math.round(preview.clientWidth || 390)}px`;
-    image.style.height = `${Math.round(preview.clientHeight || 220)}px`;
-  } else {
-    const ratio = (image.naturalWidth || 16) / (image.naturalHeight || 9);
-    const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
-    image.style.width = `${Math.round(fitWidth*screenZoom)}px`;
-    image.style.height = `${Math.round(fitWidth/ratio*screenZoom)}px`;
-  }
-  $('#zoom-button').setAttribute('aria-pressed',String(screenZoomed));
-  $('#zoom-button').setAttribute('aria-label',screenZoomed ? t("Ajustar imagem inteira à tela") : t("Ampliar imagem para ler"));
-  $('#zoom-out-button').disabled = !screenshotURL || (screenZoom <= 1 && !viewRegion);
-  if (screenZoom <= 1) { preview.scrollLeft = 0; preview.scrollTop = 0; }
+  computeScreenBase();
+  screenScale = Math.max(1, Math.min(screenMaxScale, screenScale));
+  if (screenScale <= 1.001) { screenScale = 1; centerScreenPan(); } else clampScreenPan();
+  applyScreenTransform();
 }
+// Kept for the snapshot 1:1 path: set an absolute scale around the preview centre.
 function setScreenZoom(value, point) {
-  const preview = $('#screen-preview');
-  const previous = screenZoom;
-  const image = $('#screen-image');
-  const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
-  const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
-  screenZoom = Math.max(1,Math.min(Math.max(4,(image.naturalWidth || fitWidth)/fitWidth),value));
-  const x = point?.x ?? preview.clientWidth/2, y = point?.y ?? preview.clientHeight/2;
-  const left = preview.scrollLeft || 0, top = preview.scrollTop || 0;
-  applyScreenZoom();
-  if (screenZoom > 1) { preview.scrollLeft = (left+x)*screenZoom/previous-x; preview.scrollTop = (top+y)*screenZoom/previous-y; }
-  if (liveSession && screenMode !== 'snapshot' && !viewRegion) scheduleLiveRegion();
+  computeScreenBase();
+  zoomScreenAround(value, point && Number.isFinite(point.x) ? ($('#screen-preview').getBoundingClientRect?.().left || 0) + point.x : undefined,
+                          point && Number.isFinite(point.y) ? ($('#screen-preview').getBoundingClientRect?.().top || 0) + point.y : undefined);
 }
 function showScreenImage(url,timestamp,monitor) {
   const oldURL = screenshotURL;
@@ -747,7 +694,7 @@ function showScreenImage(url,timestamp,monitor) {
 }
 function clearScreenImage() {
   if (screenshotURL) URL.revokeObjectURL(screenshotURL);
-  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenZoom = 1; viewRegion = null;
+  screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenScale = 1; screenPanX = screenPanY = 0; screenBaseW = screenBaseH = 0;
   $('#screen-image').removeAttribute('src'); $('#screen-image').hidden = true; $('#screen-empty').hidden = false;
   applyScreenZoom(); updateScreenButtons();
 }
@@ -762,20 +709,9 @@ function stopLive(message = '') {
   }
   if (session || ['connecting','live','reconnecting'].includes(screenMode)) setScreenStatus(screenshotURL ? 'paused' : 'idle',message);
 }
-function cancelSnapshot() {
-  const request = snapshotRequest; snapshotRequest = null;
-  request?.controller.abort();
-  clearTimeout(request?.timer);
-  busyControls.delete('capture-button'); $('#screen-preview').classList.remove('loading');
-  updateScreenButtons();
-}
-function exitScreenFullscreen() {
-  $('#screen-stage').classList.remove('expanded','controls-hidden');
-  if (document.fullscreenElement === $('#screen-stage')) document.exitFullscreen?.().catch(() => {});
-  $('#fullscreen-button').setAttribute('aria-label',t("Abrir tela cheia"));
-  $('#fullscreen-button').innerHTML = icon('expand');
-}
-function leaveScreen() { resetRemoteInput(); stopLive(); cancelSnapshot(); exitScreenFullscreen(); }
+function cancelSnapshot() { snapshotRequest = null; }
+function exitScreenFullscreen() {}
+function leaveScreen() { resetRemoteInput(); stopLive(); cancelSnapshot(); closeRemoteKeyboard(); if (landscapeForced) requestOrientation('auto'); }
 async function screenResponse(path,controller) {
   const requestToken = token;
   let response;
@@ -868,208 +804,291 @@ function startLive() {
   const monitor = $('#monitor-select').value;
   if (!monitor) return;
   stopLive(); cancelSnapshot();
-  const sharp = $('#live-quality').value === 'sharp';
-  const session = {monitor,fps:sharp ? 6 : 10,scale:sharp ? 0.65 : 0.5,profileLabel:sharp ? 'Mais nítido · até 6 quadros/s' : 'Equilibrado · até 10 quadros/s',attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:currentViewRegion(),refreshing:false};
+  const profile = LIVE_PROFILES[$('#live-quality').value] || LIVE_PROFILES.balanced;
+  const session = {monitor,fps:profile.fps,scale:profile.scale,quality:profile.quality,profileLabel:profile.label,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false};
   liveSession = session;
   runLiveSession(session);
 }
-function toggleLive() { liveWanted = !liveSession; if (liveSession) stopLive(); else startLive(); }
-$('#live-toggle').addEventListener('click',toggleLive);
-$('#stage-live-toggle').addEventListener('click',toggleLive);
 $('#monitor-select').addEventListener('change',() => {
   const restart = !!liveSession || liveWanted;
   savePreference('ponte-monitor',$('#monitor-select').value);
-  viewRegion = null; screenZoom = 1;
+  screenScale = 1; screenPanX = screenPanY = 0;
   stopLive(); cancelSnapshot(); clearScreenImage();
   $('#viewer-monitor-name').textContent = $('#monitor-select').value || t("Monitor do PC");
   setScreenStatus('idle');
   if (restart) startLive();
 });
-$('#live-quality').value = savedPreference('ponte-quality','balanced') === 'sharp' ? 'sharp' : 'balanced';
+// grim scales on the CPU, so the sharp profile streams native pixels at a
+// lower JPEG quality and is both faster and crisper than a downscaled frame.
+const LIVE_PROFILES = {
+  sharp:{fps:15,scale:1,quality:50,label:'Nítido · até 15 quadros/s'},
+  balanced:{fps:10,scale:0.5,quality:65,label:'Equilibrado · até 10 quadros/s'},
+  light:{fps:8,scale:0.35,quality:55,label:'Leve · até 8 quadros/s'},
+};
+$('#live-quality').value = LIVE_PROFILES[savedPreference('ponte-quality','sharp')] ? savedPreference('ponte-quality','sharp') : 'sharp';
 $('#live-quality').addEventListener('change',() => { savePreference('ponte-quality',$('#live-quality').value); if (liveSession) startLive(); });
-function enterNativeLiveCrop() {
-  const monitor = selectedMonitor();
-  if (!monitor) return;
-  const layout = previewLayout();
-  viewRegion = nativePreviewRegion(layout.previewWidth, layout.previewHeight, monitor.width, monitor.height, {
-    x: monitor.width / 2,
-    y: monitor.height / 2,
-  });
-  screenZoom = 1;
-  applyScreenZoom();
-  syncLiveRegion();
-}
-function zoomLiveRegion(factor, origin) {
-  const monitor = selectedMonitor();
-  if (!monitor) return;
-  viewRegion = scaleMonitorRegion(viewRegion, factor, origin || null, monitor.width, monitor.height);
-  screenZoom = 1;
-  applyScreenZoom();
-  scheduleLiveRegion();
-}
-$('#zoom-button').addEventListener('click',() => {
-  if (screenZoom > 1 || viewRegion) {
-    screenZoom = 1; viewRegion = null; applyScreenZoom(); syncLiveRegion(); return;
-  }
-  if (screenMode === 'snapshot' || !liveSession) {
-    const image = $('#screen-image'), preview = $('#screen-preview');
-    const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
-    const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
-    setScreenZoom(Math.max(1,(image.naturalWidth || fitWidth)/fitWidth));
-    return;
-  }
-  enterNativeLiveCrop();
-});
-$('#zoom-out-button').addEventListener('click',() => {
-  if (viewRegion && screenZoom <= 1) {
-    const monitor = selectedMonitor();
-    if (monitor) { viewRegion = scaleMonitorRegion(viewRegion, 1.5, null, monitor.width, monitor.height); applyScreenZoom(); syncLiveRegion(); }
-    return;
-  }
-  setScreenZoom(screenZoom/1.5);
-});
 $('#screen-image').addEventListener('load',() => {
   const image = $('#screen-image');
   const size = `${image.naturalWidth}x${image.naturalHeight}`;
-  if (size !== screenSourceSize) { screenZoom = 1; screenSourceSize = size; }
-  applyScreenZoom();
-  if (readAtOriginal) { readAtOriginal = false; const preview = $('#screen-preview'); const fit = Math.min(preview.clientWidth,preview.clientHeight*image.naturalWidth/image.naturalHeight); setScreenZoom(image.naturalWidth/fit,{x:0,y:0}); }
+  // A new monitor/source resets zoom; live frames keep the current zoom & pan.
+  if (size !== screenSourceSize) { screenScale = 1; screenPanX = screenPanY = 0; screenSourceSize = size; computeScreenBase(); centerScreenPan(); }
+  else computeScreenBase();
+  applyScreenTransform();
 });
-$('#fullscreen-button').addEventListener('click',async () => {
-  const stage = $('#screen-stage');
-  if (document.fullscreenElement === stage || stage.classList.contains('expanded')) { exitScreenFullscreen(); return; }
-  try { if (!stage.requestFullscreen) throw new Error('unsupported'); await stage.requestFullscreen(); }
-  catch { stage.classList.add('expanded'); }
-  $('#fullscreen-button').setAttribute('aria-label',t("Sair da tela cheia"));
-  $('#fullscreen-button').innerHTML = icon('close');
-  applyScreenZoom();
-});
-$('#hide-screen-controls').addEventListener('click',() => { selectControlMode('view'); $('#screen-stage').classList.add('controls-hidden'); applyScreenZoom(); });
-$('#show-screen-controls').addEventListener('click',() => { $('#screen-stage').classList.remove('controls-hidden'); applyScreenZoom(); });
 window.addEventListener('resize',applyScreenZoom);
 if (window.ResizeObserver) new window.ResizeObserver(applyScreenZoom).observe($('#screen-preview'));
-window.addEventListener('keydown',event => { if (event.key === 'Escape') exitScreenFullscreen(); });
-document.addEventListener('fullscreenchange',() => {
-  if (!document.fullscreenElement) { $('#screen-stage').classList.remove('controls-hidden'); $('#fullscreen-button').setAttribute('aria-label',t("Abrir tela cheia")); $('#fullscreen-button').innerHTML = icon('expand'); }
-  applyScreenZoom();
-});
-$('#capture-button').addEventListener('click',async () => {
-  if (busyControls.has('capture-button') || !screenIsVisible()) return;
-  const monitor = $('#monitor-select').value;
-  if (!monitor) { toast(t("Nenhum monitor disponível."),true); return; }
-  liveWanted = false; stopLive();
-  const request = {controller:new AbortController(),timer:null}; snapshotRequest = request;
-  request.timer = setTimeout(() => request.controller.abort(),15000);
-  busyControls.add('capture-button'); updateScreenButtons();
-  $('#screen-preview').classList.add('loading');
-  try {
-    const response = await screenResponse(`/screenshot?monitor=${encodeURIComponent(monitor)}&scale=1`,request.controller);
-    const blob = await response.blob();
-    if (snapshotRequest !== request || !screenIsVisible()) return;
-    readAtOriginal = true; viewRegion = null;
-    showScreenImage(URL.createObjectURL(blob),Date.now(),monitor);
-    setScreenStatus('snapshot');
-  } catch(error) {
-    if (snapshotRequest === request) toast(error.name === 'AbortError' ? t("A foto demorou para chegar. Tente novamente.") : error,true);
-  } finally { if (snapshotRequest === request) cancelSnapshot(); }
-});
-
-$('#stage-capture-button').addEventListener('click',() => $('#capture-button').click());
-
 const screenPointers = new Map();
 const screenPreview = $('#screen-preview');
 let pinchDistance = 0;
-let screenGesture = { pinch: false, panned: false };
+let pinchMid = null;
+let screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false };
 const pointerDistance = () => { const [a,b] = [...screenPointers.values()]; return a && b ? Math.hypot(a.x-b.x,a.y-b.y) : 0; };
 function imageLocalPoint(clientX, clientY) {
-  const image = $('#screen-image');
-  const rect = image.getBoundingClientRect?.() || { left: 0, top: 0 };
+  const rect = $('#screen-image').getBoundingClientRect?.() || { left: 0, top: 0 };
   return { x: clientX - rect.left, y: clientY - rect.top };
 }
-function translateViewRegion(dxImage, dyImage) {
+function monitorPixelAt(clientX, clientY) {
+  const layout = mappingLayout();
+  if (!layout) return null;
+  const local = imageLocalPoint(clientX, clientY);
+  return mapTouchToMonitorPixel(local.x, local.y, layout);
+}
+// Quiet variant of action(): no toast, no state poll. Used for keystrokes and
+// drag movement, which are frequent and self-evident on the PC screen.
+async function quietAction(type, payload = {}) {
+  if (!connected) return false;
+  try { await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}) }); return true; }
+  catch { return false; }
+}
+
+// ---- Direct touch: the image is the monitor. One mode, phone gestures only.
+// Tap = click. Long press then lift = right click. Long press then move = drag
+// with the button held. Pinch = zoom. One finger while zoomed = pan. Two
+// fingers together = scroll the PC.
+const hold = { timer: null, held: false, dragging: false, lastMove: 0, lastLease: 0, generation: 0 };
+function clearHold() { clearTimeout(hold.timer); hold.timer = null; hold.held = false; }
+async function beginHoldDrag(pixel) {
   const monitor = selectedMonitor();
-  if (!monitor || !viewRegion) return;
-  const layout = previewLayout();
-  const width = layout.imageWidth || 1, height = layout.imageHeight || 1;
-  const next = {
-    x: Math.max(0, Math.min(monitor.width - viewRegion.w, Math.round(viewRegion.x - dxImage / width * viewRegion.w))),
-    y: Math.max(0, Math.min(monitor.height - viewRegion.h, Math.round(viewRegion.y - dyImage / height * viewRegion.h))),
-    w: viewRegion.w, h: viewRegion.h,
-  };
-  viewRegion = next;
-  scheduleLiveRegion();
+  if (hold.dragging || !monitor || !pixel || !connected || !state?.capabilities?.mouse) return;
+  const generation = ++hold.generation;
+  hold.dragging = true; hold.lastLease = Date.now();
+  $('#drag-indicator').hidden = false;
+  await quietAction('mouse.moveTo', { monitor: monitor.name, x: pixel.x, y: pixel.y });
+  if (generation !== hold.generation || !hold.dragging) return;
+  if (!(await quietAction('mouse.drag', { pressed: true }))) endHoldDrag();
+}
+function moveHoldDrag(pixel) {
+  const monitor = selectedMonitor();
+  if (!hold.dragging || !monitor || !pixel) return;
+  const now = Date.now();
+  if (now - hold.lastMove < 35) return;
+  hold.lastMove = now;
+  quietAction('mouse.moveTo', { monitor: monitor.name, x: pixel.x, y: pixel.y });
+  // The server auto-releases a held button after 1.8 s; renew while dragging.
+  if (now - hold.lastLease > 600) { hold.lastLease = now; quietAction('mouse.drag', { pressed: true }); }
+}
+function endHoldDrag() {
+  if (!hold.dragging) return;
+  hold.dragging = false; hold.generation++;
+  $('#drag-indicator').hidden = true;
+  if (connected) quietAction('mouse.drag', { pressed: false });
+}
+function resetScreenGesture() {
+  clearHold();
+  const ids = [...screenPointers.keys()];
+  screenPointers.clear();
+  for (const id of ids) { if (screenPreview.hasPointerCapture?.(id)) screenPreview.releasePointerCapture(id); }
+  screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false };
+  pinchMid = null; pinchDistance = 0;
+  endHoldDrag();
+}
+function queueScroll(dy) {
+  if (!connected || !state?.capabilities?.mouse) return;
+  moveQueue.scroll += -dy / 7;
+  if (!movementTimer) movementTimer = setInterval(flushMovement,35);
+}
+function stopPointerMoves() {
+  clearInterval(movementTimer); movementTimer = null;
+  flushMovement();
 }
 screenPreview.addEventListener('pointerdown',event => {
-  if (!screenshotURL) return;
+  if (!screenshotURL || event.target.closest('button')) return;
+  if (event.button > 0) return;
+  // Keeping default focus behaviour off means the phone keyboard, once open
+  // for a text field, stays open while you tap around the screen.
+  event.preventDefault?.();
   screenPreview.setPointerCapture?.(event.pointerId);
   screenPointers.set(event.pointerId,{x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,started:Date.now(),moved:false});
-  pinchDistance = pointerDistance();
-  if (screenPointers.size === 1) screenGesture = { pinch: false, panned: false };
-  if (screenPointers.size >= 2) screenGesture.pinch = true;
+  if (screenPointers.size === 1) {
+    screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false };
+    pinchMid = null; pinchDistance = 0;
+    clearHold();
+    hold.timer = setTimeout(() => {
+      hold.timer = null;
+      const pointer = screenPointers.get(event.pointerId);
+      if (pointer && !pointer.moved && screenPointers.size === 1) { hold.held = true; try { navigator.vibrate?.(12); } catch {} }
+    },LONG_PRESS_MS);
+  } else {
+    screenGesture.twoFinger = true;
+    clearHold(); endHoldDrag();
+    const [a,b] = [...screenPointers.values()];
+    pinchMid = { x: (a.x+b.x)/2, y: (a.y+b.y)/2 };
+    pinchDistance = pointerDistance();
+  }
 });
 screenPreview.addEventListener('pointermove',event => {
   const before = screenPointers.get(event.pointerId);
   if (!before) return;
   const dx = event.clientX-before.x, dy = event.clientY-before.y;
-  if (Math.hypot(event.clientX-before.startX,event.clientY-before.startY) > SCREEN_PAN_SLOP) before.moved = true;
+  if (Math.hypot(event.clientX-before.startX,event.clientY-before.startY) > SCREEN_PAN_SLOP) { before.moved = true; screenGesture.moved = true; }
   screenPointers.set(event.pointerId,{...before,x:event.clientX,y:event.clientY});
-  if (screenPointers.size === 2) {
-    screenGesture.pinch = true;
+  if (screenPointers.size >= 2) {
+    const [a,b] = [...screenPointers.values()];
+    const midX = (a.x+b.x)/2, midY = (a.y+b.y)/2;
     const distance = pointerDistance();
-    const [a,b] = [...screenPointers.values()], rect = screenPreview.getBoundingClientRect?.() || {left:0,top:0};
     const factor = pinchDistance > 0 ? distance/pinchDistance : 1;
-    pinchDistance = distance;
-    const monitor = selectedMonitor();
-    if (monitor && screenMode !== 'snapshot' && liveSession) {
-      const local = imageLocalPoint((a.x+b.x)/2,(a.y+b.y)/2);
-      const origin = mapTouchToMonitorPixel(local.x, local.y, mappingLayout());
-      zoomLiveRegion(1/factor, origin);
-    } else if (pinchDistance >= 0) {
-      setScreenZoom(screenZoom*factor,{x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top});
+    const prevMid = pinchMid || { x: midX, y: midY };
+    if (screenGesture.pinch || Math.abs(factor-1) > 0.02) {
+      screenGesture.pinch = true;
+      if (screenZoomed) panScreen(midX-prevMid.x, midY-prevMid.y);
+      zoomScreenAround(screenScale*factor, midX, midY);
+    } else if (screenZoomed) {
+      screenGesture.panned = true;
+      panScreen(midX-prevMid.x, midY-prevMid.y);
+    } else {
+      screenGesture.panned = true;
+      queueScroll(midY - prevMid.y);
     }
-  } else if (screenZoom > 1) {
-    screenGesture.panned = screenGesture.panned || before.moved;
-    screenPreview.scrollLeft -= dx;
-    screenPreview.scrollTop -= dy;
-  } else if (viewRegion && screenPointers.size === 1 && before.moved && screenMode !== 'snapshot') {
-    screenGesture.panned = true;
-    translateViewRegion(dx, dy);
+    pinchMid = { x: midX, y: midY };
+    pinchDistance = distance;
+  } else if (!screenGesture.twoFinger) {
+    if (hold.held || hold.dragging) {
+      if (!hold.dragging && before.moved) beginHoldDrag(monitorPixelAt(before.startX, before.startY));
+      if (hold.dragging) moveHoldDrag(monitorPixelAt(event.clientX, event.clientY));
+    } else if (before.moved) {
+      if (hold.timer) clearHold();
+      if (screenZoomed) { screenGesture.panned = true; panScreen(dx, dy); }
+    }
   }
   event.preventDefault?.();
 });
 function finishScreenPointer(event) {
   const pointer = screenPointers.get(event.pointerId);
   screenPointers.delete(event.pointerId);
-  pinchDistance = pointerDistance();
-  if (screenPointers.size > 0 || !pointer) return;
-  const visible = currentViewRegion();
-  if (visible) viewRegion = visible;
-  else if (screenZoom <= 1) viewRegion = null;
-  syncLiveRegion();
-  const gesture = classifyScreenGesture({
-    pointerCount: screenGesture.pinch ? 2 : 1,
-    moved: pointer.moved || screenGesture.panned || screenGesture.pinch,
-    durationMs: Date.now() - pointer.started,
-  });
-  if (controlMode === 'touch' && (gesture === 'tap' || gesture === 'longpress')) {
-    const layout = mappingLayout();
-    const local = imageLocalPoint(pointer.startX, pointer.startY);
-    sendMonitorClick(layout ? mapTouchToMonitorPixel(local.x, local.y, layout) : null, gesture === 'longpress' ? 'right' : 'left');
+  if (!pointer) return;
+  if (screenPointers.size > 0) { pinchDistance = 0; pinchMid = null; return; }
+  pinchMid = null;
+  stopPointerMoves();
+  const wasHeld = hold.held, wasDragging = hold.dragging;
+  clearHold();
+  if (wasDragging) { endHoldDrag(); return; }
+  if (event.type === 'pointercancel') return;
+  const moved = screenGesture.moved || pointer.moved || screenGesture.panned || screenGesture.pinch || screenGesture.twoFinger;
+  if (moved) return;
+  const pixel = monitorPixelAt(pointer.startX, pointer.startY);
+  if (!pixel) return;
+  if (wasHeld) { sendMonitorClick(pixel, 'right'); return; }
+  if (Date.now() - pointer.started < 500) {
+    Promise.resolve(sendMonitorClick(pixel, 'left')).then(ok => { if (ok) scheduleKeyboardCheck(); });
   }
 }
 for (const name of ['pointerup','pointercancel','lostpointercapture']) screenPreview.addEventListener(name,finishScreenPointer);
+screenPreview.addEventListener('contextmenu', event => { event.preventDefault(); });
 screenPreview.addEventListener('keydown',event => {
-  if (event.key === '+' || event.key === '=') {
-    if (screenMode === 'snapshot' || !liveSession) setScreenZoom(screenZoom*1.5);
-    else zoomLiveRegion(1/1.5);
-  } else if (event.key === '-') {
-    if (screenMode === 'snapshot' || !liveSession) setScreenZoom(screenZoom/1.5);
-    else zoomLiveRegion(1.5);
-  } else if (event.key === '0') {
-    if (screenMode === 'snapshot' || !liveSession) setScreenZoom(1);
-    else { screenZoom = 1; viewRegion = null; applyScreenZoom(); syncLiveRegion(); }
-  } else return;
+  if (event.key === '+' || event.key === '=') zoomScreenAround(screenScale*1.4);
+  else if (event.key === '-') zoomScreenAround(screenScale/1.4);
+  else if (event.key === '0') { screenScale = 1; applyScreenZoom(); }
+  else return;
   event.preventDefault();
+});
+
+// ---- Phone keyboard for the PC. After a tap-click, the PC reports whether a
+// text field took focus (fcitx5 input contexts). If so, a hidden input gets
+// focus, Android raises its keyboard, and every edit is forwarded live as
+// keystrokes. Back/blur closes it; a tap on a non-text area closes it too.
+const remoteKeys = $('#remote-keys');
+let remoteKeysValue = '';
+let keyboardCheckTimer = 0;
+let keyboardOpen = false;
+let keyQueue = Promise.resolve();
+function sendKeys(work) { keyQueue = keyQueue.then(work).catch(() => {}); return keyQueue; }
+function scheduleKeyboardCheck() {
+  clearTimeout(keyboardCheckTimer);
+  keyboardCheckTimer = setTimeout(checkTextInput, 220);
+}
+async function checkTextInput() {
+  if (!connected || !screenIsVisible()) return;
+  let info;
+  try { info = await (await api('/textinput',{timeout:3000})).json(); } catch { return; }
+  if (!screenIsVisible()) return;
+  if (info.focused === true) openRemoteKeyboard();
+  else if (info.focused === false) closeRemoteKeyboard();
+}
+function openRemoteKeyboard() {
+  remoteKeysValue = ''; remoteKeys.value = '';
+  keyboardOpen = true;
+  remoteKeys.focus({preventScroll:true});
+  syncRemoteViewport();
+}
+function closeRemoteKeyboard() {
+  clearTimeout(keyboardCheckTimer);
+  if (!keyboardOpen && document.activeElement !== remoteKeys) return;
+  keyboardOpen = false;
+  remoteKeysValue = ''; remoteKeys.value = '';
+  remoteKeys.blur();
+  syncRemoteViewport();
+}
+remoteKeys.addEventListener('input', () => {
+  const next = remoteKeys.value, prev = remoteKeysValue;
+  remoteKeysValue = next;
+  let common = 0;
+  while (common < prev.length && common < next.length && prev[common] === next[common]) common++;
+  const removed = prev.length - common, added = next.slice(common);
+  if (removed || added) sendKeys(async () => {
+    for (let i = 0; i < removed; i++) await quietAction('keyboard.key',{key:'BackSpace'});
+    if (added) await quietAction('keyboard.text',{text:added});
+  });
+  // Keep a buffer so autocorrect can revise the last word, but never let it grow.
+  if (next.length > 400) { remoteKeysValue = ''; remoteKeys.value = ''; }
+});
+remoteKeys.addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); remoteKeysValue = ''; remoteKeys.value = ''; sendKeys(() => quietAction('keyboard.key',{key:'Enter'})); }
+  else if (event.key === 'Backspace' && !remoteKeys.value) { event.preventDefault(); sendKeys(() => quietAction('keyboard.key',{key:'BackSpace'})); }
+});
+remoteKeys.addEventListener('blur', () => { keyboardOpen = false; syncRemoteViewport(); });
+// Cycle the streamed monitor; the select on Início stays the source of truth.
+$('#screen-switch-monitor').addEventListener('click', () => {
+  const monitors = state?.monitors || [];
+  if (monitors.length < 2) { toast(t("Só um monitor disponível.")); return; }
+  const select = $('#monitor-select');
+  const index = monitors.findIndex(m => m.name === select.value);
+  const next = monitors[(index + 1) % monitors.length];
+  select.value = next.name;
+  select.dispatchEvent(new CustomEvent('change'));
+  toast(t('Monitor {name}',{name:`${next.name} · ${Number(next.width)} × ${Number(next.height)}`}));
+});
+// Force landscape through the native activity (ponte://orientation/…); a
+// second tap hands orientation back to the sensor. Browsers try the
+// Screen Orientation API instead.
+let landscapeForced = false;
+function requestOrientation(mode) {
+  const button = $('#screen-rotate');
+  landscapeForced = mode === 'landscape';
+  button.setAttribute('aria-pressed', String(landscapeForced));
+  button.setAttribute('aria-label', landscapeForced ? t("Soltar orientação") : t("Forçar paisagem"));
+  if (navigator.userAgent.includes('PonteAndroid/')) { try { location.href = `ponte://orientation/${mode}`; } catch {} return; }
+  try {
+    if (landscapeForced) { const lock = screen.orientation?.lock?.('landscape'); if (lock?.catch) lock.catch(() => toast(t("Este navegador não permite girar a tela."), true)); }
+    else screen.orientation?.unlock?.();
+  } catch { toast(t("Este navegador não permite girar a tela."), true); }
+}
+$('#screen-rotate').addEventListener('click', () => requestOrientation(landscapeForced ? 'auto' : 'landscape'));
+$('#screen-dictate').addEventListener('click', () => {
+  toggleDictation($('#screen-dictate'), $('#screen-dictate-status'), async blob => {
+    const text = await uploadDictation('/dictate', blob);
+    if (text) { await quietAction('keyboard.text',{text}); await quietAction('keyboard.key',{key:'Enter'}); }
+    return text;
+  });
 });
 
 // These sessions use Ponte's tmux socket. They never inject desktop input.
@@ -1220,12 +1239,7 @@ document.addEventListener('visibilitychange',updateTerminalNavigation);
 window.addEventListener('pagehide',() => { clearTimeout(terminalTimer); terminalGeneration++; });
 window.addEventListener('ponte-native-resume',() => { nativePaused = false; updateTerminalNavigation(); pollState(); });
 
-// Pointer deltas are coalesced; only one movement request is in flight.
-const touchpad = $('#touchpad');
-const pointers = new Map();
-let gestureStart = 0;
-let gestureDistance = 0;
-let gestureMaxPointers = 0;
+// Scroll deltas are coalesced; only one movement request is in flight.
 let moveQueue = {dx:0,dy:0,scroll:0};
 let moving = false;
 let movementTimer = null;
@@ -1234,13 +1248,9 @@ let dragTimer = null;
 
 function resetRemoteInput() {
   remoteInputGeneration++;
-  const ids = [...pointers.keys()];
-  pointers.clear();
-  for (const id of ids) { if (touchpad.hasPointerCapture?.(id)) touchpad.releasePointerCapture(id); }
-  touchpad.classList.remove('touched');
   clearInterval(movementTimer); movementTimer = null;
   moveQueue = {dx:0,dy:0,scroll:0};
-  stopDrag();
+  resetScreenGesture();
 }
 
 async function flushMovement() {
@@ -1258,72 +1268,10 @@ async function flushMovement() {
   } catch (error) { moveQueue = {dx:0,dy:0,scroll:0}; toast(error,true); }
   finally {
     moving = false;
-    if (!pointers.size && (Math.round(moveQueue.dx) || Math.round(moveQueue.dy) || Math.round(moveQueue.scroll))) setTimeout(flushMovement,0);
+    if (!screenPointers.size && (Math.round(moveQueue.dx) || Math.round(moveQueue.dy) || Math.round(moveQueue.scroll))) setTimeout(flushMovement,0);
   }
 }
-
-touchpad.addEventListener('pointerdown', event => {
-  if (!connected || !state?.capabilities?.mouse || event.button > 0) return;
-  event.preventDefault();
-  touchpad.setPointerCapture(event.pointerId);
-  if (!pointers.size) { gestureStart = performance.now(); gestureDistance = 0; gestureMaxPointers = 0; }
-  pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
-  gestureMaxPointers = Math.max(gestureMaxPointers,pointers.size);
-  touchpad.classList.add('touched');
-  if (!movementTimer) movementTimer = setInterval(flushMovement,35);
-});
-touchpad.addEventListener('pointermove', event => {
-  const last = pointers.get(event.pointerId);
-  if (!last) return;
-  event.preventDefault();
-  const dx = event.clientX-last.x;
-  const dy = event.clientY-last.y;
-  gestureDistance += Math.abs(dx)+Math.abs(dy);
-  pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
-  if (pointers.size >= 2) moveQueue.scroll += -dy / 7;
-  else if (gestureMaxPointers < 2) { const scale = 1.7; moveQueue.dx += dx*scale; moveQueue.dy += dy*scale; }
-});
-function releasePointer(event, cancelled = false) {
-  if (!pointers.has(event.pointerId)) return;
-  pointers.delete(event.pointerId);
-  if (!pointers.size) {
-    touchpad.classList.remove('touched');
-    clearInterval(movementTimer); movementTimer = null;
-    flushMovement();
-    if (!cancelled && gestureDistance < 11 && performance.now()-gestureStart < 380 && !dragging) action('mouse.click',{button:gestureMaxPointers >= 2 ? 'right' : 'left'});
-    if (cancelled) stopDrag();
-  }
-}
-touchpad.addEventListener('pointerup', event => releasePointer(event));
-touchpad.addEventListener('pointercancel', event => releasePointer(event,true));
-touchpad.addEventListener('lostpointercapture', event => releasePointer(event,true));
-touchpad.addEventListener('contextmenu', event => { event.preventDefault(); });
-touchpad.addEventListener('keydown', event => {
-  const keys = {ArrowLeft:[-20,0],ArrowRight:[20,0],ArrowUp:[0,-20],ArrowDown:[0,20]};
-  if (keys[event.key]) { event.preventDefault(); action('mouse.move',{dx:keys[event.key][0],dy:keys[event.key][1]}); }
-  else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); action('mouse.click',{button:event.shiftKey ? 'right' : 'left'}); }
-});
-$('#left-click').addEventListener('click', () => action('mouse.click',{button:'left'}));
-$('#right-click').addEventListener('click', () => action('mouse.click',{button:'right'}));
-
-function updateDragButton() { $('#drag-button').setAttribute('aria-pressed',String(dragging)); $('#drag-button').textContent = dragging ? t("Soltar") : t("Arrastar"); }
-async function stopDrag() {
-  if (!dragging) return;
-  dragging = false; clearInterval(dragTimer); dragTimer = null; updateDragButton();
-  if (connected) await action('mouse.drag',{pressed:false});
-}
-$('#drag-button').addEventListener('click', async () => {
-  if (dragging) { stopDrag(); return; }
-  const generation = remoteInputGeneration;
-  if (await action('mouse.drag',{pressed:true})) {
-    if (generation !== remoteInputGeneration) { action('mouse.drag',{pressed:false}); return; }
-    dragging = true; updateDragButton(); toast(t("Arraste no touchpad. Toque em Soltar ao terminar."));
-    dragTimer = setInterval(async () => {
-      if (!connected || document.hidden) { stopDrag(); return; }
-      if (!(await action('mouse.drag',{pressed:true}))) stopDrag();
-    },650);
-  }
-});
+async function stopDrag() { endHoldDrag(); }
 
 // Recording stays local until the explicit send action. Playback is also explicit.
 let recorder = null;
@@ -1593,25 +1541,23 @@ window.addEventListener('appinstalled', () => { deferredInstall = null; $('#inst
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     leaveScreen();
-    stopDrag();
-    pointers.clear(); touchpad.classList.remove('touched');
     clearInterval(movementTimer); movementTimer = null; moveQueue = {dx:0,dy:0,scroll:0};
   } else { pollState(); if (recorder?.state === 'recording') recordClock(); }
 });
 window.addEventListener('online', pollState);
 window.addEventListener('offline', () => { if(token) setConnection(false,t("Este dispositivo está sem conexão.")); });
-window.addEventListener('pagehide', () => { leaveScreen(); cancelPendingRecording(); stopRecording(); closeMicrophone(); clearInterval(dragTimer); });
+window.addEventListener('pagehide', () => { leaveScreen(); cancelPendingRecording(); stopRecording(); closeMicrophone(); clearInterval(dragTimer); abortDictation(); });
 window.addEventListener('ponte-native-pause', event => {
   nativePaused = true;
   clearTimeout(terminalTimer); terminalGeneration++;
   leaveScreen(); stopDrag();
-  if (!event.detail?.awaitingMicrophonePermission) { cancelPendingRecording(); stopRecording(); closeMicrophone(); }
+  if (!event.detail?.awaitingMicrophonePermission) { cancelPendingRecording(); stopRecording(); closeMicrophone(); abortDictation(); }
 });
 window.addEventListener('hashchange', () => { const page = location.hash.slice(1); if (token) navigate(page); });
 
-const dynamicFields = '#terminal-pause,#home-status,#pc-online,#hostname,#focus-summary,#dialog-hostname,#dialog-status,#touchpad-state,#window-count,#live-badge,#live-overlay-text,#viewer-monitor-name,#capture-time,#live-note,#record-state,#record-hint,#install-hint,#drag-button';
+const dynamicFields = '#terminal-pause,#home-status,#pc-online,#hostname,#focus-summary,#dialog-hostname,#dialog-status,#window-count,#live-badge,#live-overlay-text,#viewer-monitor-name,#capture-time,#live-note,#record-state,#record-hint,#install-hint,#lights-status,#session-status,#wol-enabled,#terminal-dictate-status,#screen-dictate-status';
 $$(dynamicFields).forEach(element => element.removeAttribute('data-i18n'));
-$$('#mute-button,#stage-live-toggle,#zoom-button,#fullscreen-button').forEach(element => element.removeAttribute('data-i18n-aria-label'));
+$$('#mute-button').forEach(element => element.removeAttribute('data-i18n-aria-label'));
 $('#screen-image').removeAttribute('data-i18n-alt');
 document.addEventListener('ponte-language-change', () => {
   const ownedText = '#toast,#pair-error,#record-error,#record-state,#record-hint,#install-hint,#connection-banner-text,#terminal-status';
@@ -1628,21 +1574,174 @@ document.addEventListener('ponte-language-change', () => {
   }
   terminalSessionOptions();
   if (!token) $('#dialog-status').textContent = t('Não conectado');
-  updateDragButton();
   let liveMessage = typeof screenStatusMessage === 'string' ? t(screenStatusMessage) : screenStatusMessage;
   if (screenMode === 'reconnecting' && liveSession?.retryDelay) liveMessage = t('{message} Tentando novamente em {seconds}s.',{message:t(liveSession.error?.message || 'Conexão interrompida.'),seconds:liveSession.retryDelay/1000});
   setScreenStatus(screenMode,liveMessage);
-  $('#zoom-button').setAttribute('aria-label',screenZoomed ? t('Ajustar imagem inteira à tela') : t('Ampliar imagem para ler'));
-  $('#fullscreen-button').setAttribute('aria-label',document.fullscreenElement || $('#screen-stage').classList.contains('expanded') ? t('Sair da tela cheia') : t('Abrir tela cheia'));
-  updateScreenModeChrome();
   if (screenshotURL) $('#screen-image').alt = t('Monitor {monitor}',{monitor:$('#viewer-monitor-name').textContent});
   updateInstalledState();
   i18n.apply();
   pollState();
 });
 
+
+// A control stays disabled while its own request runs, so a slow OpenRGB or
+// lock command cannot be queued twice from repeated taps.
+async function runBusy(button, work) {
+  if (!button?.id) return work();
+  if (busyControls.has(button.id)) return false;
+  busyControls.add(button.id); button.disabled = true;
+  try { return await work(); }
+  finally { busyControls.delete(button.id); button.disabled = !connected; }
+}
+
+function renderLights() {
+  const section = $('#lights-section');
+  if (!section || !state) return;
+  const caps = state.capabilities || {};
+  const lights = state.lights;
+  section.hidden = !caps.lights;
+  if (!caps.lights) return;
+  const presets = lights?.presets || ['lava','brasa','oceano','aurora','floresta','lua'];
+  const names = {lava:t('Lava'),brasa:t('Brasa'),oceano:t('Oceano'),aurora:t('Aurora'),floresta:t('Floresta'),lua:t('Lua')};
+  const signature = JSON.stringify([presets,lights?.preset,lights?.sleeping,connected,i18n.language]);
+  if (section.dataset.signature === signature) return;
+  section.setAttribute('data-signature',signature);
+  $('#lights-presets').innerHTML = presets.map(preset => `<button class="workspace lights-preset ${lights && !lights.sleeping && lights.preset === preset ? 'active' : ''}" data-action="lights.preset" data-preset="${escaped(preset)}" aria-pressed="${String(!!lights && !lights.sleeping && lights.preset === preset)}"${connected ? '' : ' disabled'}><span class="lights-swatch" data-preset="${escaped(preset)}"></span>${escaped(names[preset] || preset)}</button>`).join('');
+  $('#lights-status').textContent = !lights ? t("Estado das luzes indisponível.") : lights.sleeping ? t("Luzes apagadas. Toque em um preset ou em Restaurar.") : t('Luzes acesas no preset {preset}.',{preset:names[lights.preset] || lights.preset});
+}
+
+function renderSession() {
+  const section = $('#session-section');
+  if (!section || !state) return;
+  const session = state.session || {};
+  const locked = session.locked;
+  $('#session-status').textContent = !session.lockAvailable ? t("Bloqueio do Omarchy indisponível neste PC.") : locked === true ? t("PC bloqueado. Desbloqueie digitando a senha por aqui.") : locked === false ? t("PC desbloqueado.") : t("Estado do bloqueio desconhecido.");
+  $('#btn-lock').disabled = !connected || !session.lockAvailable || locked === true || busyControls.has('btn-lock');
+  $('#btn-unlock').disabled = !connected || !session.lockAvailable || locked !== true || busyControls.has('btn-unlock');
+  $('#btn-unlock').classList.toggle('primary', locked === true);
+}
+
+$('#btn-unlock').addEventListener('click', () => { $('#unlock-password').value = ''; $('#unlock-dialog').showModal(); $('#unlock-password').focus?.(); });
+$('#unlock-cancel').addEventListener('click', () => $('#unlock-dialog').close());
+$('#unlock-dialog-close').addEventListener('click', () => $('#unlock-dialog').close());
+$('#unlock-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const password = $('#unlock-password').value;
+  if (!password) { $('#unlock-password').focus?.(); return; }
+  $('#unlock-confirm').disabled = true;
+  try {
+    const ok = await action('session.unlock',{password},t("Senha digitada no PC."));
+    if (ok) { $('#unlock-password').value = ''; $('#unlock-dialog').close(); }
+  } finally { $('#unlock-confirm').disabled = false; }
+});
+$('#btn-reboot').addEventListener('click', () => $('#reboot-dialog').showModal());
+$('#reboot-cancel').addEventListener('click', () => $('#reboot-dialog').close());
+$('#reboot-confirm').addEventListener('click', async () => { $('#reboot-dialog').close(); await action('power.reboot', {}, t("Reiniciando o PC…")); });
+$('#btn-suspend').addEventListener('click', () => $('#suspend-dialog').showModal());
+$('#suspend-cancel').addEventListener('click', () => $('#suspend-dialog').close());
+$('#suspend-confirm').addEventListener('click', async () => { $('#suspend-dialog').close(); await action('power.suspend', {}, t("Suspendendo o PC…")); });
+
+// Dictation: a short recording is transcribed on the PC and typed there. The
+// audio is uploaded once and never stored; only the text comes back.
+let dictation = null;
+function dictationStatus(element, message, error = false) {
+  if (!element) return;
+  if (message) i18n.write(element, message); else element.textContent = '';
+  element.hidden = !message;
+  element.classList.toggle('error', error);
+}
+function abortDictation() {
+  const current = dictation;
+  if (!current) return;
+  dictation = null;
+  current.discard = true;
+  clearTimeout(current.timer);
+  try { if (current.recorder && current.recorder.state !== 'inactive') current.recorder.stop(); } catch {}
+  current.stream?.getTracks().forEach(track => track.stop());
+  current.button.classList.remove('recording');
+  current.button.setAttribute('aria-pressed','false');
+  current.button.innerHTML = current.idle;
+  current.button.disabled = !connected || !state?.capabilities?.stt;
+  dictationStatus(current.status,'');
+}
+async function toggleDictation(button, status, upload) {
+  if (dictation && dictation.button === button) {
+    if (dictation.recorder?.state === 'recording') { dictationStatus(status,t("Transcrevendo…")); dictation.recorder.stop(); }
+    return;
+  }
+  if (dictation) abortDictation();
+  if (!connected) { toast(t("Reconecte ao PC para usar este controle."), true); return; }
+  if (!state?.capabilities?.stt) { dictationStatus(status,t("Reconhecimento de voz indisponível no PC. Abra o Sussurro ou o OmniVoice Studio."),true); return; }
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { dictationStatus(status,t("Este navegador não oferece gravação de áudio. Abra o Ponte no Chrome ou em outro navegador atualizado."),true); return; }
+  const idle = button.innerHTML;
+  const current = { button, status, idle, recorder: null, stream: null, discard: false, timer: null };
+  dictation = current;
+  button.setAttribute('aria-pressed','true');
+  dictationStatus(status,t("Permita o microfone…"));
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}}); }
+  catch (error) {
+    if (dictation === current) { const messages = {NotAllowedError:t("Microfone não permitido. Nas permissões deste site, libere o microfone e tente novamente."),NotFoundError:t("Nenhum microfone encontrado neste dispositivo."),NotReadableError:t("O microfone está ocupado. Feche outros apps que estejam gravando e tente novamente.")}; abortDictation(); dictationStatus(status,messages[error?.name] || error?.message || t("Não foi possível abrir o microfone."),true); }
+    else stream?.getTracks().forEach(track => track.stop());
+    return;
+  }
+  if (dictation !== current) { stream.getTracks().forEach(track => track.stop()); return; }
+  current.stream = stream;
+  const formats = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg','audio/mp4'];
+  const supported = formats.find(format => MediaRecorder.isTypeSupported(format));
+  if (!supported) { abortDictation(); dictationStatus(status,t("Nenhum formato de gravação compatível neste navegador. Tente abrir no Chrome."),true); return; }
+  const chunks = [];
+  const recorder = new MediaRecorder(stream,{mimeType:supported});
+  current.recorder = recorder;
+  recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+  recorder.onerror = () => { if (dictation === current) { abortDictation(); dictationStatus(status,t("A gravação foi interrompida. Tente gravar novamente."),true); } };
+  recorder.onstop = async () => {
+    stream.getTracks().forEach(track => track.stop());
+    clearTimeout(current.timer);
+    if (current.discard) return;
+    dictation = null;
+    button.classList.remove('recording'); button.setAttribute('aria-pressed','false'); button.innerHTML = idle; button.disabled = true;
+    const blob = new Blob(chunks,{type:recorder.mimeType || supported});
+    try {
+      if (!blob.size) throw new Error(t("Nenhum áudio foi capturado. Tente novamente."));
+      dictationStatus(status,t("Transcrevendo…"));
+      const text = await upload(blob);
+      dictationStatus(status,t('Você disse: {text}',{text}));
+    } catch (error) { dictationStatus(status,error,true); }
+    finally { button.disabled = !connected || !state?.capabilities?.stt; }
+  };
+  recorder.start(500);
+  button.classList.add('recording');
+  button.innerHTML = `${icon('stop')}<span>${h("Parar e enviar")}</span>`;
+  dictationStatus(status,t("Gravando… toque de novo para enviar."));
+  // A forgotten microphone stops itself after one minute.
+  current.timer = setTimeout(() => { if (dictation === current && recorder.state === 'recording') recorder.stop(); },60000);
+}
+async function uploadDictation(path, blob) {
+  const response = await api(path,{method:'POST',headers:{'Content-Type':blob.type},body:blob,timeout:70000});
+  return (await response.json()).text || '';
+}
+$('#terminal-dictate-enter').checked = savedPreference('ponte-dictate-enter','1') !== '0';
+$('#terminal-dictate-enter').addEventListener('change', event => savePreference('ponte-dictate-enter', event.target.checked ? '1' : '0'));
+$('#terminal-dictate').addEventListener('click', () => {
+  const id = terminalId;
+  if (!id) { dictationStatus($('#terminal-dictate-status'),t("Crie ou escolha uma sessão antes de falar."),true); return; }
+  toggleDictation($('#terminal-dictate'), $('#terminal-dictate-status'), async blob => {
+    const enter = $('#terminal-dictate-enter').checked;
+    const text = await uploadDictation(`/terminals/${encodeURIComponent(id)}/dictate?enter=${enter ? 1 : 0}`, blob);
+    updateTerminalNavigation();
+    return text;
+  });
+});
+window.addEventListener('popstate', () => { const page = location.hash.slice(1); if (token && page) navigate(page); });
+
 updateInstalledState();
-if (token) { showApp(); setConnection(false,t("Conectando ao seu computador…")); navigate(location.hash.slice(1) || 'tela'); pollState(); }
+if (token) {
+  showApp(); setConnection(false,t("Conectando ao seu computador…"));
+  const first = location.hash.slice(1) || 'tela';
+  if (first === 'tela') { navigate('inicio'); navigate('tela'); } else navigate(first);
+  pollState();
+}
 else showPairing();
 setInterval(pollState,4000);
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});

@@ -15,13 +15,13 @@ function harness({stored={},page=html,runApp=false,response}={}){
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 
 test('English is the fixed first-run language even on a Portuguese browser; keys and HTML bindings are complete',()=>{
- const h=harness();assert.equal(h.i18n.language,'en');assert.equal(h.document.documentElement.lang,'en');assert.equal(h.document.title,'Ponte — your Omarchy, within reach');assert.equal(h.el('.nav-item[data-nav="voz"]').textContent.trim(),'Voice');assert.equal(h.el('#keyboard-text').getAttribute('placeholder'),'Write here to type on the PC…');assert.equal(h.el('#fullscreen-button').getAttribute('aria-label'),'Enter fullscreen');
+ const h=harness();assert.equal(h.i18n.language,'en');assert.equal(h.document.documentElement.lang,'en');assert.equal(h.document.title,'Ponte — your Omarchy, within reach');assert.equal(h.el('.nav-item[data-nav="voz"]').textContent.trim(),'Voice');assert.equal(h.el('#screen-dictate').getAttribute('aria-label'),'Dictate to the PC');assert.equal(h.el('#open-screen').textContent.trim(),'Open screen');
  for(const name of ['data-i18n','data-i18n-aria-label','data-i18n-placeholder','data-i18n-title','data-i18n-alt','data-i18n-content'])for(const el of h.document.querySelectorAll(`[${name}]`))assert.ok(Object.hasOwn(h.i18n.messages,el.getAttribute(name)),el.getAttribute(name));
  for(const source of [app,progressScript])for(const match of source.matchAll(/\b(?:t|h)\((['"])(.*?)\1/g))assert.ok(Object.hasOwn(h.i18n.messages,match[2]),match[2]);
 });
 
 test('Portuguese selection persists across reload, synchronizes the selector, and sets DOM locale before title',()=>{
- const h=harness();h.i18n.setLanguage('pt');assert.equal(h.saved.get('ponte-language'),'pt');assert.equal(h.document.documentElement.lang,'pt-BR');assert.equal(h.el('[data-language-select]').value,'pt');assert.equal(h.document.title,'Ponte — seu Omarchy, por perto');assert.equal(h.el('#keyboard-text').getAttribute('placeholder'),'Escreva aqui para digitar no PC…');assert.ok(h.document.titleEvents.filter(event=>event.title==='Ponte — seu Omarchy, por perto').every(event=>event.lang==='pt-BR'));
+ const h=harness();h.i18n.setLanguage('pt');assert.equal(h.saved.get('ponte-language'),'pt');assert.equal(h.document.documentElement.lang,'pt-BR');assert.equal(h.el('[data-language-select]').value,'pt');assert.equal(h.document.title,'Ponte — seu Omarchy, por perto');assert.equal(h.el('#screen-dictate').getAttribute('aria-label'),'Ditar para o PC');assert.ok(h.document.titleEvents.filter(event=>event.title==='Ponte — seu Omarchy, por perto').every(event=>event.lang==='pt-BR'));
  const reloaded=harness({stored:Object.fromEntries(h.saved)});assert.equal(reloaded.i18n.language,'pt');assert.equal(reloaded.el('.nav-item[data-nav="voz"]').textContent.trim(),'Voz');reloaded.i18n.setLanguage('en');assert.equal(reloaded.document.documentElement.lang,'en');assert.equal(reloaded.saved.get('ponte-language'),'en');
 });
 
@@ -35,14 +35,14 @@ test('Ownership checks use own properties only, without Object.hasOwn',()=>{
 
 test('Every app page works in English, including internal Windows navigation and safe dynamic workspace labels',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();assert.equal(h.el('#hostname').textContent,'test-desktop');assert.equal(h.el('#window-count').textContent,'1 WINDOW');assert.equal(h.el('[data-window]').getAttribute('aria-label'),'Focus Notes <private>, workspace 1');assert.equal(h.el('#home-workspaces').querySelectorAll('button').length,1);
- h.run("navigate('inicio')");assert.equal(h.el('#page-inicio').hidden,false);for(const page of ['tela','controle','terminais','janelas','voz']){h.run(`navigate('${page}')`);assert.equal(h.el('#page-'+(page==='controle'?'tela':page)).hidden,false);assert.equal(h.el(`.nav-item[data-nav="${page}"]`).getAttribute('aria-current'),'page');}await flush();assert.match(h.el('#recording-list').textContent,/No recordings yet/);assert.ok(h.calls.every(call=>call.options.headers['Accept-Language']==='en'));assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
+ h.run("navigate('inicio')");assert.equal(h.el('#page-inicio').hidden,false);for(const page of ['tela','controle','terminais','janelas','voz']){h.run(`navigate('${page}')`);assert.equal(h.el('#page-'+(page==='controle'?'tela':page)).hidden,false);assert.equal(h.el(`.nav-item[data-nav="${page==='controle'?'tela':page}"]`).getAttribute('aria-current'),'page');}await flush();assert.match(h.el('#recording-list').textContent,/No recordings yet/);assert.ok(h.calls.every(call=>call.options.headers['Accept-Language']==='en'));assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
 });
 
 test('Changing language preserves drafted text, selection, active controls, preview and live session without sending actions',async()=>{
- const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();h.run("navigate('controle');selectControlMode('keyboard')");const textarea=h.el('#keyboard-text');textarea.value='Draft with accents: Olá 👋';textarea.selectionStart=6;textarea.selectionEnd=10;textarea.focus();h.el('#pair-token').value='an unfinished key';h.el('#window-search').value='Notes';h.el('#live-quality').value='sharp';h.el('#record-audio').src='blob:preview';h.el('#record-preview').hidden=false;
- h.run("recordingURL='blob:preview';recordingBlob=new Blob(['synthetic']);screenMode='live';screenStatusMessage='';lastScreenTimestamp=1770000000000;liveSession={monitor:'TEST-1',profileLabel:'Mais nítido · até 6 quadros/s'};screenshotURL='blob:screen';screenZoomed=true;dragging=true;$('#screen-stage').classList.add('expanded');$('#record-state').textContent=t('PRÉVIA');$('#record-hint').textContent=t('Ouça antes. O envio é sua escolha.');");const live=h.run('liveSession');const blob=h.run('recordingBlob');h.i18n.setLanguage('pt');await flush();
- assert.equal(textarea.value,'Draft with accents: Olá 👋');assert.equal(textarea.selectionStart,6);assert.equal(textarea.selectionEnd,10);assert.equal(h.document.activeElement,textarea);assert.equal(h.el('#pair-token').value,'an unfinished key');assert.equal(h.el('#window-search').value,'Notes');assert.equal(h.el('#live-quality').value,'sharp');assert.equal(h.el('#record-audio').src,'blob:preview');assert.equal(h.el('#record-preview').hidden,false);assert.equal(h.run('recordingBlob'),blob);assert.equal(h.run('liveSession'),live);assert.equal(h.run('currentPage'),'controle');assert.equal(h.run('controlMode'),'keyboard');assert.equal(h.el('#record-state').textContent,'PRÉVIA');assert.equal(h.el('#drag-button').textContent,'Soltar');assert.equal(h.el('#zoom-button').getAttribute('aria-label'),'Ajustar imagem inteira à tela');assert.equal(h.el('#fullscreen-button').getAttribute('aria-label'),'Sair da tela cheia');assert.equal(h.el('#live-badge').textContent,'AO VIVO');assert.match(h.el('#capture-time').textContent,/^Quadro às /);assert.equal(h.saved.get('ponte-pair-token'),'synthetic-test-token');assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
- h.i18n.setLanguage('en');assert.equal(h.el('#drag-button').textContent,'Release');assert.equal(h.el('#record-state').textContent,'PREVIEW');assert.match(h.el('#live-note').textContent,/Sharper/);assert.equal(h.el('#fullscreen-button').getAttribute('aria-label'),'Exit fullscreen');
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();h.run("navigate('tela')");const textarea=h.el('#terminal-input');textarea.value='Draft with accents: Olá 👋';textarea.selectionStart=6;textarea.selectionEnd=10;textarea.focus();h.el('#pair-token').value='an unfinished key';h.el('#window-search').value='Notes';h.el('#live-quality').value='sharp';h.el('#record-audio').src='blob:preview';h.el('#record-preview').hidden=false;
+ h.run("recordingURL='blob:preview';recordingBlob=new Blob(['synthetic']);screenMode='live';screenStatusMessage='';lastScreenTimestamp=1770000000000;liveSession={monitor:'TEST-1',profileLabel:'Mais nítido · até 6 quadros/s'};screenshotURL='blob:screen';screenZoomed=true;$('#record-state').textContent=t('PRÉVIA');$('#record-hint').textContent=t('Ouça antes. O envio é sua escolha.');");const live=h.run('liveSession');const blob=h.run('recordingBlob');h.i18n.setLanguage('pt');await flush();
+ assert.equal(textarea.value,'Draft with accents: Olá 👋');assert.equal(textarea.selectionStart,6);assert.equal(textarea.selectionEnd,10);assert.equal(h.document.activeElement,textarea);assert.equal(h.el('#pair-token').value,'an unfinished key');assert.equal(h.el('#window-search').value,'Notes');assert.equal(h.el('#live-quality').value,'sharp');assert.equal(h.el('#record-audio').src,'blob:preview');assert.equal(h.el('#record-preview').hidden,false);assert.equal(h.run('recordingBlob'),blob);assert.equal(h.run('liveSession'),live);assert.equal(h.run('currentPage'),'tela');assert.equal(h.el('#record-state').textContent,'PRÉVIA');assert.equal(h.el('#live-badge').textContent,'AO VIVO');assert.match(h.el('#capture-time').textContent,/^Quadro às /);assert.equal(h.saved.get('ponte-pair-token'),'synthetic-test-token');assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
+ h.i18n.setLanguage('en');assert.equal(h.el('#record-state').textContent,'PREVIEW');assert.match(h.el('#live-note').textContent,/Sharper/);
 });
 
 test('Both API transports negotiate the selected language and preserve authenticated requests',async()=>{
@@ -96,33 +96,15 @@ test('Screen is the first destination and native pause prevents polling from res
  assert.ok(h.calls.filter(call=>call.path.startsWith('/api/stream')).length>before);
 });
 
-test('Direct touch maps taps to monitor pixels and keeps pan and pinch from clicking',async()=>{
+test('The screen is one direct-touch mode: taps click at monitor pixels, holds right-click, moves never click',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
- assert.equal(h.el('#direct-touch-indicator').hidden,true);
- h.run("selectControlMode('touch')");
- assert.equal(h.run('controlMode'),'touch');
- assert.equal(h.el('#remote-controls').hidden,true);
- assert.equal(h.el('[data-control-mode="touch"]').getAttribute('aria-pressed'),'true');
- assert.equal(h.el('[data-control-mode="view"]').getAttribute('aria-pressed'),'false');
- assert.equal(h.el('#screen-stage').getAttribute('data-input-mode'),'touch');
- assert.equal(h.el('#direct-touch-indicator').hidden,false);
- assert.match(h.el('#direct-touch-indicator').textContent,/Direct touch on/);
- assert.match(h.el('.viewer-tip').textContent,/Tap = click/);
- assert.match(h.el('#toast').textContent,/A tap now clicks the PC/);
- assert.equal(h.el('#toast').hidden,false);
- assert.equal(h.saved.get('ponte-direct-touch-seen'),'1');
- assert.match(h.el('#screen-preview').getAttribute('aria-label'),/Tap to click/);
  assert.equal(h.run('currentPage'),'tela');
- h.run("$('#toast').hidden=true;selectControlMode('view')");
- assert.equal(h.el('#direct-touch-indicator').hidden,true);
- assert.match(h.el('.viewer-tip').textContent,/Open Direct touch/);
- h.run("selectControlMode('touch')");
- assert.equal(h.el('#toast').hidden,true);
- assert.equal(h.el('#direct-touch-indicator').hidden,false);
- h.run("selectControlMode('mouse')");
- assert.equal(h.el('#touchpad').closest('[data-control-panel]').hidden,false);
- assert.equal(h.run('lastInputMode'),'mouse');
- h.run("selectControlMode('touch');connected=true;screenshotURL='blob:screen'");
+ assert.equal(h.el('.control-tabs'),null,'no mode tabs');
+ assert.equal(h.el('#touchpad'),null,'no touchpad panel');
+ assert.equal(h.el('#keyboard-text'),null,'no keyboard panel');
+ assert.equal(h.el('#live-toggle'),null);assert.equal(h.el('#zoom-button'),null);assert.equal(h.el('#fullscreen-button'),null);
+ assert.match(h.el('#screen-preview').getAttribute('aria-label'),/Tap clicks, long-press/);
+ h.run("connected=true;screenshotURL='blob:screen'");
  const pixel=h.run("JSON.stringify(mapTouchToMonitorPixel(240,135,{imageWidth:480,imageHeight:270,monitorWidth:1920,monitorHeight:1080}))");
  assert.equal(pixel,'{"x":960,"y":540}');
  await h.run("sendMonitorClick({x:100,y:40},'left')");await flush();
@@ -134,63 +116,69 @@ test('Direct touch maps taps to monitor pixels and keeps pan and pinch from clic
  ]);
  assert.equal(h.run("classifyScreenGesture({pointerCount:1,moved:true,durationMs:40})"),'pan');
  assert.equal(h.run("classifyScreenGesture({pointerCount:2,moved:false,durationMs:40})"),'pinch');
- h.run("liveSession={monitor:'TEST-1',fps:10,scale:0.5,region:null};viewRegion={x:100,y:80,w:640,h:360};screenZoom=1;syncLiveRegion()");
- assert.equal(h.run('JSON.stringify(liveSession.region)'),'{"x":100,"y":80,"w":640,"h":360}');
- assert.equal(h.run('liveSession.refreshing'),true);
- h.run("viewRegion=null;screenZoom=1;syncLiveRegion()");
- assert.equal(h.run('liveSession.region'),null);
 });
 
-test('native live zoom requests a preview-matched region without CSS zoom',async()=>{
+test('Zoom is a continuous client-side transform on the whole frame and never re-crops the stream',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
- h.run("screenshotURL='blob:screen';screenMode='live';liveSession={monitor:'TEST-1',fps:10,scale:0.5,region:null,refreshing:false};$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=960;$('#screen-image').naturalHeight=540;$('#zoom-button').click()");
- assert.equal(h.run('screenZoom'),1);
- assert.equal(h.run('JSON.stringify(viewRegion)'),'{"x":765,"y":430,"w":390,"h":220}');
- assert.equal(h.run('JSON.stringify(liveSession.region)'),'{"x":765,"y":430,"w":390,"h":220}');
- assert.equal(h.run('liveSession.refreshing'),true);
- assert.equal(h.el('#zoom-button').getAttribute('aria-pressed'),'true');
- assert.ok(h.el('#screen-stage').classList.contains('region-zoom'));
+ h.run("screenshotURL='blob:screen';screenMode='live';liveSession={monitor:'TEST-1',fps:15,scale:1,region:null,refreshing:false};$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom()");
+ assert.equal(h.run('screenScale'),1);
+ h.run('zoomScreenAround(2.2, 195, 110)');
+ assert.ok(Math.abs(h.run('screenScale')-2.2)<0.001,'pinch sets an exact continuous scale');
+ assert.ok(h.el('#screen-stage').classList.contains('zoomed'));
+ assert.match(String(h.el('#screen-image').style.transform||''),/scale\(/);
+ assert.equal(h.run('liveSession.region'),null,'the stream is never re-cropped');
+ assert.equal(h.run('liveSession.refreshing')||false,false,'no reconnect on zoom');
+ h.run('zoomScreenAround(0.5)');
+ assert.equal(h.run('screenScale'),1,'never below fit');
  assert.equal(h.el('#screen-stage').classList.contains('zoomed'),false);
- h.run("$('#zoom-button').click()");
- assert.equal(h.run('viewRegion'),null);
- assert.equal(h.run('liveSession.region'),null);
- assert.equal(h.el('#zoom-button').getAttribute('aria-pressed'),'false');
- assert.equal(h.el('#screen-stage').classList.contains('region-zoom'),false);
-});
-
-test('View, touchpad and keyboard keep one monitor stream and preserve a manual pause',async()=>{
- const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
- h.run("stopLive();liveSession={monitor:'TEST-1'};screenMode='live';liveWanted=true");
- const stream=h.run('liveSession');const image=h.el('#screen-image');
- h.run("navigate('controle')");
- assert.equal(h.el('#page-tela').hidden,false);assert.equal(h.el('#touchpad').closest('[data-control-panel]').hidden,false);
- assert.equal(h.run('liveSession'),stream);assert.equal(h.run('screenIsVisible()'),true);
- h.run("selectControlMode('keyboard')");h.el('#keyboard-text').value='Keep my draft';h.el('#keyboard-text').focus();
- assert.equal(h.run('liveSession'),stream);assert.equal(h.el('#screen-image'),image);
- h.run("selectControlMode('view')");
- assert.equal(h.el('#remote-controls').hidden,true);assert.equal(h.el('#keyboard-text').value,'Keep my draft');
- assert.equal(h.document.activeElement,null);assert.equal(h.run('liveSession'),stream);
- h.run("stopLive();liveWanted=false;selectControlMode('mouse');reconcileLive();selectControlMode('keyboard');reconcileLive()");
- assert.equal(h.run('liveSession'),null);assert.equal(h.run('liveWanted'),false);
  assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
 });
 
-test('Collapsing remote controls discards queued movement and releases an active drag',async()=>{
+test('Leaving the screen page stops the stream and closes the phone keyboard; returning restarts it',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
- h.run("navigate('controle');pointers.set(7,{x:100,y:100});moveQueue={dx:90,dy:30,scroll:4};dragging=true;selectControlMode('view')");await flush();
- assert.equal(h.run('pointers.size'),0);assert.equal(h.run('dragging'),false);
+ h.run("stopLive();liveSession={monitor:'TEST-1'};screenMode='live';liveWanted=true;keyboardOpen=true;$('#remote-keys').focus()");
+ assert.equal(h.document.activeElement,h.el('#remote-keys'));
+ h.run("navigate('inicio')");
+ assert.equal(h.el('#page-tela').hidden,true);assert.equal(h.run('liveSession'),null);
+ assert.equal(h.run('keyboardOpen'),false);assert.equal(h.document.activeElement,null);
+ h.run("navigate('tela')");
+ assert.equal(h.el('#page-tela').hidden,false);assert.equal(h.run('screenIsVisible()'),true);assert.equal(h.run('liveWanted'),true);
+ assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
+});
+
+test('Leaving the screen discards queued scroll and releases a held drag',async()=>{
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
+ h.run("connected=true;moveQueue={dx:0,dy:0,scroll:4};hold.dragging=true;$('#drag-indicator').hidden=false;navigate('inicio')");await flush();
+ assert.equal(h.run('hold.dragging'),false);assert.equal(h.el('#drag-indicator').hidden,true);
  assert.equal(h.run('JSON.stringify(moveQueue)'),'{"dx":0,"dy":0,"scroll":0}');
  const actions=h.calls.filter(call=>call.path==='/api/action').map(call=>JSON.parse(call.options.body));
  assert.deepEqual(actions,[{type:'mouse.drag',pressed:false}]);
 });
 
-test('The reduced keyboard viewport stays stable when a send button takes focus',async()=>{
- const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
- h.window.innerWidth=390;h.window.innerHeight=844;h.run("selectControlMode('keyboard')");
- h.el('#keyboard-text').focus();h.window.innerHeight=420;h.run('syncRemoteViewport()');
+test('The phone keyboard opens after a tap on a PC text field, forwards edits as keystrokes, and closes when focus leaves',async()=>{
+ let focused=true;
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path,options)=>path==='/api/textinput'?{ok:true,json:async()=>({available:true,focused})}:{ok:true,json:async()=>path==='/api/audio'?{recordings:[]}:fixture}});await flush();
+ h.window.innerWidth=390;h.window.innerHeight=844;
+ assert.equal(h.el('#remote-keys').getAttribute('enterkeyhint'),'send');
+ await h.run('checkTextInput()');await flush();
+ assert.equal(h.run('keyboardOpen'),true);assert.equal(h.document.activeElement,h.el('#remote-keys'));
+ h.window.innerHeight=420;h.run('syncRemoteViewport()');
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'true');
- h.el('#send-text').focus();h.run('syncRemoteViewport()');
- assert.equal(h.document.body.getAttribute('data-keyboard-open'),'true');
+ const keys=h.el('#remote-keys');
+ keys.value='ola';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
+ keys.value='ol';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
+ keys.value='olá mundo';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
+ keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
+ const actions=h.calls.filter(call=>call.path==='/api/action').map(call=>JSON.parse(call.options.body));
+ assert.deepEqual(actions,[
+  {type:'keyboard.text',text:'ola'},
+  {type:'keyboard.key',key:'BackSpace'},
+  {type:'keyboard.text',text:'á mundo'},
+  {type:'keyboard.key',key:'Enter'},
+ ]);
+ assert.equal(keys.value,'','Enter starts a fresh line buffer');
+ focused=false;await h.run('checkTextInput()');await flush();
+ assert.equal(h.run('keyboardOpen'),false);assert.equal(h.document.activeElement,null);
  h.window.innerHeight=844;h.run('syncRemoteViewport()');
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'false');
 });

@@ -97,7 +97,13 @@ public final class MainActivity extends Activity {
                     preferences.edit().remove("pair_token").putBoolean("intent_pairing_consumed", true).apply();
                 }
             }
-            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return !ownOrigin(request.getUrl()); }
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri target = request.getUrl();
+                // The page has no JavaScript bridge; a navigation to ponte://orientation/…
+                // is the one bridge-free signal it may send, and it only rotates the screen.
+                if (target != null && "ponte".equals(target.getScheme())) { handlePageCommand(target); return true; }
+                return !ownOrigin(target);
+            }
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 return allowedResource(request.getUrl()) ? null : blockedResource();
             }
@@ -156,6 +162,17 @@ public final class MainActivity extends Activity {
         root.addView(browser, new FrameLayout.LayoutParams(-1, -1));
     }
 
+    private void handlePageCommand(Uri command) {
+        if (destroyed || !"orientation".equals(command.getHost())) return;
+        String mode = command.getPath() == null ? "" : command.getPath().replace("/", "");
+        if ("landscape".equals(mode)) {
+            setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } else {
+            setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+        }
+    }
     private boolean ownOrigin(Uri uri) {
         return uri != null && "http".equals(uri.getScheme()) && "127.0.0.1".equals(uri.getHost()) && uri.getPort() == 18987 && uri.getUserInfo() == null;
     }

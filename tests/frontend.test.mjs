@@ -172,14 +172,14 @@ test('Android permission dialog keeps the pending microphone request, while back
     window: {addEventListener: (_event, callback) => { listener = callback; }},
     nativePaused: false, terminalTimer: null, terminalGeneration: 0, clearTimeout() {},
     leaveScreen: () => calls.push('screen'), stopDrag: () => calls.push('drag'),
-    cancelPendingRecording: () => calls.push('pending'), stopRecording: () => calls.push('recording'), closeMicrophone: () => calls.push('microphone'),
+    cancelPendingRecording: () => calls.push('pending'), stopRecording: () => calls.push('recording'), closeMicrophone: () => calls.push('microphone'), abortDictation: () => calls.push('dictation'),
   });
   vm.runInContext(handlerSource, context);
   listener({detail: {awaitingMicrophonePermission: true}});
   assert.deepEqual(calls, ['screen', 'drag']);
   calls.length = 0;
   listener({});
-  assert.deepEqual(calls, ['screen', 'drag', 'pending', 'recording', 'microphone']);
+  assert.deepEqual(calls, ['screen', 'drag', 'pending', 'recording', 'microphone', 'dictation']);
 });
 
 const powerFixture = {
@@ -393,3 +393,54 @@ test('Portuguese translation updates power controls, monitor states, and dialog'
   assert.match(h.el('#btn-poweroff').textContent, /Desligar computador/);
   assert.match(h.el('#poweroff-dialog').textContent, /Desligar o computador\?/);
 });
+
+test('direct touch: a tap clicks the mapped monitor pixel, a drag never clicks, a hold right-clicks', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
+  const preview = h.el('#screen-preview');
+  const evt = (type, id, x, y) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  const actions = () => h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
+  // Tap at the image centre -> left click at the monitor centre; no move requests.
+  preview.dispatchEvent(evt('pointerdown', 1, 195, 109.5));
+  preview.dispatchEvent(evt('pointerup', 1, 195, 109.5));
+  await flushTicks();
+  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 960, y: 540, button: 'left' }]);
+  h.calls.length = 0;
+  // A drag (not zoomed) pans nothing and clicks nothing.
+  preview.dispatchEvent(evt('pointerdown', 2, 100, 100));
+  preview.dispatchEvent(evt('pointermove', 2, 180, 150));
+  preview.dispatchEvent(evt('pointerup', 2, 180, 150));
+  await flushTicks();
+  assert.deepEqual(actions(), []);
+  // A held press (no move) then lift -> right click at the press point.
+  preview.dispatchEvent(evt('pointerdown', 3, 39, 22));
+  h.run('hold.held=true');
+  preview.dispatchEvent(evt('pointerup', 3, 39, 22));
+  await flushTicks();
+  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 192, y: 108, button: 'right' }]);
+});
+
+test('floating buttons cycle the streamed monitor and toggle a forced landscape', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  h.run("navigate('tela');connected=true");
+  h.el('#monitor-select').value = 'HDMI-A-1';
+  h.calls.length = 0;
+  h.el('#screen-switch-monitor').click();
+  await flushTicks();
+  assert.equal(h.el('#monitor-select').value, 'DP-1');
+  assert.ok(h.calls.some(call => call.path.startsWith('/api/stream?monitor=DP-1')), 'the stream restarts on the next monitor');
+  assert.match(h.el('#toast').textContent, /DP-1 · 2560 × 1440/);
+  h.el('#screen-switch-monitor').click();
+  assert.equal(h.el('#monitor-select').value, 'HDMI-A-1', 'cycles back around');
+  const rotate = h.el('#screen-rotate');
+  assert.equal(rotate.getAttribute('aria-pressed'), 'false');
+  rotate.click();
+  assert.equal(rotate.getAttribute('aria-pressed'), 'true');
+  assert.equal(h.run('landscapeForced'), true);
+  h.run("navigate('inicio')");
+  assert.equal(h.run('landscapeForced'), false, 'leaving the screen releases the orientation');
+  assert.equal(rotate.getAttribute('aria-pressed'), 'false');
+});
+
