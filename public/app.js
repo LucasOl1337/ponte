@@ -8,6 +8,9 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const storageKey = 'ponte-pair-token';
+// Kept equal to package.json. When the PC reports a different version the page
+// reloads once, so a phone left open never runs stale code after an update.
+const UI_VERSION = '0.1.0-alpha.5';
 let token = '';
 let state = null;
 let connected = false;
@@ -252,6 +255,11 @@ async function pollState() {
     const nextState = await response.json();
     if (requestToken !== token) return;
     state = nextState;
+    if (state.version && state.version !== UI_VERSION && typeof location.reload === 'function') {
+      let guard = '';
+      try { guard = sessionStorage.getItem('ponte-reloaded-for') || ''; } catch {}
+      if (guard !== state.version) { try { sessionStorage.setItem('ponte-reloaded-for', state.version); } catch {} location.reload(); return; }
+    }
     showApp();
     setConnection(true);
     renderState();

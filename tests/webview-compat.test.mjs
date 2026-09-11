@@ -10,3 +10,11 @@ test('public scripts avoid post-Chrome-83 APIs', async () => {
   for (const pattern of banned) assert.ok(!pattern.test(source), `${name} uses banned ${pattern}`);
  }
 });
+
+test('the interface version constant matches package.json so stale phones reload', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const match = /const UI_VERSION = '([^']+)'/.exec(app);
+  assert.ok(match, 'UI_VERSION declared');
+  assert.equal(match[1], pkg.version);
+});

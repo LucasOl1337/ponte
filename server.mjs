@@ -17,6 +17,8 @@ import { message, publicErrorParameters, requestLocale } from './backend/i18n.mj
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+let uiVersion = 'dev';
+try { uiVersion = String(JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8')).version || 'dev'); } catch {}
 const staticTypes = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json',
@@ -201,7 +203,7 @@ export async function createApp(options = {}) {
       // Pairing links may be opened from a different site. Public navigation
       // is allowed; cross-site requests to the private API are still rejected.
       if (pathname.startsWith('/api/') && req.headers['sec-fetch-site'] === 'cross-site') throw new ApiError(403, 'CROSS_SITE_NOT_ALLOWED');
-      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true }); return; }
+      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true, version: uiVersion }); return; }
       if (!pathname.startsWith('/api/')) { await staticFile(req, res, pathname); return; }
       const provided = req.headers.authorization;
       const candidate = Buffer.from(typeof provided === 'string' && provided.startsWith('Bearer ') ? provided.slice(7) : '');
@@ -209,6 +211,7 @@ export async function createApp(options = {}) {
       if (pathname === '/api/state' && req.method === 'GET') {
         const state = await limits.only('state', 2, () => desktop.getState({ locale }));
         if (state?.capabilities) state.capabilities = { ...state.capabilities, stt: await transcriber.available() };
+        if (state && typeof state === 'object') state.version = uiVersion;
         json(res, 200, state); return;
       }
       // Dictation audio is transcribed on the PC and discarded; only the text is
