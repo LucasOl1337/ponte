@@ -1821,4 +1821,12 @@ else {
   autoPair().then(ok => { if (ok && !connected) { $('#pair-error').hidden = true; enterApp('tela'); toast(t("Conectado pela sua rede Tailscale.")); } });
 }
 setInterval(pollState,4000);
-if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// No service worker: a live remote gains nothing from an offline cache and a
+// stale one only pinned old code. Register the kill-switch sw once to evict any
+// worker a previous build left behind, then rely on the network from then on.
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.getRegistrations?.().then(regs => {
+    if (regs && regs.length) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }).catch(() => {});
+  try { caches?.keys?.().then(keys => keys.filter(key => key.startsWith('ponte-static-')).forEach(key => caches.delete(key))); } catch {}
+}
