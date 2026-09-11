@@ -104,12 +104,12 @@ export const messages = {
     "pt": "Parâmetro repetido."
   },
   "INVALID_FRAME_RATE": {
-    "en": "Frame rate must be between 1 and 10 frames per second.",
-    "pt": "A taxa deve estar entre 1 e 10 quadros por segundo."
+    "en": "Frame rate must be between 1 and 20 frames per second.",
+    "pt": "A taxa deve estar entre 1 e 20 quadros por segundo."
   },
   "INVALID_SCALE": {
-    "en": "Scale must be between 0.2 and 0.65.",
-    "pt": "A escala deve estar entre 0,2 e 0,65."
+    "en": "Scale must be between 0.2 and 1.",
+    "pt": "A escala deve estar entre 0,2 e 1."
   },
   "INVALID_MONITOR": {
     "en": "Invalid monitor.",
@@ -266,6 +266,46 @@ export const messages = {
   "INVALID_POWER_STATE": {
     "en": "Power state must be either on or off.",
     "pt": "O estado de energia deve ser ligado ou desligado."
+  },
+  "STT_UNAVAILABLE": {
+    "en": "Speech recognition is unavailable on the PC. Start Sussurro or OmniVoice Studio.",
+    "pt": "Reconhecimento de voz indisponível no PC. Abra o Sussurro ou o OmniVoice Studio."
+  },
+  "STT_FAILED": {
+    "en": "The PC could not transcribe this audio.",
+    "pt": "O PC não conseguiu transcrever este áudio."
+  },
+  "STT_EMPTY": {
+    "en": "No speech was recognized. Try again closer to the microphone.",
+    "pt": "Nenhuma fala reconhecida. Tente de novo mais perto do microfone."
+  },
+  "INVALID_PRESET": {
+    "en": "Unknown light preset.",
+    "pt": "Preset de luzes desconhecido."
+  },
+  "INVALID_PASSWORD": {
+    "en": "Send the unlock password as text with 1 to 256 characters.",
+    "pt": "Envie a senha de desbloqueio como texto de 1 a 256 caracteres."
+  },
+  "LOCK_UNAVAILABLE": {
+    "en": "The Omarchy lock screen is unavailable on the PC.",
+    "pt": "A tela de bloqueio do Omarchy está indisponível no PC."
+  },
+  "SESSION_NOT_LOCKED": {
+    "en": "The PC is not locked, so no password was typed.",
+    "pt": "O PC não está bloqueado, então nenhuma senha foi digitada."
+  },
+  "LIGHTS_UNAVAILABLE": {
+    "en": "The Magma lights controller is not installed on the PC.",
+    "pt": "O controlador de luzes Magma não está instalado no PC."
+  },
+  "INVALID_QUALITY": {
+    "en": "JPEG quality must be between 30 and 90.",
+    "pt": "A qualidade JPEG deve estar entre 30 e 90."
+  },
+  "AUTOPAIR_DENIED": {
+    "en": "This device is not on your tailnet, so it needs the pairing key.",
+    "pt": "Este aparelho não está no seu tailnet, então precisa da chave de pareamento."
   },
   "WOL_INSTRUCTIONS": {
     "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",

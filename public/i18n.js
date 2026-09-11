@@ -25,6 +25,11 @@
   "Um só lugar.": "One place.",
   "Uma ponte para o seu computador. Navegue, troque de janela e envie sua voz de onde estiver.": "A bridge to your computer. Navigate, switch windows and send your voice from wherever you are.",
   "CONECTAR COM SEGURANÇA": "CONNECT SECURELY",
+  "SEM SENHA, PELO TAILSCALE": "NO PASSWORD, OVER TAILSCALE",
+  "Conectando ao seu PC pela rede Tailscale…": "Connecting to your PC over Tailscale…",
+  "Não achei seu PC. Confira que os dois estão no mesmo Tailscale e que o PC está ligado.": "Couldn't find your PC. Check that both are on the same Tailscale and the PC is on.",
+  "Nada de chave nem senha. Estando os dois no mesmo Tailscale e o PC acordado, o app entra sozinho.": "No key, no password. With both on the same Tailscale and the PC awake, the app connects on its own.",
+  "Tentar de novo": "Try again",
   "Chave de pareamento": "Pairing key",
   "Cole a chave gerada no PC": "Paste the key from your PC",
   "Conectar ao meu PC": "Connect to my PC",
@@ -79,7 +84,7 @@
   "Equilibrado": "Balanced",
   "Mais nítido": "Sharper",
   "Acompanhe seu computador": "Keep up with your computer",
-  "Escolha um monitor e inicie a transmissão.": "Choose a monitor and start streaming.",
+  "Toque para iniciar a transmissão.": "Tap to start streaming.",
   "Conectando ao monitor…": "Connecting to the monitor…",
   "Monitor do PC": "PC monitor",
   "Pronto para iniciar": "Ready to start",
@@ -341,7 +346,7 @@
   "Focar e ver no monitor": "Focus and view on monitor",
   "Nenhuma janela de terminal aberta.": "No terminal windows are open.",
   "Conectado à sessão de texto.": "Connected to the text session.",
-  "Crie uma sessão para começar. Digitar e executar são ações separadas.": "Create a session to begin. Typing and executing are separate actions.",
+  "Crie uma sessão para começar.": "Create a session to begin.",
   "Instale tmux no PC para usar sessões de texto.": "Install tmux on the PC to use text sessions.",
   "Encerrar esta sessão?": "Close this session?",
   "Os processos neste terminal serão encerrados. Esta ação não pode ser desfeita.": "Processes in this terminal will end. This cannot be undone.",
@@ -385,7 +390,108 @@
   "Monitor ligado.": "Monitor turned on.",
   "Monitor desligado.": "Monitor turned off.",
   "Wake-on-LAN": "Wake-on-LAN",
-  "MAC da Ethernet": "Ethernet MAC"
+  "MAC da Ethernet": "Ethernet MAC",
+  "Ditar um comando": "Dictate a command",
+  "Enviar digita o comando e executa. Toque num comando anterior para reusar. Evite senhas por aqui.": "Send types the command and runs it. Tap a past command to reuse it. Avoid passwords here.",
+  "Escreva um comando…": "Write a command…",
+  "Digite aqui: vai direto pro PC…": "Type here: it goes straight to the PC…",
+  "Digitação indisponível neste PC.": "Typing is unavailable on this PC.",
+  "O texto não entrou. Comece de novo.": "The text did not go through. Start over.",
+  "Enter": "Enter",
+  "Histórico e opções": "History and options",
+  "Novo comando": "New command",
+  "Novo": "New",
+  "O comando não entrou. Tente de novo.": "The command did not go through. Try again.",
+  "Só colar": "Paste only",
+  "Conectado pela sua rede Tailscale.": "Connected over your Tailscale network.",
+  "No mesmo Tailscale, o app entra sozinho. Precisando da chave, gere com ./ponte pair no PC. Ela fica só neste aparelho.": "On the same Tailscale, the app connects on its own. If you need the key, generate it with ./ponte pair on the PC. It stays on this device only.",
+  "Trocar de monitor": "Switch monitor",
+  "Forçar paisagem": "Force landscape",
+  "Soltar orientação": "Release orientation",
+  "Só um monitor disponível.": "Only one monitor is available.",
+  "Monitor {name}": "Monitor {name}",
+  "Este navegador não permite girar a tela.": "This browser cannot rotate the screen.",
+  "Abrir tela": "Open screen",
+  "Digitar no PC": "Type on the PC",
+  "TELA": "SCREEN",
+  "Tela do PC. Toque clica, toque longo é botão direito ou arrasta, pinça amplia, dois dedos rolam.": "PC screen. Tap clicks, long-press right-clicks or drags, pinch zooms, two fingers scroll.",
+  "Toque clica, toque longo é botão direito ou arrasta, pinça amplia, dois dedos rolam. Ao tocar num campo de texto, o teclado do celular aparece.": "Tap clicks, long-press right-clicks or drags, pinch zooms, two fingers scroll. Tapping a text field brings up the phone keyboard.",
+  "A senha é digitada no PC como se fosse no teclado e não fica salva no celular.": "The password is typed on the PC as if on its keyboard and is never saved on the phone.",
+  "Apagar luzes": "Lights off",
+  "Arrastando · solte para largar": "Dragging · lift to drop",
+  "Aurora": "Aurora",
+  "Bloquear": "Lock",
+  "Bloqueio da sessão": "Session lock",
+  "Bloqueio do Omarchy indisponível neste PC.": "The Omarchy lock is unavailable on this PC.",
+  "Brasa": "Ember",
+  "Carregando luzes…": "Loading lights…",
+  "Crie ou escolha uma sessão antes de falar.": "Create or choose a session before speaking.",
+  "Desbloquear": "Unlock",
+  "Desbloquear o PC?": "Unlock the PC?",
+  "Desligar todos": "All off",
+  "Digitar senha e desbloquear": "Type password and unlock",
+  "Ditado por voz": "Voice dictation",
+  "Ditar para o PC": "Dictate to the PC",
+  "Enviar": "Send",
+  "Escreva aqui, Enter envia…": "Write here, Enter sends…",
+  "Estado das luzes indisponível.": "Light status unavailable.",
+  "Estado do bloqueio desconhecido.": "Lock state unknown.",
+  "Executar com Enter": "Run with Enter",
+  "Falar no terminal": "Speak to terminal",
+  "Fechar": "Close",
+  "Floresta": "Forest",
+  "Gravando… toque de novo para enviar.": "Recording… tap again to send.",
+  "Lava": "Lava",
+  "Leve · até 8 quadros/s": "Light · up to 8 fps",
+  "Ligar todos": "All on",
+  "Lua": "Moon",
+  "Luzes RGB": "RGB lights",
+  "Luzes acesas no preset {preset}.": "Lights on with the {preset} preset.",
+  "Luzes apagadas.": "Lights off.",
+  "Luzes apagadas. Toque em um preset ou em Restaurar.": "Lights are off. Tap a preset or Restore.",
+  "Luzes no preset {preset}.": "Lights set to {preset}.",
+  "Luzes restauradas.": "Lights restored.",
+  "Monitor e qualidade": "Monitor and quality",
+  "Nítido · até 15 quadros/s": "Sharp · up to 15 fps",
+  "Oceano": "Ocean",
+  "PC bloqueado.": "PC locked.",
+  "PC bloqueado. Desbloqueie digitando a senha por aqui.": "PC locked. Unlock by typing the password from here.",
+  "PC desbloqueado.": "PC unlocked.",
+  "Para acordar depois, use Wake-on-LAN no mesmo Wi-Fi ou o botão do gabinete.": "To wake it later, use Wake-on-LAN on the same Wi-Fi or the case button.",
+  "Parar e enviar": "Stop and send",
+  "Permita o microfone…": "Allow the microphone…",
+  "Programas abertos serão fechados. O Ponte volta quando o PC terminar de reiniciar.": "Open programs will close. Ponte returns when the PC finishes restarting.",
+  "Reconhecimento de voz indisponível no PC. Abra o Sussurro ou o OmniVoice Studio.": "Speech recognition is unavailable on the PC. Start Sussurro or OmniVoice Studio.",
+  "Reiniciando o PC…": "Restarting the PC…",
+  "Reiniciar": "Restart",
+  "Reiniciar agora": "Restart now",
+  "Reiniciar o computador?": "Restart the computer?",
+  "Restaurar luzes": "Restore lights",
+  "SESSÃO": "SESSION",
+  "Sair da tela": "Leave screen",
+  "Senha digitada no PC.": "Password typed on the PC.",
+  "Senha do PC": "PC password",
+  "Sessão": "Session",
+  "Suspendendo o PC…": "Suspending the PC…",
+  "Suspender": "Suspend",
+  "Suspender agora": "Suspend now",
+  "Suspender o computador?": "Suspend the computer?",
+  "Tela do PC. Um dedo move o cursor, toque clica, dois dedos rolam, pinça amplia.": "PC screen. One finger moves the pointer, tap clicks, two fingers scroll, pinch zooms.",
+  "Telinha apagada": "Cooler screen off",
+  "Telinha do cooler apagada.": "Cooler screen turned off.",
+  "Telinha do cooler ligada.": "Cooler screen turned on.",
+  "Telinha ligada": "Cooler screen on",
+  "Texto digitado e Enter no PC.": "Text typed and Enter pressed on the PC.",
+  "Todos os monitores desligados.": "All monitors turned off.",
+  "Todos os monitores ligados.": "All monitors turned on.",
+  "Trackpad": "Trackpad",
+  "Transcrevendo…": "Transcribing…",
+  "Um dedo move o cursor, toque clica, dois dedos rolam, toque longo arrasta, pinça amplia.": "One finger moves the pointer, tap clicks, two fingers scroll, long-press drags, pinch zooms.",
+  "Verificando bloqueio…": "Checking lock…",
+  "Você disse: {text}": "You said: {text}",
+  "ativo na placa de rede": "enabled on the network card",
+  "desativado na placa de rede": "disabled on the network card",
+  "estado desconhecido": "unknown state"
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
@@ -466,12 +572,12 @@
     "pt": "Parâmetro repetido."
   },
   "INVALID_FRAME_RATE": {
-    "en": "Frame rate must be between 1 and 10 frames per second.",
-    "pt": "A taxa deve estar entre 1 e 10 quadros por segundo."
+    "en": "Frame rate must be between 1 and 20 frames per second.",
+    "pt": "A taxa deve estar entre 1 e 20 quadros por segundo."
   },
   "INVALID_SCALE": {
-    "en": "Scale must be between 0.2 and 0.65.",
-    "pt": "A escala deve estar entre 0,2 e 0,65."
+    "en": "Scale must be between 0.2 and 1.",
+    "pt": "A escala deve estar entre 0,2 e 1."
   },
   "INVALID_MONITOR": {
     "en": "Invalid monitor.",
@@ -720,6 +826,46 @@
   "INVALID_POWER_STATE": {
     "en": "Power state must be either on or off.",
     "pt": "O estado de energia deve ser ligado ou desligado."
+  },
+  "STT_UNAVAILABLE": {
+    "en": "Speech recognition is unavailable on the PC. Start Sussurro or OmniVoice Studio.",
+    "pt": "Reconhecimento de voz indisponível no PC. Abra o Sussurro ou o OmniVoice Studio."
+  },
+  "STT_FAILED": {
+    "en": "The PC could not transcribe this audio.",
+    "pt": "O PC não conseguiu transcrever este áudio."
+  },
+  "STT_EMPTY": {
+    "en": "No speech was recognized. Try again closer to the microphone.",
+    "pt": "Nenhuma fala reconhecida. Tente de novo mais perto do microfone."
+  },
+  "INVALID_PRESET": {
+    "en": "Unknown light preset.",
+    "pt": "Preset de luzes desconhecido."
+  },
+  "INVALID_PASSWORD": {
+    "en": "Send the unlock password as text with 1 to 256 characters.",
+    "pt": "Envie a senha de desbloqueio como texto de 1 a 256 caracteres."
+  },
+  "LOCK_UNAVAILABLE": {
+    "en": "The Omarchy lock screen is unavailable on the PC.",
+    "pt": "A tela de bloqueio do Omarchy está indisponível no PC."
+  },
+  "SESSION_NOT_LOCKED": {
+    "en": "The PC is not locked, so no password was typed.",
+    "pt": "O PC não está bloqueado, então nenhuma senha foi digitada."
+  },
+  "LIGHTS_UNAVAILABLE": {
+    "en": "The Magma lights controller is not installed on the PC.",
+    "pt": "O controlador de luzes Magma não está instalado no PC."
+  },
+  "INVALID_QUALITY": {
+    "en": "JPEG quality must be between 30 and 90.",
+    "pt": "A qualidade JPEG deve estar entre 30 e 90."
+  },
+  "AUTOPAIR_DENIED": {
+    "en": "This device is not on your tailnet, so it needs the pairing key.",
+    "pt": "Este aparelho não está no seu tailnet, então precisa da chave de pareamento."
   },
   "WOL_INSTRUCTIONS": {
     "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",

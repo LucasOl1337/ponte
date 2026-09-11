@@ -69,9 +69,14 @@ The Android build pins the exact public leaf certificate and reads no server pri
 ./ponte phone status
 ./ponte phone connect
 ./ponte phone view
+./ponte pc lock|unlock|sleep|wake|suspend|reboot|off
+./ponte pc monitors on|off [NAME]
+./ponte pc lights lava|brasa|oceano|aurora|floresta|lua|sleep|restore|reapply
 ```
 
 `phone` mirrors the Redmi over Tailscale with wireless ADB and scrcpy. The default address is `100.111.221.82:5555`. See [PC controls phone](pc-controls-phone.md).
+
+`pc` runs the same validated desktop actions the phone uses, from a local shell or over Tailscale SSH (`ssh user@<tailscale-ip> ./ponte pc suspend`). It needs no HTTP server or pairing. `unlock` reads the password from stdin (`echo -n 'pw' | ./ponte pc unlock`) and only types it while the Omarchy lock is up. Dictation and the keyboard raise are optional: set `PONTE_STT_URL` / `PONTE_SUSSURRO_SOCKET` to `''` to disable a provider, and note that the phone keyboard only rises automatically when fcitx5 runs on the PC.
 
 A stopped service is unavailable to the phone. Your PC must be awake, connected to Tailscale and running the graphical session. Returning to the Android app does not automatically restart a live stream that was paused when it went into the background.
 

@@ -1,30 +1,37 @@
 # Screen and terminals
 
-This revision makes the monitor the first page after pairing or reopening Ponte. Screen and Terminals each have a permanent bottom navigation button. Control opens the touchpad or keyboard beside the same monitor. The home icon opens the PC dashboard.
+Screen is the first page after pairing or reopening Ponte. It has one mode: the monitor fills the phone and you touch it like a phone. Terminals, Windows, Voice and Home each keep a bottom navigation button; Android's Back returns from Screen to Home.
 
-## Read a monitor
+## Read and control a monitor
 
-Choose a monitor once. Ponte remembers it along with your quality preference. Live view starts while the Screen page is visible and stops when you leave or background the app. A manual pause survives connection polling and backgrounding. Opening Screen again from another page starts live view.
+Choose the monitor and quality once on Home (the *Screen* card); Ponte remembers both. Live view starts while Screen is visible and stops when you leave or background the app. The *Sharp* profile (default) streams native pixels at up to 15 fps; *Balanced* and *Light* downscale to save bandwidth.
 
-Rotate your phone and tap fullscreen to give the monitor more room. Hide controls to use the full height; the floating Controls button brings them back. Pinch to zoom, then drag to read another area. After you zoom, Ponte tells the PC the visible monitor rectangle (x, y, w, h) and captures only that region at scale 1 with `grim -g`. The live JPEG is that crop, not a stretched full-frame image. Zooming back out returns to the whole monitor at the selected quality. The minus button reduces zoom. The 1:1 button requests a native-pixel crop that matches the preview (one monitor pixel per CSS pixel), displayed without letterboxing, and pan by dragging. Tapping 1:1 again returns to the whole monitor.
+Gestures on the image:
 
-**Freeze & read** still requests one JPEG at the monitor's original resolution, then opens it at 1:1. This helps when you want a still frame you can pan without changing the live crop. The timestamp identifies it as a still image. Use play to return to live view. Freeze is also available through the camera button in fullscreen.
+| Gesture | What happens on the PC |
+| --- | --- |
+| Tap | Left click at that monitor pixel |
+| Long-press, then lift | Right click |
+| Long-press, then move | Drag with the left button held (move a window, select text); lifting releases |
+| Pinch | Zoom, continuous and centred on your fingers |
+| One finger while zoomed | Pan the view |
+| Two fingers together | Scroll the PC (mouse wheel) |
 
-Live profiles remain capped at 10 fps. Full-frame live view still uses scale 0.50 or 0.65. A zoomed region is captured at scale 1 without raising the frame-size cap (8 MiB) or the fps ceiling. A snapshot does not increase those limits. Full-resolution screenshots are bounded to 12 MiB and an eight-second capture timeout.
+Zoom is a CSS transform on the phone, like Chrome Remote Desktop. The whole frame is always streamed and never re-cropped mid-gesture, so pinching is smooth and the *Sharp* profile stays crisp up to one monitor pixel per screen pixel. There is no pause, freeze, 1:1 or fullscreen button anymore; the floating buttons beside the mic are **switch monitor** (cycles the monitors in `/api/state`) and **rotate** (forces landscape, hides the system and app bars so the monitor runs edge to edge; tap again to release).
 
-## Control while watching
+### The phone keyboard
 
-Use **View**, **Direct touch**, **Touchpad** and **Keyboard** directly beneath the monitor. View gives the image more room. Direct touch outlines the monitor, shows a badge, and treats the image as the pointing surface: a tap is a left click at the matching monitor pixel (including the current zoom and pan), a long press is a right click, one-finger drag pans the image, and two fingers pinch. The help text reads “tap = click, long-press = right click, drag pans the image, pinch zooms.” The first time Direct touch is selected, a short toast repeats that a tap now clicks the PC. Touchpad keeps a live preview above the original pad in portrait, or beside it on a sideways phone. Keyboard keeps the image visible above or beside the text field, including when the Android keyboard reduces the available height. These modes are also available inside fullscreen.
+Tap a text field on the PC and the phone keyboard rises by itself. After each tap-click the app asks `GET /api/textinput`; the server reads fcitx5's input contexts over DBus and answers `focused: true` only while an enabled text field has focus (a terminal counts; a dialog with only buttons does not). A hidden input then takes focus, Android shows its keyboard, and every edit is forwarded live: typed characters as `keyboard.text`, deletions and autocorrect revisions as Backspace plus the replacement, the send key as Enter. Tapping elsewhere on the screen keeps the keyboard open; it closes on Back, or when the PC field loses focus. While the keyboard is open the monitor fills the area above it and the app navigation steps aside.
 
-The same stream continues across mode changes. A manual pause stays paused, with the still-image timestamp visible. The monitor capture includes the PC cursor. Monitor and quality choices persist. Pan and pinch on the image change which region you see; they do not move the PC pointer unless Direct touch is active. The separate touchpad still moves the pointer: one finger moves or taps, two fingers scroll or right-click, and Drag holds the left mouse button until Release. Hiding the input controls clears pending movement and releases a drag, including a press whose response arrives late.
+This depends on fcitx5 running on the PC. Without it, `/api/textinput` reports `available: false` and the keyboard does not rise; the Terminals page's text field remains the way to type.
 
-Keyboard text goes to the PC's focused window shown above the field. **Send text** sends the draft; Enter remains a separate action. The shortcuts scroll horizontally on narrow screens. Changing mode preserves unsent text.
+### Dictation
 
-<img src="assets/live-controls-portrait.png" width="300" alt="Live monitor above the original touchpad in portrait">
+The mic button records until you tap it again, sends the audio to the PC, and types the transcript into whatever field has focus there, then presses Enter. On Terminals, **Speak to terminal** does the same into the selected session, with a *Run with Enter* checkbox. Audio is transcribed and discarded. The server prefers the Sussurro IPC socket (`$XDG_RUNTIME_DIR/sussurro.sock`, faster-whisper on the GPU) and falls back to an OpenAI-compatible endpoint (`PONTE_STT_URL`, OmniVoice Studio's `/v1/audio/transcriptions` by default). `PONTE_STT_LANGUAGE` sets the language hint (default `pt`).
 
-![Monitor beside the touchpad in landscape fullscreen](assets/live-controls-landscape.png)
+<p><img src="assets/screen-single-mode.png" width="24%" alt="Screen page in portrait"> <img src="assets/screen-keyboard.png" width="24%" alt="Screen page with the phone keyboard raised"> <img src="assets/screen-landscape.png" width="48%" alt="Forced landscape"></p>
 
-These are browser captures with a synthetic monitor. Browser checks cover pointer movement, taps, two-finger scrolling, uninterrupted streaming, keyboard viewport changes, explicit text sending, fullscreen input, draft preservation and releasing a delayed drag. Backend tests cover valid live regions, clamping, full-frame fallback and absolute clicks through a synthetic desktop adapter. Frontend tests cover touch-to-pixel mapping with zoom and pan, a 1:1 native-pixel crop matching the preview, Direct touch versus Touchpad, Direct touch chrome (badge, help text, one-time hint), and live region updates. The latest combined layout still needs its physical Redmi keyboard check.
+These are Android 11 emulator captures with the streamed desktop pixelated. Browser checks cover tap-to-pixel mapping under zoom and pan, taps versus drags versus holds, keystroke forwarding (insert, delete, autocorrect replacement, Enter), monitor cycling, forced landscape release when leaving the page, and the continuous zoom never touching the stream. Backend tests cover `mouse.moveTo`, the text-input probe and the dictation routes.
 
 ## Work in a terminal
 
@@ -33,6 +40,10 @@ Install `tmux` on the PC, open Terminals and choose **New session**. Merely open
 1. Type into the phone's text field and choose **Type text** to send it to the selected session.
 2. Review it in the terminal output. Use the arrow keys and Backspace to edit the shell line.
 3. Press **Enter** to execute. Ctrl+C interrupts the selected session's foreground command.
+
+Or skip typing: **Speak to terminal** records, transcribes on the PC and types the result into this session, pressing Enter unless *Run with Enter* is unchecked.
+
+<img src="assets/terminal-dictation.png" width="300" alt="Terminals page with Speak to terminal and Run with Enter">
 
 The terminal starts at 40 columns for phone readability. Choose 80 or 120 columns for wider output and scroll sideways when needed. Pause output while selecting or reading text. Unsent phone drafts remain when you switch sessions or pages during this app visit; they are not saved across a WebView reload.
 
@@ -46,7 +57,7 @@ Closing the phone app leaves sessions available. Stopping or restarting the Pont
 
 The bottom of Terminals lists terminal windows already open on the PC. **Focus and view on monitor** explicitly focuses that window and opens its monitor in Screen. It does not import its shell into Ponte's text sessions.
 
-The general Control keyboard still types into the PC's currently focused window, identified above the text field. Dedicated terminal input uses an exact session and pane, independent of desktop focus.
+The phone keyboard on Screen types into the PC's currently focused window. Dedicated terminal input uses an exact session and pane, independent of desktop focus.
 
 ## Verification for this revision
 

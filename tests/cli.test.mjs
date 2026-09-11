@@ -248,3 +248,14 @@ test('portable start.sh reads the generated private config and serves health onl
   child.kill('SIGTERM'); assert.deepEqual(await exited, { code: 0, signal: null });
   await assert.rejects(readFile(f.log), error => error.code === 'ENOENT', 'no desktop/service commands should have run');
 });
+
+test('pc subcommand shows help, rejects unknown commands, and requires a password on stdin for unlock', async t => {
+  const f = await fixture(t);
+  const help = await f.cli(['pc', '--help']);
+  assert.match(help.stdout, /ponte pc <lock\|unlock/);
+  await assert.rejects(f.cli(['pc']), error => error.code === 2);
+  await assert.rejects(f.cli(['pc', 'definitely-not-a-command']), error => error.code === 2);
+  await assert.rejects(f.cli(['pc', 'monitors', 'sideways']), error => error.code === 2);
+  // unlock with no stdin exits 2 before any desktop command runs.
+  await assert.rejects(run('bash', ['-c', `printf '' | python3 ${JSON.stringify(path.join(root, 'ponte'))} pc unlock`], { env: f.env, timeout: 15000 }), error => error.code === 2);
+});

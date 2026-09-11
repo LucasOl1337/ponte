@@ -434,10 +434,31 @@ def phone_main(argv):
         phone_view(config_file, data, screen_off=args.screen_off)
 
 
+def pc_main(argv):
+    # SSH-friendly local control over Tailscale. Reuses the Node desktop actions
+    # (power, lock, unlock, monitors, RGB) validated by the server, so `ssh
+    # lol@<tailscale-ip> ponte pc <command>` needs no HTTP server or pairing.
+    helper = Path(__file__).resolve().parent / 'bin' / 'ponte-pc.mjs'
+    node = os.environ.get('PONTE_NODE', 'node')
+    if not argv or argv[0] in ('-h', '--help'):
+        print('Usage: ./ponte pc <lock|unlock|sleep|wake|suspend|reboot|off|monitors on|off [NAME]|lights NAME>')
+        print("unlock reads the password from stdin: echo -n 'pw' | ./ponte pc unlock")
+        if argv:
+            return
+        raise SystemExit(2)
+    try:
+        raise SystemExit(subprocess.call([node, str(helper), *argv]))
+    except FileNotFoundError:
+        raise ValueError('node was not found. Install Node.js 22+ or set PONTE_NODE.')
+
+
 def main():
     os.umask(0o077)
     if sys.argv[1:2] == ['phone']:
         phone_main(sys.argv[2:])
+        return
+    if sys.argv[1:2] == ['pc']:
+        pc_main(sys.argv[2:])
         return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'pair', 'serve', 'android-config'])

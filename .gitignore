@@ -14,3 +14,8 @@ dist/
 *.keystore
 __pycache__/
 *.pyc
+
+# Local dogfooding tools (embed machine-specific paths; not for distribution)
+bin/ponte-mock.mjs
+bin/ponte-sandbox.mjs
+.maestri/

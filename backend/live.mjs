@@ -13,12 +13,16 @@ function parseRegionPart(query, key) {
 }
 
 export function parseLiveOptions(query) {
-  const fields = ['monitor', 'fps', 'scale', 'x', 'y', 'w', 'h'];
+  const fields = ['monitor', 'fps', 'scale', 'q', 'x', 'y', 'w', 'h'];
   for (const key of fields) if (query.getAll(key).length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
   const fps = query.has('fps') ? Number(query.get('fps')) : 10;
   const scale = query.has('scale') ? Number(query.get('scale')) : 0.5;
-  if (!Number.isInteger(fps) || fps < 1 || fps > 10) throw new ApiError(400, 'INVALID_FRAME_RATE');
-  if (!Number.isFinite(scale) || scale < 0.2 || scale > 0.65) throw new ApiError(400, 'INVALID_SCALE');
+  const quality = query.has('q') ? Number(query.get('q')) : 65;
+  if (!Number.isInteger(fps) || fps < 1 || fps > 20) throw new ApiError(400, 'INVALID_FRAME_RATE');
+  // grim scales on the CPU (~60 ms at 0.5), while a full-size JPEG takes ~10 ms:
+  // scale 1 with a lower quality is the fast profile, not the expensive one.
+  if (!Number.isFinite(scale) || scale < 0.2 || scale > 1) throw new ApiError(400, 'INVALID_SCALE');
+  if (!Number.isInteger(quality) || quality < 30 || quality > 90) throw new ApiError(400, 'INVALID_QUALITY');
   const monitor = query.get('monitor') ?? undefined;
   if (monitor !== undefined && (monitor.length < 1 || monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(monitor))) throw new ApiError(400, 'INVALID_MONITOR');
   const x = parseRegionPart(query, 'x');
@@ -32,7 +36,7 @@ export function parseLiveOptions(query) {
     if (x < 0 || y < 0 || w < 1 || h < 1) throw new ApiError(400, 'INVALID_REGION');
     region = { x, y, w, h };
   }
-  return { monitor, fps, scale, region };
+  return { monitor, fps, scale, quality, region };
 }
 
 function aborted() { return new ApiError(499, 'STREAM_ENDED'); }
@@ -82,7 +86,8 @@ export async function writeLiveFrame(res, bytes, signal, { timeout = 5000, now =
   const packet = Buffer.concat([header, bytes, Buffer.from('\r\n')]);
   if (res.write(packet)) return;
   // Never accumulate frames behind a slow receiver. Only resume after its
-  // current frame drains; disconnect a receiver that stalls for five seconds.
+  // current frame drains, so the stream self-throttles to the phone's real
+  // bandwidth; only a receiver that stalls past the timeout is disconnected.
   await new Promise((resolve, reject) => {
     const cleanup = () => { clearTimeout(timer); res.off('drain', drained); res.off('close', closed); res.off('error', closed); signal.removeEventListener('abort', closed); };
     const drained = () => { cleanup(); resolve(); };
@@ -94,7 +99,9 @@ export async function writeLiveFrame(res, bytes, signal, { timeout = 5000, now =
   });
 }
 
-export function createLiveStreaming(desktop, { maxStreams = 3, maxCaptures = 2, slowClientTimeout = 5000 } = {}) {
+function peerCount(sessions, peer) { let n = 0; for (const s of sessions) if (s.peer === peer) n++; return n; }
+
+export function createLiveStreaming(desktop, { maxStreams = 4, maxPerPeer = 2, maxCaptures = 2, slowClientTimeout = 15000 } = {}) {
   const sessions = new Set();
   const capture = createCaptureSlots(maxCaptures);
   let closing = false;
@@ -102,8 +109,27 @@ export function createLiveStreaming(desktop, { maxStreams = 3, maxCaptures = 2, 
   async function stream(req, res, query) {
     const options = parseLiveOptions(query);
     if (closing) throw new ApiError(503, 'SERVER_RESTARTING');
-    if (sessions.size >= maxStreams) throw new ApiError(429, 'STREAM_LIMIT_REACHED');
+    // Slots are scarce (each stream runs its own capture loop). A device that
+    // reconnects replaces its own earlier stream, so a half-open zombie never
+    // locks it out; and a preview open on the PC itself (loopback) yields to a
+    // remote phone. Never evict another remote device: two phones taking turns
+    // killing each other just look like "reconnecting" forever on both.
+    const peer = req.socket?.remoteAddress;
+    const isLoopback = address => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+    const oldestOfPeer = () => { for (const candidate of sessions) if (candidate.peer === peer) return candidate; return null; };
+    // No single peer may hold more than maxPerPeer slots: a device reopening
+    // its screen (or leaking tabs) replaces its own oldest instead of starving a
+    // second device out of the remaining slots.
+    while (peerCount(sessions, peer) >= maxPerPeer) { const own = oldestOfPeer(); if (!own) break; sessions.delete(own); own.abort(); }
+    while (sessions.size >= maxStreams) {
+      let victim = oldestOfPeer();
+      if (!victim) for (const candidate of sessions) if (isLoopback(candidate.peer)) { victim = candidate; break; }
+      if (!victim) throw new ApiError(429, 'STREAM_LIMIT_REACHED');
+      sessions.delete(victim);
+      victim.abort();
+    }
     const controller = new AbortController();
+    controller.peer = peer;
     const { signal } = controller;
     sessions.add(controller);
     const disconnect = () => controller.abort();
