@@ -6,10 +6,11 @@ import { makeDocument, makeWindow } from './helpers/dom.mjs';
 
 // Evaluate the production parser alone: no DOM initialization, network access,
 // actual monitor capture or microphone permission is involved in these tests.
-const [source, htmlSource, i18nSource] = await Promise.all([
+const [source, htmlSource, i18nSource, cssSource] = await Promise.all([
   readFile(new URL('../public/app.js', import.meta.url), 'utf8'),
   readFile(new URL('../public/index.html', import.meta.url), 'utf8'),
   readFile(new URL('../public/i18n.js', import.meta.url), 'utf8'),
+  readFile(new URL('../public/styles.css', import.meta.url), 'utf8'),
 ]);
 const parserSource = source.slice(source.indexOf('const MAX_FRAME_BYTES ='), source.indexOf('\nfunction screenIsVisible()'));
 const MAX_FRAME = 8 * 1024 * 1024;
@@ -393,3 +394,73 @@ test('Portuguese translation updates power controls, monitor states, and dialog'
   assert.match(h.el('#btn-poweroff').textContent, /Desligar computador/);
   assert.match(h.el('#poweroff-dialog').textContent, /Desligar o computador\?/);
 });
+
+test('Control page keeps the topbar and shares the single screen-stage container without duplication', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+
+  // Validate structural container uniqueness: exactly one screen-stage and screen-preview in DOM
+  const stages = h.all('#screen-stage');
+  const previews = h.all('#screen-preview');
+  assert.equal(stages.length, 1, 'must have exactly one #screen-stage without duplication');
+  assert.equal(previews.length, 1, 'must have exactly one #screen-preview without duplication');
+  assert.ok(h.el('.topbar'), 'topbar must exist in the document');
+
+  // Verify across all pages that topbar remains and stage is unique
+  for (const page of ['inicio', 'tela', 'controle', 'terminais', 'janelas', 'voz']) {
+    h.run(`navigate('${page}')`);
+    await flushTicks();
+    assert.equal(h.document.body.getAttribute('data-current-page'), page);
+    assert.ok(h.el('.topbar'), `topbar must be present when navigating to ${page}`);
+    assert.equal(h.all('#screen-stage').length, 1, `#screen-stage remains unique on ${page}`);
+  }
+
+  // Navigate back to Control: verifies modes, input panel, and toolbar adjacency
+  h.run("navigate('controle')");
+  await flushTicks();
+  assert.equal(h.document.body.getAttribute('data-current-page'), 'controle');
+  assert.equal(h.el('#screen-stage').getAttribute('data-input-mode'), 'mouse');
+  assert.equal(h.el('#remote-controls').hidden, false);
+  assert.equal(h.el('#control-panel-mouse').hidden, false);
+
+  // Toolbar is immediate sibling of screen-preview
+  const previewEl = h.el('#screen-preview');
+  const toolbarEl = h.el('.screen-toolbar');
+  assert.equal(previewEl.nextElementSibling, toolbarEl, 'screen-toolbar must immediately follow screen-preview');
+});
+
+test('Styles enforce single container structure, visible topbar on Control, and no gap between monitor and status', () => {
+  // Topbar is not hidden on Control page in general
+  assert.ok(!/body\[data-current-page=controle\]\s*\.topbar\s*\{\s*display:\s*none;?\s*\}/.test(cssSource), 'must not hide topbar on Control page');
+
+  // Short landscape media query hides topbar consistently for both tela and controle
+  assert.match(cssSource, /body\[data-current-page=tela\]\s*\.topbar,\s*body\[data-current-page=controle\]\s*\.topbar\s*\{\s*display:\s*none;?\s*\}/);
+
+  // Portrait screen-stage grid on Control uses auto for monitor row so preview hugs image height
+  assert.match(cssSource, /body\[data-current-page=controle\]\s*\.screen-stage\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+auto\s+minmax\(0,\s*1fr\)/);
+
+  // Landscape screen-stage grid places monitor and status in consecutive auto rows
+  assert.match(cssSource, /grid-template-areas:\s*"monitor modes"\s+"status input"\s+"\.\s+input"/);
+  assert.match(cssSource, /grid-template-rows:\s*auto\s+auto\s+minmax\(0,\s*1fr\)/);
+
+  // Fullscreen and expanded layout centers preview and toolbar without extra flex gap
+  assert.match(cssSource, /\.screen-stage:fullscreen:not\(\.zoomed\):not\(\.region-zoom\)\s*\.screen-preview/);
+});
+
+test('getFitWidth bounds preview dimensions cleanly across Control, portrait, landscape, and fullscreen', () => {
+  const h = powerUiHarness();
+  const mockImage = { naturalWidth: 1920, naturalHeight: 1080 };
+  const mockPreview = { clientWidth: 386, clientHeight: 217 };
+  const stage = h.el('#screen-stage');
+
+  // Control portrait: uses preview.clientWidth directly (no circular height feedback)
+  h.document.body.setAttribute('data-current-page', 'controle');
+  const widthPortrait = h.context.getFitWidth(mockImage, mockPreview, stage);
+  assert.equal(widthPortrait, 386);
+
+  // Standard (tela): uses clientHeight ratio bounding
+  h.document.body.setAttribute('data-current-page', 'tela');
+  const widthTela = h.context.getFitWidth(mockImage, mockPreview, stage);
+  assert.ok(widthTela > 0 && widthTela <= 386);
+});
+

@@ -702,6 +702,29 @@ function setScreenStatus(mode,message = '') {
   $('#live-note').classList.toggle('error',mode === 'reconnecting');
   updateScreenButtons();
 }
+function getFitWidth(image, preview, stage) {
+  const ratio = (image.naturalWidth || 16) / (image.naturalHeight || 9);
+  const isExpanded = stage.classList.contains('expanded') || !!document.fullscreenElement;
+  const isControl = document.body.dataset.currentPage === 'controle';
+  const isPortrait = window.matchMedia ? window.matchMedia('(orientation: portrait)').matches : window.innerHeight >= window.innerWidth;
+  if (isExpanded) {
+    const toolbar = stage.querySelector('.screen-toolbar');
+    const toolbarHeight = (toolbar && !stage.classList.contains('controls-hidden')) ? toolbar.offsetHeight : 0;
+    const vpHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const vpWidth = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+    const availHeight = Math.max(100, vpHeight - toolbarHeight);
+    return Math.min(vpWidth || 390, availHeight * ratio);
+  }
+  if (isControl) {
+    if (isPortrait) return preview.clientWidth || 390;
+    const toolbar = stage.querySelector('.screen-toolbar');
+    const toolbarHeight = toolbar ? toolbar.offsetHeight : 40;
+    const availHeight = Math.max(100, (stage.clientHeight || 300) - toolbarHeight);
+    return Math.min(preview.clientWidth || 390, availHeight * ratio);
+  }
+  const fitHeight = preview.clientHeight || 300;
+  return Math.min(preview.clientWidth || 390, fitHeight * ratio);
+}
 function applyScreenZoom() {
   const stage = $('#screen-stage'), preview = $('#screen-preview'), image = $('#screen-image');
   const regionFill = !!viewRegion && screenZoom <= 1 && screenMode !== 'snapshot';
@@ -713,7 +736,7 @@ function applyScreenZoom() {
     image.style.height = `${Math.round(preview.clientHeight || 220)}px`;
   } else {
     const ratio = (image.naturalWidth || 16) / (image.naturalHeight || 9);
-    const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
+    const fitWidth = getFitWidth(image, preview, stage);
     image.style.width = `${Math.round(fitWidth*screenZoom)}px`;
     image.style.height = `${Math.round(fitWidth/ratio*screenZoom)}px`;
   }
@@ -727,7 +750,7 @@ function setScreenZoom(value, point) {
   const previous = screenZoom;
   const image = $('#screen-image');
   const ratio = (image.naturalWidth || 16)/(image.naturalHeight || 9);
-  const fitWidth = Math.min(preview.clientWidth || 390,(preview.clientHeight || 300)*ratio);
+  const fitWidth = getFitWidth(image, preview, $('#screen-stage'));
   screenZoom = Math.max(1,Math.min(Math.max(4,(image.naturalWidth || fitWidth)/fitWidth),value));
   const x = point?.x ?? preview.clientWidth/2, y = point?.y ?? preview.clientHeight/2;
   const left = preview.scrollLeft || 0, top = preview.scrollTop || 0;
