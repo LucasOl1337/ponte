@@ -10,6 +10,8 @@ The `redmi-*.png` images are original device screenshots from the September 5, 2
 
 `screen-single-mode.png`, `screen-keyboard.png`, `screen-landscape.png`, `home-lights-session.png` and `terminal-dictation.png` are Android 11 emulator captures (`emulator-5554`) from the September 11, 2026 session, connected to the author's real PC. The streamed desktop area and the Ethernet MAC address were pixelated before publishing; nothing else was edited.
 
+`media/phone-*.png`, `media/ponte-promo-web.mp4` and `media/poster.jpg` are the 15 September 2026 showcase. They were recorded from a bench-local demo with a synthetic Hyprland/grim desktop, not the author's live session. The promo narration is the official OmniVoice profile. They are not physical-device captures. Physical Redmi evidence remains the `redmi-*.png` set.
+
 Ponte's code and UI assets are MIT licensed. Android build tools, Amazon Corretto, system packages and their respective licenses remain with their publishers. Build scripts download those tools separately with pinned checksums.
 
 ## Cover generation
