@@ -31,7 +31,9 @@
 
 @media(max-width:700px) and (orientation:portrait){.viewer-page .screen-stage:not(.zoomed):not(.expanded):not(:fullscreen) .screen-preview{height:calc((100vw - 26px)*.5625)}.viewer-page .screen-stage.zoomed:not(.expanded):not(:fullscreen) .screen-preview{height:clamp(245px,calc(100vh - 375px),650px);height:clamp(245px,calc(100dvh - 375px),650px)}}
 
-.terminal-page{padding-top:20px}.terminal-page .section-heading{margin-bottom:12px}.terminal-page .section-subtitle{margin-bottom:8px}.terminal-tools select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px}#terminal-output{height:clamp(140px,calc(100vh - 610px),340px);height:clamp(140px,calc(100dvh - 610px),340px);font-size:13px}.terminal-keys{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.terminal-keys .button{min-width:0;padding:8px 5px}.terminal-page .hint{font-size:11px}
+.terminal-page{padding-top:20px}.terminal-page .section-heading{margin-bottom:12px}.terminal-page .section-subtitle{margin-bottom:8px}.terminal-tools select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px}#terminal-output{height:clamp(96px,calc(100vh - 760px),200px);height:clamp(96px,calc(100dvh - 760px),200px);font-size:13px}.terminal-keys{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}.terminal-keys .button{min-width:0;padding:8px 5px}.terminal-page .hint{font-size:11px}
+body[data-current-page=terminais] .app-shell{padding-bottom:calc(148px + env(safe-area-inset-bottom,0px))}
+.terminal-page .terminal-keys{margin-bottom:10px}
 
 #hide-screen-controls,#show-screen-controls{display:none}.screen-stage:fullscreen #hide-screen-controls,.screen-stage.expanded #hide-screen-controls{display:inline-flex}.screen-stage:fullscreen.controls-hidden .screen-toolbar,.screen-stage.expanded.controls-hidden .screen-toolbar{display:none}.screen-stage:fullscreen.controls-hidden #show-screen-controls,.screen-stage.expanded.controls-hidden #show-screen-controls{display:flex;position:absolute;right:12px;bottom:12px;min-height:44px;padding:8px 12px;background:#202b1ce8;border:1px solid #5c7544;font-size:12px;z-index:2}
 /* The monitor and original input controls share one stage, including fullscreen. */
@@ -193,6 +195,7 @@ body[data-keyboard-open=true] .screen-toolbar > .icon-button { height: 32px; }
 .dictate-option{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);white-space:nowrap}
 .dictate-option input{width:20px;height:20px;accent-color:var(--lime)}
 #terminal-output{height:clamp(160px,32vh,340px)}
+@media(max-width:700px){#terminal-output{height:clamp(96px,calc(100vh - 760px),200px);height:clamp(96px,calc(100dvh - 760px),200px)}}
 .power-monitors-all{display:flex;gap:8px;margin:10px 0 18px}
 .power-monitors-all .button{flex:1}
 .lights-section,.session-section{margin-bottom:18px}
@@ -289,6 +292,7 @@ body[data-keyboard-open=true] .screen-toolbar > .icon-button { height: 32px; }
   .screen-settings-card .button.full{margin:4px 0 10px}
 }
 .screen-settings-card .screen-selectors{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+@media(max-width:700px){.screen-settings-card .screen-selectors{grid-template-columns:1fr}}
 .screen-settings-card .screen-selectors label>span{display:block;font-size:10px;font-weight:650;letter-spacing:1.4px;color:var(--muted);margin-bottom:6px}
 .screen-settings-card select{width:100%;min-height:44px;border:1px solid var(--border);border-radius:9px;background:#191d16;color:var(--text);padding:9px 12px;font-size:13px;margin:0}
 body[data-current-page=tela] .bottom-nav{backdrop-filter:none;background:#24291ff5}
