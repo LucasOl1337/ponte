@@ -15,6 +15,7 @@ import { createTailscaleIdentity, pairingRejection } from './backend/tailscale.m
 import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
 import { message, publicErrorParameters, requestLocale } from './backend/i18n.mjs';
+import { readNativeTls } from './backend/tls.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -144,6 +145,11 @@ export async function createApp(options = {}) {
   const publicDir = path.join(rootDir, 'public');
   const env = options.env || process.env;
   const settings = options.settings;
+  const nativeTls = options.nativeTls || await readNativeTls(
+    settings?.nativeTls?.certFile || env.OMARCHY_REMOTE_TLS_CERT,
+    settings?.nativeTls?.keyFile || env.OMARCHY_REMOTE_TLS_KEY,
+    publicDir,
+  );
   const initialized = await initializeToken(path.resolve(options.dataDir || settings?.dataDir || env.OMARCHY_REMOTE_DATA || defaultPaths(env).dataDir), publicDir, options.token);
   const tokenBytes = Buffer.from(initialized.token);
   const guard = createRequestGuard(options.trustedHosts || settings?.trustedHosts || (env.OMARCHY_REMOTE_TRUSTED_HOSTS || '').split(',').filter(Boolean));
@@ -312,17 +318,6 @@ export async function createApp(options = {}) {
     }
   };
   const server = http.createServer(handleRequest);
-  let nativeTls = options.nativeTls;
-  const certFile = settings?.nativeTls?.certFile || env.OMARCHY_REMOTE_TLS_CERT;
-  const keyFile = settings?.nativeTls?.keyFile || env.OMARCHY_REMOTE_TLS_KEY;
-  if (!nativeTls && (certFile || keyFile)) {
-    if (!certFile || !keyFile) throw new Error('Native TLS requires both certificate and key.');
-    const [certPath, keyPath, publicPath] = await Promise.all([
-      realpath(certFile), realpath(keyFile), realpath(publicDir),
-    ]);
-    if (inside(publicPath, certPath) || inside(publicPath, keyPath)) throw new Error('TLS files must be outside public/.');
-    nativeTls = { cert: await readFile(certPath), key: await readFile(keyPath) };
-  }
   // The Android app trusts this PC's dedicated certificate. No public CA,
   // certificate-warning exception or tailnet account login is needed here.
   const nativeServer = nativeTls ? https.createServer({ ...nativeTls, minVersion: 'TLSv1.2', handshakeTimeout: 5000 }, (req, res) => { req.ponteNative = true; handleRequest(req, res); }) : null;

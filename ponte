@@ -173,16 +173,19 @@ def install(config_file, config_home):
     units = config_home / 'systemd/user'
     units.mkdir(parents=True, exist_ok=True)
     input_unit = '\n'.join([
-        '# Managed by Ponte', '[Unit]', 'Description=Ponte private input daemon', f'PartOf={SERVICE}', '', '[Service]', 'Type=simple',
+        '# Managed by Ponte', '[Unit]', 'Description=Ponte private input daemon', 'PartOf=graphical-session.target',
+        'StartLimitIntervalSec=60', 'StartLimitBurst=3', '', '[Service]', 'Type=simple',
         'UMask=0077', 'ExecStart=' + quoted_unit(commands['ydotoold']) + ' -p %t/ponte-input.sock -P 0600',
         'Restart=on-failure', 'RestartSec=3', 'TimeoutStopSec=5', '',
     ])
     unit = '\n'.join([
         '# Managed by Ponte', '[Unit]', 'Description=Ponte remote desktop control', 'After=graphical-session.target', 'PartOf=graphical-session.target',
-        'Wants=ponte-input.service', 'After=ponte-input.service', '', '[Service]', 'Type=simple', 'UMask=0077',
+        'Wants=ponte-input.service', 'After=ponte-input.service',
+        'StartLimitIntervalSec=60', 'StartLimitBurst=3', '', '[Service]', 'Type=simple', 'UMask=0077',
         'Environment=' + quoted_unit('PONTE_CONFIG=' + str(config_file)),
         'Environment=' + quoted_unit('PONTE_NODE=' + commands['node']),
         'Environment=' + quoted_unit('PATH=' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')),
+        'ExecCondition=' + quoted_unit(commands['node']) + ' ' + quoted_unit(ROOT / 'bin/check-config.mjs'),
         'ExecStart=' + quoted_unit(commands['bash']) + ' ' + quoted_unit(ROOT / 'start.sh'),
         'Restart=on-failure', 'RestartSec=3', 'TimeoutStopSec=20', '', '[Install]', 'WantedBy=graphical-session.target', '',
     ])
@@ -479,6 +482,8 @@ def main():
         uninstall(config_home)
     elif args.command in ['start', 'stop', 'restart', 'status']:
         run('systemctl', '--user', args.command, SERVICE)
+        if args.command == 'stop':
+            run('systemctl', '--user', 'stop', 'ponte-input.service')
     elif args.command == 'logs':
         run('journalctl', '--user', '-u', SERVICE, '-n', '40', '--no-pager')
     else:

@@ -55,6 +55,10 @@ Existing configuration is preserved on a repeated setup. `--local-only` creates 
 
 `install` writes user service units and explicitly enables and starts Ponte for the graphical session. It refuses to overwrite differing service definitions. Keep the checkout at its current path because those units reference it.
 
+Before starting the server, systemd checks the configuration and TLS certificate/key. Missing or invalid files skip startup without automatic retries. Restore those files or correct their configured paths, then run `./ponte start`. The check never generates replacement keys or disables TLS.
+
+Server restarts leave the input daemon running, so a server failure does not repeatedly disconnect the desktop's virtual keyboard. Both services stop with the graphical session; `./ponte stop` explicitly stops both. Other failures are limited to three starts within 60 seconds. After repairing a failure that reached this limit, run `systemctl --user reset-failed ponte-remote.service ponte-input.service` before starting again.
+
 Install `.work/Ponte.apk` on your own Android phone. Open it and paste or type the pairing key into the connection form once. Later launches remember the connection. The APK is personalized for your PC and must not be shared as a generic release.
 
 The Android build pins the exact public leaf certificate and reads no server private key. See [Android setup](../android/README.md) for toolchain requirements, build overrides and lifecycle details.

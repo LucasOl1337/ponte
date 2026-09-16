@@ -94,6 +94,12 @@ test('install resolves tools from PATH; uninstall only removes managed units and
   const content = await readFile(remote, 'utf8');
   assert.match(content, /^# Managed by Ponte/); assert.ok(content.includes(f.configFile)); assert.match(content, /TimeoutStopSec=20/);
   assert.ok((await readFile(input, 'utf8')).includes(path.join(f.bin, 'ydotoold')));
+  assert.doesNotMatch(await readFile(input, 'utf8'), /PartOf=ponte-remote\.service/);
+  for (const unit of [content, await readFile(input, 'utf8')]) {
+    assert.match(unit, /StartLimitIntervalSec=60/);
+    assert.match(unit, /StartLimitBurst=3/);
+  }
+  assert.match(content, /ExecCondition=.*check-config\.mjs/);
   await assert.rejects(f.cli(['uninstall'], { PONTE_TEST_FAIL_SYSTEMCTL: '1' }));
   assert.equal(await readFile(remote, 'utf8'), content, 'failed stop must preserve unit files');
   await f.cli(['uninstall']); assert.deepEqual(await readdir(units), []);
@@ -102,6 +108,47 @@ test('install resolves tools from PATH; uninstall only removes managed units and
   await writeFile(remote, '[Service]\nExecStart=/bin/false\n');
   await assert.rejects(f.cli(['uninstall']), error => /unmanaged/.test(error.stderr));
   assert.match(await readFile(remote, 'utf8'), /ExecStart/);
+});
+
+test('startup preflight rejects missing, malformed and mismatched TLS without modifying private state', async t => {
+  const f = await fixture(t); await f.cli(['setup']);
+  const config = JSON.parse(await readFile(f.configFile, 'utf8'));
+  const cert = await readFile(config.nativeTls.certFile);
+  const key = await readFile(config.nativeTls.keyFile);
+  const token = await readFile(path.join(f.dataDir, 'token'));
+  const check = () => run(process.execPath, [path.join(root, 'bin/check-config.mjs')], { env: f.env });
+  await check();
+  await rm(config.nativeTls.certFile);
+  await assert.rejects(check(), error => error.code === 1 && /startup blocked.*ENOENT/s.test(error.stderr));
+  await writeFile(config.nativeTls.certFile, 'not a certificate');
+  await assert.rejects(check(), error => error.code === 1 && /startup blocked/.test(error.stderr));
+  await writeFile(config.nativeTls.certFile, cert);
+  const other = await fixture(t); await other.cli(['setup']);
+  const otherConfig = JSON.parse(await readFile(other.configFile, 'utf8'));
+  await writeFile(config.nativeTls.keyFile, await readFile(otherConfig.nativeTls.keyFile));
+  await assert.rejects(check(), error => error.code === 1 && /startup blocked/.test(error.stderr));
+  await writeFile(config.nativeTls.keyFile, key);
+  await check();
+  assert.deepEqual(await readFile(path.join(f.dataDir, 'token')), token);
+});
+
+test('startup preflight supports local-only mode and rejects invalid or explicitly missing config', async t => {
+  const f = await fixture(t); await f.cli(['setup', '--local-only']);
+  const check = () => run(process.execPath, [path.join(root, 'bin/check-config.mjs')], { env: { ...f.env, PONTE_CONFIG: f.configFile } });
+  await check();
+  await writeFile(f.configFile, '{');
+  await assert.rejects(check(), error => error.code === 1 && /startup blocked/.test(error.stderr));
+  await rm(f.configFile);
+  await assert.rejects(check(), error => error.code === 1 && /startup blocked.*ENOENT/s.test(error.stderr));
+});
+
+test('explicit stop shuts down the server before the input daemon', async t => {
+  const f = await fixture(t);
+  await f.cli(['stop']);
+  assert.deepEqual((await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse), [
+    ['systemctl', '--user', 'stop', 'ponte-remote.service'],
+    ['systemctl', '--user', 'stop', 'ponte-input.service'],
+  ]);
 });
 
 test('configuration rejects public permissions, symlinks, relative paths and plaintext remote binds', async t => {
