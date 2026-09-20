@@ -151,6 +151,10 @@ export const messages = {
     "en": "Mouse and shortcuts require the ydotool service.",
     "pt": "Mouse e atalhos dependem do serviço ydotool ativo."
   },
+  "POINTER_INACCURATE": {
+    "en": "The last pointer placement missed: pointer acceleration is still scaling the virtual mouse.",
+    "pt": "O último posicionamento do ponteiro errou: a aceleração do mouse ainda está escalando o mouse virtual."
+  },
   "TEXT_UNAVAILABLE": {
     "en": "Text input is unavailable: wtype was not found.",
     "pt": "Envio de texto indisponível: wtype não encontrado."

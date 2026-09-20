@@ -119,6 +119,7 @@ function mappingContext() {
     globalThis.isFullMonitorRegion = isFullMonitorRegion;
     globalThis.liveStreamPath = liveStreamPath;
     globalThis.classifyScreenGesture = classifyScreenGesture;
+    globalThis.workspaceDropTargetIds = workspaceDropTargetIds;
     globalThis.scaleMonitorRegion = scaleMonitorRegion;
     globalThis.regionsClose = regionsClose;
     globalThis.nativePreviewRegion = nativePreviewRegion;
@@ -150,6 +151,7 @@ test('touch mapping converts zoom and pan into monitor pixels', () => {
   assert.equal(m.classifyScreenGesture({ pointerCount: 1, moved: false, durationMs: 500 }), 'longpress');
   assert.equal(m.classifyScreenGesture({ pointerCount: 1, moved: true, durationMs: 20 }), 'pan');
   assert.equal(m.classifyScreenGesture({ pointerCount: 2, moved: false, durationMs: 20 }), 'pinch');
+  assert.deepEqual(plain(m.workspaceDropTargetIds([{ id: 8 }, { id: 3 }, { id: -1 }, { id: 101 }], 7)), [1, 2, 3, 4, 5, 7, 8]);
   assert.equal(m.scaleMonitorRegion({ x: 100, y: 100, w: 800, h: 600 }, 4, null, 1920, 1080), null);
   assert.equal(m.regionsClose({ x: 10, y: 10, w: 100, h: 100 }, { x: 12, y: 11, w: 101, h: 99 }), true);
   const oneToOne = plain(m.nativePreviewRegion(390, 220, 1920, 1080, { x: 960, y: 540 }));
@@ -202,12 +204,13 @@ const powerFixture = {
   },
 };
 
-function powerUiHarness({ stored = { 'ponte-pair-token': 'synthetic-token' }, state = powerFixture } = {}) {
+function powerUiHarness({ stored = { 'ponte-pair-token': 'synthetic-token' }, state = powerFixture, actionResult = () => ({ ok: true }), textInput = {}, userAgent = 'Test browser' } = {}) {
   const document = makeDocument(htmlSource);
   const window = makeWindow();
   const saved = new Map(Object.entries(stored));
   const calls = [];
   let timer = 0;
+  const timers = new Map();
   const context = vm.createContext({
     document,
     window,
@@ -216,7 +219,7 @@ function powerUiHarness({ stored = { 'ponte-pair-token': 'synthetic-token' }, st
       setItem: (key, value) => saved.set(key, value),
       removeItem: key => saved.delete(key),
     },
-    navigator: { language: 'en', languages: ['en'], userAgent: 'Test browser' },
+    navigator: { language: 'en', languages: ['en'], userAgent },
     location: { hash: '#inicio', pathname: '/', search: '' },
     history: { replaceState() {} },
     CustomEvent: class {
@@ -235,14 +238,15 @@ function powerUiHarness({ stored = { 'ponte-pair-token': 'synthetic-token' }, st
     URL,
     Blob,
     performance,
-    setTimeout: () => ++timer,
-    clearTimeout() {},
+    setTimeout: (callback, delay = 0) => { const id = ++timer; timers.set(id, { callback, delay }); return id; },
+    clearTimeout: id => timers.delete(id),
     setInterval: () => ++timer,
     clearInterval() {},
     fetch: async (path, options = {}) => {
       calls.push({ path, options, body: options.body ? JSON.parse(options.body) : undefined });
       if (path === '/api/state') return { ok: true, json: async () => state };
-      if (path === '/api/action') return { ok: true, json: async () => ({ ok: true }) };
+      if (path === '/api/action') return { ok: true, json: async () => actionResult(options.body ? JSON.parse(options.body) : {}) };
+      if (path === '/api/textinput') return { ok: true, json: async () => typeof textInput === 'function' ? textInput() : textInput };
       return { ok: true, json: async () => ({}) };
     },
   });
@@ -257,6 +261,14 @@ function powerUiHarness({ stored = { 'ponte-pair-token': 'synthetic-token' }, st
     el: sel => document.querySelector(sel),
     all: sel => document.querySelectorAll(sel),
     run: src => vm.runInContext(src, context),
+    runTimer: async id => {
+      const entry = timers.get(id);
+      assert.ok(entry, `timer ${id} is scheduled`);
+      timers.delete(id);
+      await entry.callback();
+      await flushTicks();
+      return entry.delay;
+    },
   };
 }
 
@@ -394,7 +406,7 @@ test('Portuguese translation updates power controls, monitor states, and dialog'
   assert.match(h.el('#poweroff-dialog').textContent, /Desligar o computador\?/);
 });
 
-test('direct touch: a tap clicks the mapped monitor pixel, a drag never clicks, a hold right-clicks', async () => {
+test('direct touch: a tap clicks the mapped pixel, a held move starts a semantic drag, and a hold right-clicks', async () => {
   const h = powerUiHarness();
   await flushTicks();
   h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
@@ -402,23 +414,210 @@ test('direct touch: a tap clicks the mapped monitor pixel, a drag never clicks, 
   const evt = (type, id, x, y) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
   const actions = () => h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
   // Tap at the image centre -> left click at the monitor centre; no move requests.
+  h.run("screenMode='live'");
   preview.dispatchEvent(evt('pointerdown', 1, 195, 109.5));
   preview.dispatchEvent(evt('pointerup', 1, 195, 109.5));
   await flushTicks();
   assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 960, y: 540, button: 'left' }]);
   h.calls.length = 0;
-  // A drag (not zoomed) pans nothing and clicks nothing.
+  // A held move starts a captured drag and releases it, but never emits a click.
+  h.run("screenMode='live'");
   preview.dispatchEvent(evt('pointerdown', 2, 100, 100));
+  h.run('hold.held=true');
   preview.dispatchEvent(evt('pointermove', 2, 180, 150));
+  await flushTicks();
   preview.dispatchEvent(evt('pointerup', 2, 180, 150));
   await flushTicks();
-  assert.deepEqual(actions(), []);
+  assert.deepEqual(actions().map(item => item.type), ['mouse.dragStartAt', 'mouse.drag']);
+  assert.equal(actions()[1].pressed, false);
+  h.calls.length = 0;
   // A held press (no move) then lift -> right click at the press point.
+  h.run("screenMode='live'");
   preview.dispatchEvent(evt('pointerdown', 3, 39, 22));
   h.run('hold.held=true');
   preview.dispatchEvent(evt('pointerup', 3, 39, 22));
   await flushTicks();
   assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 192, y: 108, button: 'right' }]);
+});
+
+test('direct touch tolerates finger jitter and a deliberate one-finger move drags like a mouse', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
+  const preview = h.el('#screen-preview');
+  const evt = (type, id, x, y) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  const actions = () => h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
+
+  // A real fingertip rarely lifts at the exact down coordinate. This 15 px
+  // wobble is still a tap and must click once, not disappear as a fake pan.
+  h.run("screenMode='live'");
+  preview.dispatchEvent(evt('pointerdown', 31, 100, 100));
+  preview.dispatchEvent(evt('pointermove', 31, 112, 109));
+  preview.dispatchEvent(evt('pointerup', 31, 112, 109));
+  await flushTicks();
+  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 492, y: 493, button: 'left' }]);
+
+  h.calls.length = 0;
+  // At fitted 1×, a deliberate one-finger move should hold the left button so
+  // desktop text, list rows and sliders can be selected without a long press.
+  h.run("screenMode='live'");
+  preview.dispatchEvent(evt('pointerdown', 32, 100, 100));
+  preview.dispatchEvent(evt('pointermove', 32, 145, 100));
+  await flushTicks();
+  preview.dispatchEvent(evt('pointermove', 32, 175, 100));
+  await flushTicks();
+  preview.dispatchEvent(evt('pointerup', 32, 175, 100));
+  await flushTicks(30);
+  assert.deepEqual(actions().map(item => item.type), ['mouse.dragStartAt', 'mouse.moveTo', 'mouse.drag']);
+  assert.equal(actions().at(-1).pressed, false);
+});
+
+test('dragging a window onto the workspace shelf moves the captured window without switching view', async () => {
+  const state = { ...powerFixture, activeWindow: { address: '0xabc', workspace: { id: 1 } }, workspaces: [{ id: 1, name: '1', windows: 1 }, { id: 3, name: '3', windows: 0 }] };
+  const h = powerUiHarness({ state, actionResult: body => body.type === 'mouse.dragStartAt' ? { ok: true, window: { address: '0xabc', workspace: { id: 1 } } } : { ok: true } });
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
+  const preview = h.el('#screen-preview');
+  const evt = (type, id, x, y) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  h.run("screenMode='live'");
+  preview.dispatchEvent(evt('pointerdown', 9, 100, 70));
+  h.run('hold.held=true');
+  preview.dispatchEvent(evt('pointermove', 9, 125, 80));
+  await flushTicks();
+  const target = h.all('[data-drop-workspace]').find(item => item.dataset.dropWorkspace === '3');
+  assert.ok(target, 'workspace 3 is offered as a drop target');
+  target._left = 200; target._top = 160; target.clientWidth = 46; target.clientHeight = 46;
+  preview.dispatchEvent(evt('pointermove', 9, 220, 180));
+  preview.dispatchEvent(evt('pointerup', 9, 220, 180));
+  await flushTicks(30);
+  const actions = h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
+  assert.deepEqual(actions.map(item => item.type), ['mouse.dragStartAt', 'mouse.drag', 'window.moveToWorkspace']);
+  assert.deepEqual(actions.at(-1), { type: 'window.moveToWorkspace', address: '0xabc', id: 3 });
+  assert.equal(h.el('#workspace-drop-shelf').hidden, true);
+
+  h.calls.length = 0;
+  h.run("screenMode='live'");
+  preview.dispatchEvent(evt('pointerdown', 10, 100, 70));
+  h.run('hold.held=true');
+  preview.dispatchEvent(evt('pointermove', 10, 125, 80));
+  await flushTicks();
+  const cancelTarget = h.all('[data-drop-workspace]').find(item => item.dataset.dropWorkspace === '3');
+  cancelTarget._left = 200; cancelTarget._top = 160; cancelTarget.clientWidth = 46; cancelTarget.clientHeight = 46;
+  preview.dispatchEvent(evt('pointermove', 10, 220, 180));
+  preview.dispatchEvent(evt('pointercancel', 10, 220, 180));
+  await flushTicks(30);
+  const cancelled = h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
+  assert.deepEqual(cancelled.map(item => item.type), ['mouse.dragStartAt', 'mouse.drag'], 'pointer cancellation only releases input');
+});
+
+test('a tap on a frame that is not live never clicks: it brings the stream back and says so', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1';stopLive();liveWanted=false;screenMode='paused'");
+  const preview = h.el('#screen-preview');
+  const evt = (type, id, x, y) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  const actions = () => h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
+  h.calls.length = 0;
+  preview.dispatchEvent(evt('pointerdown', 1, 195, 109.5));
+  preview.dispatchEvent(evt('pointerup', 1, 195, 109.5));
+  await flushTicks();
+  assert.deepEqual(actions(), [], 'a still frame is not a click target');
+  assert.equal(h.run('liveWanted'), true);
+  assert.ok(h.run('!!liveSession'), 'the tap restarted the stream');
+  assert.match(h.el('#toast')?.textContent || h.document.body.textContent, /still|parada/i);
+  // Once frames flow again the same tap clicks and leaves a marker under the finger.
+  h.run("screenMode='live'");
+  preview.dispatchEvent(evt('pointerdown', 2, 195, 109.5));
+  preview.dispatchEvent(evt('pointerup', 2, 195, 109.5));
+  await flushTicks();
+  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 960, y: 540, button: 'left' }]);
+  const marker = h.el('#tap-marker');
+  assert.equal(marker.hidden, false);
+  assert.equal(marker.getAttribute('data-kind'), 'left');
+  assert.equal(marker.style.left, '195px');
+});
+
+test('a pinch survives the auto quality profile changing the frame resolution, and resets for another shape', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=672;$('#screen-image').naturalHeight=378;screenSourceSize='';$('#screen-image').dispatchEvent({type:'load'});");
+  assert.equal(h.run('screenScale'), 1);
+  assert.ok(h.run('screenMaxScale') >= 4, 'a light frame still allows 4x for precise taps');
+  h.run('zoomScreenAround(3, 100, 100)');
+  assert.equal(h.run('screenScale'), 3);
+  const pan = h.run('[screenPanX, screenPanY]');
+  // Auto quality climbs to native pixels: same monitor, sharper frame.
+  h.run("$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;$('#screen-image').dispatchEvent({type:'load'});");
+  assert.equal(h.run('screenScale'), 3, 'zoom kept across the resolution change');
+  assert.deepEqual(h.run('[screenPanX, screenPanY]'), pan, 'pan kept too');
+  // A different shape is another monitor: back to fitted 1x.
+  h.run("$('#screen-image').naturalWidth=2560;$('#screen-image').naturalHeight=1440;$('#screen-image').dispatchEvent({type:'load'});");
+  assert.equal(h.run('screenScale'), 3, 'same 16:9 shape from another size keeps zoom');
+  h.run("$('#screen-image').naturalWidth=3440;$('#screen-image').naturalHeight=1440;$('#screen-image').dispatchEvent({type:'load'});");
+  assert.equal(h.run('screenScale'), 1, 'ultrawide is a different monitor: zoom resets');
+});
+
+test('the screen shows Omarchy workspaces, lights the one on the streamed monitor, and a tap is Super+N that follows the workspace to its monitor', async () => {
+  const fixture = { ...powerFixture,
+    workspaces: [{ id: 1, name: '1', windows: 2, monitor: 'HDMI-A-1' }, { id: 3, name: '3', windows: 1, monitor: 'DP-1' }, { id: 7, name: '7', windows: 0, monitor: 'HDMI-A-1' }],
+    monitors: powerFixture.monitors.map((m, i) => ({ ...m, activeWorkspace: i === 0 ? 1 : 3 })) };
+  const h = powerUiHarness({ state: fixture });
+  await flushTicks();
+  h.run("navigate('tela');connected=true;$('#monitor-select').value='HDMI-A-1';screenWorkspaceSignature='';renderScreenWorkspaces()");
+  const strip = h.el('#screen-workspaces');
+  const chips = [...h.all('[data-screen-workspace]')];
+  assert.deepEqual(chips.map(c => c.getAttribute('data-screen-workspace')), ['1', '2', '3', '4', '5', '7'], 'the familiar first five plus every live workspace');
+  assert.equal(chips[0].classList.contains('active'), true, 'workspace 1 is what HDMI-A-1 shows');
+  assert.equal(chips.filter(c => c.classList.contains('active')).length, 1);
+  assert.ok(chips[0].querySelector('i'), 'a dot marks workspaces with windows');
+  assert.ok(!chips[1].querySelector('i'));
+  h.calls.length = 0;
+  // Workspace 4 does not exist yet: focus it on the streamed monitor.
+  strip.dispatchEvent({ type: 'click', target: chips[3] });
+  await flushTicks();
+  const actions = () => h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
+  assert.deepEqual(actions(), [{ type: 'workspace.focus', id: 4, monitor: 'HDMI-A-1' }]);
+  // Workspace 3 lives on DP-1: the stream follows it there before focusing.
+  h.calls.length = 0;
+  strip.dispatchEvent({ type: 'click', target: chips[2] });
+  await flushTicks();
+  assert.equal(h.el('#monitor-select').value, 'DP-1');
+  assert.deepEqual(actions().filter(a => a.type === 'workspace.focus'), [{ type: 'workspace.focus', id: 3, monitor: 'DP-1' }]);
+});
+
+test('native Android opens the phone keyboard after a PC text field receives a tap', async () => {
+  const h = powerUiHarness({ textInput: { available: true, focused: true }, userAgent: 'Android PonteAndroid/0.1.0-alpha.17' });
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities.keyboard=true");
+  await h.run('checkTextInput()');
+  assert.equal(h.el('#screen-composer').hidden, false);
+  assert.equal(h.document.activeElement, h.el('#screen-input'));
+  assert.equal(h.run('location.href'), 'ponte://keyboard/show');
+  assert.equal(h.run('screenComposerAutomatic'), true);
+});
+
+test('native tap retries a transient unfocused probe and uses the Android keyboard bridge', async () => {
+  const probes = [
+    { available: true, focused: false },
+    { available: true, focused: true },
+  ];
+  const h = powerUiHarness({ textInput: () => probes.shift() ?? probes.at(-1), userAgent: 'Android PonteAndroid/0.1.0-alpha.17' });
+  let bridgeCalls = 0;
+  h.window.PonteNative = { showKeyboard: () => { bridgeCalls++; } };
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
+  const preview = h.el('#screen-preview');
+  const event = type => ({ type, pointerId: 27, clientX: 195, clientY: 109.5, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  preview.dispatchEvent(event('pointerdown'));
+  preview.dispatchEvent(event('pointerup'));
+  await flushTicks();
+  await h.runTimer(h.run('keyboardCheckTimer'));
+  assert.equal(h.el('#screen-composer').hidden, true, 'first transient false does not open the composer');
+  await h.runTimer(h.run('keyboardCheckTimer'));
+  assert.equal(h.el('#screen-composer').hidden, false);
+  assert.equal(h.document.activeElement, h.el('#screen-input'));
+  assert.equal(bridgeCalls, 1);
+  assert.equal(h.calls.filter(call => call.path === '/api/textinput').length, 2);
 });
 
 test('floating buttons cycle the streamed monitor and toggle a forced landscape', async () => {
@@ -444,3 +643,49 @@ test('floating buttons cycle the streamed monitor and toggle a forced landscape'
   assert.equal(rotate.getAttribute('aria-pressed'), 'false');
 });
 
+// The adapter is pure: evaluate it with a fake clock, no DOM or stream.
+function adapterHarness(options = {}) {
+  const adapterSource = source.slice(source.indexOf('const LIVE_LADDER ='), source.indexOf('\nfunction applyLiveProfile('));
+  const clock = { at: 0 };
+  const context = vm.createContext({ Math });
+  vm.runInContext(`${adapterSource}\nglobalThis.create = createLiveAdapter;`, context);
+  const adapter = context.create({ ...options, now: () => clock.at });
+  // Deliver frames at `fps` for one window, then evaluate once.
+  const window = (fps, requested) => { for (let i = 0; i < fps * 3; i++) adapter.frame(); clock.at += 3000; return adapter.evaluate(requested); };
+  return { adapter, clock, window };
+}
+
+test('auto quality starts light, climbs only after consecutive healthy windows and stops at sharp', () => {
+  const { adapter, window } = adapterHarness();
+  assert.equal(adapter.profile, 'light');
+  assert.equal(window(8, 8), null, 'one healthy window is not enough');
+  assert.equal(window(8, 8), 'balanced', 'two healthy windows climb one rung');
+  assert.equal(window(10, 10), null);
+  assert.equal(window(10, 10), 'sharp');
+  assert.equal(window(15, 15), null);
+  assert.equal(window(15, 15), null, 'sharp is the top rung');
+  assert.equal(adapter.profile, 'sharp');
+});
+
+test('auto quality steps down as soon as frames lag and holds before climbing again, longer after each fall', () => {
+  const { adapter, clock, window } = adapterHarness({ start: 'sharp' });
+  assert.equal(window(6, 15), 'balanced', 'under 60% of the requested rate drops a rung');
+  for (let i = 0; i < 6; i++) assert.equal(window(10, 10), null, 'healthy again, but inside the 20 s hold');
+  assert.equal(window(10, 10), 'sharp', 'climbs back once the hold has passed');
+  assert.equal(window(5, 15), 'balanced', 'lags again');
+  for (let i = 0; i < 13; i++) assert.equal(window(10, 10), null, 'the second hold is twice as long');
+  assert.equal(window(10, 10), 'sharp');
+  assert.equal(window(7, 10), null, 'between 60% and 90% neither drops nor counts as healthy');
+  clock.at += 60000;
+  assert.equal(window(2, 15), null, 'a window stretched by a pause is discarded, not judged');
+  assert.equal(adapter.stall(), 'balanced', 'a broken stream drops a rung');
+  assert.equal(adapter.stall(), 'light');
+  assert.equal(adapter.stall(), null, 'light is the floor');
+});
+
+test('auto quality ignores partial windows', () => {
+  const { adapter, clock } = adapterHarness();
+  for (let i = 0; i < 20; i++) adapter.frame();
+  clock.at += 1000;
+  assert.equal(adapter.evaluate(8), null);
+});

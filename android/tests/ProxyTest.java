@@ -269,11 +269,19 @@ public final class ProxyTest {
             check(raw(proxy, request(proxy, "GET", "/api/state", "Authorization: Bearer test-only\r\n")).startsWith("HTTP/1.1 200"), "CA-issued leaf is accepted when that exact leaf is pinned");
             check("Bearer test-only".equals(remote.auth.get()), "matching CA-issued leaf can receive Authorization");
         }
-        for (String store : new String[]{"wrong.p12", "child.p12"}) {
-            try (Remote remote = new Remote(fixtures.resolve(store)); LoopbackProxy proxy = proxy(remote, fixtures.resolve("good.crt"), "127.0.0.1")) {
-                check(raw(proxy, request(proxy, "GET", "/api/state", "Authorization: Bearer must-not-reach\r\n")).startsWith("HTTP/1.1 502"), "untrusted or unpinned certificate rejected: " + store);
-                check(remote.hits.get() == 0, "pin rejects before sending Authorization: " + store);
-            }
+        try (Remote remote = new Remote(fixtures.resolve("child.p12")); LoopbackProxy proxy = proxy(remote, fixtures.resolve("good.crt"), "127.0.0.1")) {
+            check(raw(proxy, request(proxy, "GET", "/api/state", "Authorization: Bearer test-only\r\n")).startsWith("HTTP/1.1 200"), "a renewed leaf issued by the pinned CA is accepted without a new app");
+            check("Bearer test-only".equals(remote.auth.get()), "CA-issued leaf can receive Authorization");
+        }
+        try (Remote remote = new Remote(fixtures.resolve("wrong.p12")); LoopbackProxy proxy = proxy(remote, fixtures.resolve("good.crt"), "127.0.0.1")) {
+            String response = raw(proxy, request(proxy, "GET", "/api/state", "Authorization: Bearer must-not-reach\r\n"));
+            check(response.startsWith("HTTP/1.1 502 proxy_certificate"), "a certificate outside the pinned CA is rejected as a certificate error, not as unreachable: " + response.split("\r\n")[0]);
+            check(response.contains("\"errorCode\":\"proxy_certificate\""), "certificate mismatch body names the code");
+            check(remote.hits.get() == 0, "pin rejects before sending Authorization");
+        }
+        try (Remote remote = new Remote(fixtures.resolve("good.p12")); LoopbackProxy proxy = proxy(remote, fixtures.resolve("child.crt"), "127.0.0.1")) {
+            check(raw(proxy, request(proxy, "GET", "/api/state", "Authorization: Bearer must-not-reach\r\n")).startsWith("HTTP/1.1 502 proxy_certificate"), "the issuing CA is not accepted when only its leaf is pinned");
+            check(remote.hits.get() == 0, "pin rejects the parent CA before sending Authorization");
         }
         try (ServerSocket occupied = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")); InputStream certificate = Files.newInputStream(fixtures.resolve("good.crt"))) {
             boolean rejected = false;

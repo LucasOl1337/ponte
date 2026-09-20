@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _lab
+args = sys.argv[1:]
+m = _lab.monitor()
+with _lab.locked():
+    s = _lab.load()
+    extra = {}
+    if args[:1] == ['mousemove']:
+        rest = [a for a in args[1:] if a not in ('--', '--absolute', '-a')]
+        dx, dy = int(rest[-2]), int(rest[-1])
+        # A relative "absolute" move is scaled by the compositor's pointer
+        # acceleration unless the device profile is flat.
+        f = 1.0 if s['profile'] == 'flat' else s['accel']
+        if '--absolute' in args or '-a' in args: x, y = dx * f, dy * f
+        else: x, y = s['cursor']['x'] + dx * f, s['cursor']['y'] + dy * f
+        s['cursor'] = {'x': int(max(0, min(m['width'] - 1, round(x)))), 'y': int(max(0, min(m['height'] - 1, round(y))))}
+        extra['cursor'] = s['cursor']
+    elif args[:1] == ['click']:
+        code = args[1].lower()
+        if code == '0x40': s['held'] = True
+        elif code == '0x80': s['held'] = False
+        else:
+            button = {'0xc0': 'left', '0xc1': 'right', '0xc2': 'middle'}.get(code, code)
+            s['clicks'] = (s['clicks'] + [{**s['cursor'], 'button': button}])[-12:]
+            name, kind = _lab.target_at(s['cursor']['x'], s['cursor']['y'])
+            if button == 'left': s['textFocus'] = kind == 'field'
+            extra['target'] = name
+        extra['cursor'] = s['cursor']; extra['held'] = s['held']
+    elif args[:1] == ['key']:
+        names = {'28': 'Enter', '1': 'Esc', '14': 'BackSpace', '15': 'Tab', '103': 'Up', '108': 'Down', '105': 'Left', '106': 'Right', '29': 'Ctrl', '46': 'C', '47': 'V', '44': 'Z', '30': 'A'}
+        pressed = [names.get(a.split(':')[0], a.split(':')[0]) for a in args[1:] if a.endswith(':1')]
+        extra['keys'] = pressed
+        for key in pressed:
+            if key == 'BackSpace': s['typed'] = s['typed'][:-1]
+            elif key == 'Enter': s['typed'] += '⏎'
+            elif key not in ('Ctrl',): s['typed'] += f'<{key}>' if len(key) > 1 else key
+        s['typed'] = s['typed'][-400:]
+    elif args[:1] == ['type']:
+        text = sys.stdin.read() if '--file' in args else ' '.join(args[1:])
+        s['typed'] = (s['typed'] + text)[-400:]; extra['text'] = text
+    _lab.save(s)
+_lab.log('ydotool', args, extra)

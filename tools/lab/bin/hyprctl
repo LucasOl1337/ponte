@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+import json, sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _lab
+args = sys.argv[1:]
+m = _lab.monitor()
+window = {'address': '0xlab', 'title': 'Ponte lab target', 'class': 'lab', 'monitor': 0, 'workspace': {'id': 1, 'name': '1'}, 'at': [0, 0], 'size': [m['width'], m['height']]}
+if args[:1] == ['-j']:
+    kind = args[1]
+    if kind == 'monitors': print(json.dumps([m]))
+    elif kind == 'devices': print(json.dumps({'mice': [{'name': 'ydotoold-virtual-device-1'}], 'keyboards': []}))
+    elif kind == 'activewindow': print(json.dumps(window))
+    elif kind == 'clients': print(json.dumps([window]))
+    elif kind == 'workspaces': print(json.dumps([{'id': 1, 'name': '1', 'monitor': m['name'], 'windows': 1}]))
+    else: print('[]')
+elif args[:1] == ['cursorpos']:
+    c = _lab.load()['cursor']; print(f"{c['x']}, {c['y']}")
+elif args[:1] == ['eval']:
+    _lab.log('hyprctl', args)
+    if 'accel_profile = "flat"' in args[1]:
+        with _lab.locked():
+            s = _lab.load(); s['profile'] = 'flat'; _lab.save(s)
+    print('ok')
+else:
+    _lab.log('hyprctl', args); print('ok')

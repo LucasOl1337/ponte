@@ -50,20 +50,24 @@ def configure(config_path, output, template):
     ca = public_certificate(native.get('caFile', native.get('certFile')))
     # The configuration may contain keyFile, dataDir and unrelated credentials.
     # Only these public certificate bytes and the validated endpoint are used.
+    # The app ships the installation CA as its trust anchor, so the PC's server
+    # certificate can be renewed under that CA without rebuilding the app. The
+    # current server certificate is still verified here so a broken chain is
+    # caught at build time instead of on the phone.
     output.mkdir(parents=True, exist_ok=True)
     os.chmod(output, 0o700)
     assets = output / 'assets'
     assets.mkdir(exist_ok=True)
-    certificate_file = assets / 'pc-certificate.pem'
-    certificate_file.write_bytes(certificate)
-    ca_file = output / 'build-ca.pem'
+    ca_file = assets / 'pc-ca.pem'
     ca_file.write_bytes(ca)
+    certificate_file = output / 'build-server.pem'
+    certificate_file.write_bytes(certificate)
     result = subprocess.run([
         'openssl', 'verify', '-CAfile', str(ca_file), '-no-CApath', '-no-CAstore', '-purpose', 'sslserver',
         '-verify_ip', host, str(certificate_file),
     ], text=True, capture_output=True)
     if result.returncode:
-        certificate_file.unlink(missing_ok=True)
+        ca_file.unlink(missing_ok=True)
         raise ValueError('The public server certificate must be valid, trusted by caFile, and contain the configured IP SAN')
     manifest = ET.parse(template)
     android_config = config.get('android', {})
@@ -77,6 +81,12 @@ def configure(config_path, output, template):
         raise ValueError('android.versionName must be a short release identifier')
     manifest.getroot().set(ANDROID + 'versionCode', str(version_code))
     manifest.getroot().set(ANDROID + 'versionName', version_name)
+    # A dogfooding build: the WebView becomes inspectable (chrome://inspect,
+    # tools/lab/cdp.mjs) so gestures and layout can be measured on the phone.
+    # Never the default; the value is taken from the environment, not config.
+    if os.environ.get('PONTE_ANDROID_DEBUGGABLE') == '1':
+        application = manifest.getroot().find('application')
+        application.set(ANDROID + 'debuggable', 'true')
     ET.register_namespace('android', ANDROID[1:-1])
     manifest.write(output / 'AndroidManifest.xml', encoding='utf-8', xml_declaration=True)
     upstream = f'https://{host}:{port}'
@@ -86,7 +96,7 @@ def configure(config_path, output, template):
                     + '    static final String UPSTREAM = ' + json.dumps(upstream) + ';\n'
                     + '    static final String VERSION_NAME = ' + json.dumps(version_name) + ';\n}\n')
     metadata = {'upstream': upstream, 'versionCode': version_code, 'versionName': version_name,
-                'certificateSha256': hashlib.sha256(certificate).hexdigest()}
+                'caSha256': hashlib.sha256(ca).hexdigest(), 'certificateSha256': hashlib.sha256(certificate).hexdigest()}
     (output / 'public-build.json').write_text(json.dumps(metadata, indent=2) + '\n')
     return metadata
 

@@ -207,6 +207,7 @@
   "Tamanho do quadro inválido.": "Invalid frame size.",
   "Retomar transmissão ao vivo": "Resume live stream",
   "Reconectando ao monitor…": "Reconnecting to the monitor…",
+  "A imagem está parada. Reconectando ao monitor…": "The image is a still. Reconnecting to the monitor…",
   "Último quadro · imagem parada": "Last frame · still image",
   "Transmissão pausada": "Stream paused",
   "Sem novos quadros": "No new frames",
@@ -224,6 +225,7 @@
   "Transmissão indisponível. Confira a conexão com o PC.": "Streaming is unavailable. Check the PC connection.",
   "Mais nítido · até 6 quadros/s": "Sharper · up to 6 fps",
   "Equilibrado · até 10 quadros/s": "Balanced · up to 10 fps",
+  "Automático": "Auto",
   "Sair da tela cheia": "Exit fullscreen",
   "Nenhum monitor disponível.": "No monitor available.",
   "A foto demorou para chegar. Tente novamente.": "The snapshot took too long to arrive. Try again.",
@@ -355,7 +357,6 @@
   "Ler em alta resolução": "Freeze & read",
   "Ver na resolução original": "View at original resolution",
   "Painel do PC": "PC dashboard",
-  "Não chegaram novos quadros. Toque em iniciar para tentar novamente.": "No new frames arrived. Tap play to try again.",
   "Texto vai para a janela em foco: {title}": "Text goes to the focused window: {title}",
   "Modo de cópia ativo. Saia dele no terminal do PC para voltar a digitar.": "Copy mode is active. Leave it in the PC terminal to type again.",
   "Abrir esta mesma sessão no PC": "Open this same session on the PC",
@@ -396,7 +397,6 @@
   "Escreva um comando…": "Write a command…",
   "Digite aqui: vai direto pro PC…": "Type here: it goes straight to the PC…",
   "Digitação indisponível neste PC.": "Typing is unavailable on this PC.",
-  "O texto não entrou. Comece de novo.": "The text did not go through. Start over.",
   "Enter": "Enter",
   "Histórico e opções": "History and options",
   "Novo comando": "New command",
@@ -413,9 +413,18 @@
   "Este navegador não permite girar a tela.": "This browser cannot rotate the screen.",
   "Abrir tela": "Open screen",
   "Digitar no PC": "Type on the PC",
+  "Teclas especiais": "Special keys",
+  "Áreas de trabalho": "Workspaces",
+  "Enviar sem Enter": "Send without Enter",
+  "O texto não entrou. Tente de novo.": "The text did not go through. Try again.",
+  "A tecla não chegou ao PC.": "The key did not reach the PC.",
+  "Cima": "Up",
+  "Baixo": "Down",
+  "Esquerda": "Left",
+  "Direita": "Right",
   "TELA": "SCREEN",
-  "Tela do PC. Toque clica, toque longo é botão direito ou arrasta, pinça amplia, dois dedos rolam.": "PC screen. Tap clicks, long-press right-clicks or drags, pinch zooms, two fingers scroll.",
-  "Toque clica, toque longo é botão direito ou arrasta, pinça amplia, dois dedos rolam. Ao tocar num campo de texto, o teclado do celular aparece.": "Tap clicks, long-press right-clicks or drags, pinch zooms, two fingers scroll. Tapping a text field brings up the phone keyboard.",
+  "Tela do PC. Toque clica, arraste seleciona ou move como o mouse, toque longo usa o botão direito ou abre a prateleira de workspaces, pinça amplia e dois dedos rolam.": "PC screen. Tap clicks, drag selects or moves like a mouse, long-press right-clicks or opens the workspace shelf, pinch zooms and two fingers scroll.",
+  "Toque clica, arraste seleciona ou move como o mouse, toque longo abre o botão direito ou a prateleira de workspaces, pinça amplia e dois dedos rolam. Ao tocar num campo de texto, o teclado do celular aparece.": "Tap clicks, drag selects or moves like a mouse, long-press opens right-click or the workspace shelf, pinch zooms and two fingers scroll. Tapping a text field brings up the phone keyboard.",
   "A senha é digitada no PC como se fosse no teclado e não fica salva no celular.": "The password is typed on the PC as if on its keyboard and is never saved on the phone.",
   "Apagar luzes": "Lights off",
   "Arrastando · solte para largar": "Dragging · lift to drop",
@@ -451,9 +460,13 @@
   "Luzes apagadas. Toque em um preset ou em Restaurar.": "Lights are off. Tap a preset or Restore.",
   "Luzes no preset {preset}.": "Lights set to {preset}.",
   "Luzes restauradas.": "Lights restored.",
+  "MOVER PARA": "MOVE TO",
   "Monitor e qualidade": "Monitor and quality",
+  "Mover janela para a área": "Move window to workspace",
+  "Mover janela para área {workspace}": "Move window to workspace {workspace}",
   "Nítido · até 15 quadros/s": "Sharp · up to 15 fps",
   "Oceano": "Ocean",
+  "Não foi possível identificar a janela arrastada.": "The dragged window could not be identified.",
   "PC bloqueado.": "PC locked.",
   "PC bloqueado. Desbloqueie digitando a senha por aqui.": "PC locked. Unlock by typing the password from here.",
   "PC desbloqueado.": "PC unlocked.",
@@ -484,6 +497,7 @@
   "Texto digitado e Enter no PC.": "Text typed and Enter pressed on the PC.",
   "Todos os monitores desligados.": "All monitors turned off.",
   "Todos os monitores ligados.": "All monitors turned on.",
+  "Janela movida para a área {workspace}.": "Window moved to workspace {workspace}.",
   "Trackpad": "Trackpad",
   "Transcrevendo…": "Transcribing…",
   "Um dedo move o cursor, toque clica, dois dedos rolam, toque longo arrasta, pinça amplia.": "One finger moves the pointer, tap clicks, two fingers scroll, long-press drags, pinch zooms.",
@@ -619,6 +633,10 @@
     "en": "Mouse and shortcuts require the ydotool service.",
     "pt": "Mouse e atalhos dependem do serviço ydotool ativo."
   },
+  "POINTER_INACCURATE": {
+    "en": "The last pointer placement missed: pointer acceleration is still scaling the virtual mouse.",
+    "pt": "O último posicionamento do ponteiro errou: a aceleração do mouse ainda está escalando o mouse virtual."
+  },
   "TEXT_UNAVAILABLE": {
     "en": "Text input is unavailable: wtype was not found.",
     "pt": "Envio de texto indisponível: wtype não encontrado."
@@ -734,6 +752,10 @@
   "proxy_redirect": {
     "en": "The PC tried to redirect the connection.",
     "pt": "O PC tentou redirecionar a conexão."
+  },
+  "proxy_certificate": {
+    "en": "The PC certificate changed. Rebuild and reinstall the app from your PC.",
+    "pt": "O certificado do PC mudou. Gere e instale o app de novo a partir do PC."
   },
   "proxy_unavailable": {
     "en": "Could not connect securely to the PC. Check Tailscale.",

@@ -75,6 +75,33 @@ test('setup detects a mock Tailscale IP and generates an installation-specific C
   await f.cli(['setup']); assert.equal(await readFile(config.nativeTls.certFile, 'utf8'), leaf);
 });
 
+test('renew-cert reissues only the server leaf under the same CA and restarts a running service', async t => {
+  const f = await fixture(t);
+  await f.cli(['setup']);
+  const config = JSON.parse(await readFile(f.configFile, 'utf8'));
+  const ca = await readFile(config.nativeTls.caFile, 'utf8');
+  const leaf = await readFile(config.nativeTls.certFile, 'utf8');
+  const key = await readFile(config.nativeTls.keyFile, 'utf8');
+  // The stub systemctl exits 0 for is-active, so the renewal restarts the service.
+  const output = await f.cli(['renew-cert']);
+  assert.match(output.stdout, /renewed for 365 days/);
+  assert.equal(await readFile(config.nativeTls.caFile, 'utf8'), ca, 'the CA the app pins is untouched');
+  const renewed = await readFile(config.nativeTls.certFile, 'utf8');
+  assert.notEqual(renewed, leaf);
+  assert.notEqual(await readFile(config.nativeTls.keyFile, 'utf8'), key);
+  for (const name of ['certFile', 'keyFile']) assert.equal((await stat(config.nativeTls[name])).mode & 0o777, 0o600);
+  await run('openssl', ['verify', '-CAfile', config.nativeTls.caFile, '-verify_ip', '100.80.90.100', config.nativeTls.certFile]);
+  const leftovers = (await readdir(path.dirname(config.nativeTls.certFile))).sort();
+  assert.deepEqual(leftovers, ['ca.crt', 'ca.key', 'server.crt', 'server.key'], 'no request or temporary files remain');
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.filter(([command]) => command === 'systemctl'), [
+    ['systemctl', '--user', 'is-active', '--quiet', 'ponte-remote.service'],
+    ['systemctl', '--user', 'restart', 'ponte-remote.service'],
+  ]);
+  const local = await fixture(t); await local.cli(['setup', '--local-only']);
+  await assert.rejects(local.cli(['renew-cert']), error => /local-only/.test(error.stderr));
+});
+
 test('CLI rejects ambiguous/outside Tailscale IPs before creating credentials', async t => {
   const f = await fixture(t);
   for (const address of ['100.064.1.2', '127.0.0.1', '0.0.0.0', '100.128.1.2', '100.64.0.1; touch anything']) {
@@ -189,6 +216,31 @@ if name == 'adb':
         serial = os.environ.get('PONTE_TEST_ADB_DEVICE')
         if serial:
             print(serial + '\\tdevice')
+        for entry in os.environ.get('PONTE_TEST_ADB_DEVICES', '').split(','):
+            if entry: print(entry.replace('=', '\\t'))
+        state = os.environ.get('PONTE_TEST_PHONE_STATE')
+        if state and os.path.exists(state) and 'tcp' in open(state).read():
+            print('100.111.221.82:5555\\tdevice')
+    elif sys.argv[1] == '-s':
+        serial, rest = sys.argv[2], sys.argv[3:]
+        state = os.environ.get('PONTE_TEST_PHONE_STATE')
+        tcp_up = bool(state and os.path.exists(state) and 'tcp' in open(state).read())
+        if serial.count(':') == 1 and not tcp_up and not os.environ.get('PONTE_TEST_ADB_DEVICE'):
+            sys.stderr.write('error: device offline\\n'); sys.exit(1)
+        if rest[:2] == ['shell', 'echo']: print(rest[2])
+        elif rest[:1] == ['tcpip']:
+            if state: open(state, 'w').write('tcp')
+            print('restarting in TCP mode port: ' + rest[1])
+        elif rest[:2] == ['shell', 'dumpsys'] and rest[2:3] == ['window']:
+            print('  mCurrentFocus=Window{1 u0 ' + os.environ.get('PONTE_TEST_FOCUS', 'app.ponte.omarchy/app.ponte.omarchy.MainActivity') + '}')
+            print('    mShowingDream=false mDreamingLockscreen=' + os.environ.get('PONTE_TEST_LOCKED', 'false'))
+        elif rest[:2] == ['shell', 'dumpsys'] and rest[2:3] == ['power']:
+            print('  mWakefulness=' + os.environ.get('PONTE_TEST_WAKEFULNESS', 'Awake'))
+        elif rest[:2] == ['shell', 'dumpsys'] and rest[2:3] == ['package']:
+            print('    versionName=' + os.environ.get('PONTE_TEST_PHONE_VERSION', '0.1.0-alpha.19'))
+        elif rest[:1] == ['install']:
+            if fail == 'install': print('Failure [INSTALL_FAILED_USER_RESTRICTED]'); sys.exit(1)
+            print('Success')
 elif name == 'scrcpy':
     if fail == 'scrcpy':
         sys.exit(1)
@@ -198,11 +250,11 @@ elif name == 'tailscale':
         print(json.dumps({'Peer': {'phone': {'Online': online, 'TailscaleIPs': ['100.111.221.82']}}}))
 `;
 
-async function phoneFixture(t, { tools = ['adb', 'scrcpy', 'tailscale'] } = {}) {
+async function phoneFixture(t, { tools = ['adb', 'scrcpy', 'tailscale', 'systemctl'] } = {}) {
   const f = await fixture(t);
   for (const name of tools) await writeFile(path.join(f.bin, name), phoneStub, { mode: 0o755 });
   const cli = (args, extraEnv = {}) => run(python3, [path.join(root, 'ponte'), ...args], {
-    env: { ...f.env, PATH: f.bin, ...extraEnv }, timeout: 15000,
+    env: { ...f.env, PATH: f.bin, PONTE_TEST_FAST: '1', ...extraEnv }, timeout: 15000,
   });
   return { ...f, cli };
 }
@@ -305,4 +357,84 @@ test('pc subcommand shows help, rejects unknown commands, and requires a passwor
   await assert.rejects(f.cli(['pc', 'monitors', 'sideways']), error => error.code === 2);
   // unlock with no stdin exits 2 before any desktop command runs.
   await assert.rejects(run('bash', ['-c', `printf '' | python3 ${JSON.stringify(path.join(root, 'ponte'))} pc unlock`], { env: f.env, timeout: 15000 }), error => error.code === 2);
+});
+
+test('phone ensure reaches the phone over Tailscale, or switches adbd to the fixed port through USB, or says the one step left', async t => {
+  const f = await phoneFixture(t);
+  const state = path.join(f.directory, 'phone-state');
+  // TCP already up: nothing to do.
+  const ready = await f.cli(['phone', 'ensure'], { PONTE_TEST_ADB_DEVICE: '100.111.221.82:5555' });
+  assert.match(ready.stdout, /reachable over Tailscale at 100\.111\.221\.82:5555/);
+  await writeFile(f.log, '');
+  // Listener gone after a reboot, USB plugged: adbd is switched to 5555 and Tailscale takes over.
+  const healed = await f.cli(['phone', 'ensure'], { PONTE_TEST_PHONE_STATE: state, PONTE_TEST_ADB_DEVICES: 'US554HTK89BI8TPF=device', PONTE_TEST_ADB_FAIL: 'connect' });
+  assert.match(healed.stdout, /switched to TCP port 5555 through US554HTK89BI8TPF/);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(calls.some(call => call[0] === 'adb' && call[1] === '-s' && call[2] === 'US554HTK89BI8TPF' && call[3] === 'tcpip' && call[4] === '5555'));
+  assert.equal(calls.filter(call => call[0] === 'adb' && call[1] === 'connect').length >= 2, true, 'connects again after switching');
+  // Nothing reachable at all: the exact manual step, no silent retry loop.
+  await assert.rejects(f.cli(['phone', 'ensure'], { PONTE_TEST_ADB_FAIL: 'connect' }), error => /plug the phone in once, or on Wi-Fi turn on Wireless debugging/.test(error.stderr));
+  await assert.rejects(f.cli(['phone', 'ensure'], { PONTE_TEST_ADB_FAIL: 'connect', PONTE_TEST_ADB_DEVICES: 'US554HTK89BI8TPF=unauthorized' }), error => /accept the USB debugging prompt/.test(error.stderr));
+});
+
+test('phone app launches the agent session above the lock screen, dismissing the HyperOS proximity guide, and install reports the version', async t => {
+  const f = await phoneFixture(t);
+  const env = { PONTE_TEST_ADB_DEVICE: '100.111.221.82:5555' };
+  const launched = await f.cli(['phone', 'app'], env);
+  assert.match(launched.stdout, /Ponte is in front on 100\.111\.221\.82:5555/);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(calls.some(call => call.slice(0, 5).join(' ') === 'adb -s 100.111.221.82:5555 shell appops' && call.includes('10020')), 'MIUI show-on-lock-screen op is granted');
+  assert.ok(calls.some(call => call.includes('am') && call.includes('--ez') && call.includes('ponte.agent')), 'started with the agent extra');
+  await assert.rejects(f.cli(['phone', 'app'], { ...env, PONTE_TEST_FOCUS: 'NotificationShade' }), error => /did not come to the front/.test(error.stderr));
+  await writeFile(f.log, '');
+  const guided = await f.cli(['phone', 'app'], { ...env, PONTE_TEST_FOCUS: 'ScreenOnProximitySensorGuide' }).catch(error => error);
+  const guideCalls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(guideCalls.some(call => call.includes('KEYCODE_VOLUME_UP')), 'Volume Up dismisses the earpiece guide');
+  const apk = path.join(f.directory, 'Ponte.apk');
+  await writeFile(apk, 'PK');
+  const installed = await f.cli(['phone', 'install', apk], env);
+  assert.match(installed.stdout, /the phone now reports Ponte 0\.1\.0-alpha\.19/);
+  await assert.rejects(f.cli(['phone', 'install', apk], { ...env, PONTE_TEST_ADB_FAIL: 'install' }), error => /INSTALL_FAILED_USER_RESTRICTED/.test(error.stderr));
+  await assert.rejects(f.cli(['phone', 'install', path.join(f.directory, 'missing.apk')], env), error => /not found/.test(error.stderr));
+});
+
+test('phone wake presses power only while dozing, types the private PIN when present, and refuses a world-readable one', async t => {
+  const f = await phoneFixture(t);
+  const env = { PONTE_TEST_ADB_DEVICE: '100.111.221.82:5555' };
+  const awake = await f.cli(['phone', 'wake'], { ...env, PONTE_TEST_LOCKED: 'false' });
+  assert.match(awake.stdout, /awake and unlocked/);
+  let calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(!calls.some(call => call.includes('KEYCODE_POWER')), 'an awake phone gets no power press');
+  await assert.rejects(f.cli(['phone', 'wake'], { ...env, PONTE_TEST_LOCKED: 'true', PONTE_TEST_WAKEFULNESS: 'Dozing' }), error => /still locked/.test(error.stderr));
+  calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(calls.some(call => call.includes('KEYCODE_POWER')), 'a dozing phone is woken with the power key');
+  await mkdir(f.dataDir, { recursive: true });
+  const secret = path.join(f.dataDir, 'phone-unlock');
+  await writeFile(secret, '1234\n', { mode: 0o644 });
+  await assert.rejects(f.cli(['phone', 'wake'], { ...env, PONTE_TEST_LOCKED: 'true' }), error => /must be private/.test(error.stderr));
+  await chmod(secret, 0o600);
+  await writeFile(f.log, '');
+  await f.cli(['phone', 'wake'], { ...env, PONTE_TEST_LOCKED: 'true' }).catch(() => {});
+  calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(calls.some(call => call.includes('text') && call.includes('1234')), 'the PIN is typed after the swipe');
+});
+
+test('phone timer installs and removes a managed user timer that keeps the adb link alive', async t => {
+  const f = await phoneFixture(t);
+  const on = await f.cli(['phone', 'timer', 'on']);
+  assert.match(on.stdout, /keepalive timer installed/);
+  const units = path.join(f.env.XDG_CONFIG_HOME, 'systemd/user');
+  const timer = await readFile(path.join(units, 'ponte-phone.timer'), 'utf8');
+  const service = await readFile(path.join(units, 'ponte-phone.service'), 'utf8');
+  assert.match(timer, /OnUnitActiveSec=2min/);
+  assert.match(service, /phone ensure --quiet/);
+  assert.match(service, /^# Managed by Ponte/);
+  const calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(calls.some(call => call.join(' ') === 'systemctl --user enable --now ponte-phone.timer'));
+  await writeFile(path.join(units, 'ponte-phone.timer'), 'not ours');
+  await assert.rejects(f.cli(['phone', 'timer', 'off']), error => /unmanaged unit/.test(error.stderr));
+  await writeFile(path.join(units, 'ponte-phone.timer'), timer);
+  const off = await f.cli(['phone', 'timer', 'off']);
+  assert.match(off.stdout, /removed/);
+  await assert.rejects(stat(path.join(units, 'ponte-phone.service')));
 });

@@ -6,9 +6,12 @@ import { ApiError, commandExists, runCommand } from './process.mjs';
 import { message } from './i18n.mjs';
 
 const keyCodes = {
-  Enter: [28], Escape: [1], BackSpace: [14], Tab: [15],
+  Enter: [28], Escape: [1], BackSpace: [14], Tab: [15], Delete: [111],
   ArrowUp: [103], ArrowDown: [108], ArrowLeft: [105], ArrowRight: [106],
+  Home: [102], End: [107], PageUp: [104], PageDown: [109],
   Copy: [29, 46], Paste: [29, 47], Undo: [29, 44], SelectAll: [29, 30],
+  // Window/desktop keys the phone keyboard has no way to express.
+  AltTab: [56, 15], Super: [125], CloseWindow: [56, 62],
 };
 export const LIGHT_PRESETS = Object.freeze(['lava', 'brasa', 'oceano', 'aurora', 'floresta', 'lua']);
 const workspace = (value) => ({ id: Number(value?.id) || 0, name: String(value?.name ?? '').slice(0, 150) });
@@ -84,18 +87,93 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     if (['clients', 'monitors', 'workspaces'].includes(kind) && !Array.isArray(result)) throw new ApiError(503, 'HYPRLAND_INVALID_RESPONSE');
     return result;
   };
+  const monitorPoint = async (value) => {
+    if (typeof value.monitor !== 'string' || value.monitor.length < 1 || value.monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
+    const x = numberIn(value.x, 0, 32767, true);
+    const y = numberIn(value.y, 0, 32767, true);
+    const monitors = await readHypr('monitors');
+    const monitor = monitors.find(item => item.name === value.monitor);
+    if (!monitor) throw new ApiError(400, 'INVALID_MONITOR');
+    const width = Number(monitor.width), height = Number(monitor.height);
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new ApiError(400, 'INVALID_MONITOR');
+    numberIn(x, 0, width - 1, true); numberIn(y, 0, height - 1, true);
+    return { x: (Number(monitor.x) || 0) + x, y: (Number(monitor.y) || 0) + y };
+  };
   let dragTimer;
   let dragging = false;
+  let dragModifier = 0; // key code held for the whole drag (Super moves windows in Hyprland)
   let releasePromise = null;
   let closing = false;
+  // ydotool has no absolute axis: "mousemove --absolute" is a relative jump to
+  // the top-left corner followed by a relative move, so the compositor's
+  // pointer acceleration scales the second leg (measured on Hyprland's default
+  // adaptive profile: the cursor lands at exactly twice the requested pixel).
+  // ydotool's own help says to disable acceleration. Hyprland can configure a
+  // single device, so the virtual pointer is set flat, and every placement is
+  // verified against the compositor's cursor position: a restarted ydotoold is
+  // a new device with the default profile again.
+  let pointerCalibratedAt = 0;
+  let pointerError = 0;
+  const POINTER_TOLERANCE = 1;
+  async function calibratePointer(force = false) {
+    if (!force && pointerCalibratedAt && Date.now() - pointerCalibratedAt < 60000) return;
+    pointerCalibratedAt = Date.now();
+    let devices;
+    try { devices = JSON.parse(await run('hyprctl', ['-j', 'devices'], { timeout: 1500 })); } catch { return; }
+    const names = (Array.isArray(devices?.mice) ? devices.mice : [])
+      .map(item => String(item?.name ?? ''))
+      .filter(name => name.startsWith('ydotoold-virtual-device') && /^[A-Za-z0-9_.-]+$/.test(name));
+    for (const name of names) {
+      // Hyprland 0.56+ takes Lua; older releases take keywords. Both exit 0 on
+      // failure, so only the Lua acknowledgement decides the fallback.
+      const lua = `hl.device({ name = "${name}", accel_profile = "flat", sensitivity = 0 })`;
+      const answer = await run('hyprctl', ['eval', lua], { timeout: 1500 }).catch(() => '');
+      if (/^ok\b/i.test(String(answer).trim())) continue;
+      for (const [key, setting] of [['accel_profile', 'flat'], ['sensitivity', '0']]) {
+        await run('hyprctl', ['keyword', `device[${name}]:${key}`, setting], { timeout: 1500 }).catch(() => {});
+      }
+    }
+  }
+  async function cursorPosition() {
+    const match = /^\s*(-?\d+),\s*(-?\d+)/.exec(String(await run('hyprctl', ['cursorpos'], { timeout: 1500 })));
+    return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+  }
+  const pointerOff = (landed, point) => !!landed && (Math.abs(landed.x - point.x) > POINTER_TOLERANCE || Math.abs(landed.y - point.y) > POINTER_TOLERANCE);
+  async function placePointer(point) {
+    await calibratePointer();
+    await run('ydotool', ['mousemove', '--absolute', '--', String(point.x), String(point.y)]);
+    let landed = await cursorPosition().catch(() => null);
+    if (pointerOff(landed, point)) {
+      await calibratePointer(true);
+      await run('ydotool', ['mousemove', '--absolute', '--', String(point.x), String(point.y)]);
+      landed = await cursorPosition().catch(() => null);
+    }
+    // Still scaled (a compositor without per-device profiles): close the gap
+    // with relative moves, dividing by the scale the last move showed.
+    let scale = landed && Math.hypot(point.x, point.y) > 0 ? Math.max(1, Math.hypot(landed.x, landed.y) / Math.hypot(point.x, point.y)) : 1;
+    for (let attempt = 0; attempt < 3 && pointerOff(landed, point); attempt++) {
+      const dx = Math.round((point.x - landed.x) / scale), dy = Math.round((point.y - landed.y) / scale);
+      if (!dx && !dy) break;
+      await run('ydotool', ['mousemove', '--', String(dx), String(dy)]);
+      const next = await cursorPosition().catch(() => null);
+      if (!next) { landed = null; break; }
+      const observed = Math.hypot(next.x - landed.x, next.y - landed.y) / Math.hypot(dx, dy);
+      if (observed > 0.1) scale *= observed;
+      landed = next;
+    }
+    pointerError = landed ? Math.max(Math.abs(landed.x - point.x), Math.abs(landed.y - point.y)) : 0;
+    return landed;
+  }
   // Every action is serialized in HTTP. This timer also joins that order via
   // releasePromise, so an expired drag cannot release a freshly started drag.
   async function releaseDrag() {
     clearTimeout(dragTimer);
     if (!dragging) return;
     if (releasePromise) return releasePromise;
+    const modifier = dragModifier;
     releasePromise = run('ydotool', ['click', '0x80'], { timeout: 1000 })
-      .then(() => { dragging = false; })
+      .then(() => { dragging = false; dragModifier = 0; })
+      .finally(() => { if (modifier) return run('ydotool', ['key', `${modifier}:0`], { timeout: 1000 }).catch(() => {}); })
       .catch(error => {
         // A failed release must not erase held-state: retry if the daemon
         // reconnects, and allow an explicit stop/shutdown to retry immediately.
@@ -188,6 +266,9 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     const lights = caps.lights ? get(7, null) : null;
     const textInput = get(8, { available: false, focused: null });
     if (!caps.mouse) warnings.push('INPUT_UNAVAILABLE');
+    // The verification also sees the user's own mouse moving at that moment;
+    // only a miss that no jitter explains is worth a warning.
+    else if (pointerError > 8) warnings.push('POINTER_INACCURATE');
     if (!caps.keyboard) warnings.push('TEXT_UNAVAILABLE');
     if (!caps.screenshot) warnings.push('SCREENSHOT_UNAVAILABLE');
     if (!caps.audio) warnings.push('PLAYBACK_UNAVAILABLE');
@@ -203,9 +284,10 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       monitors: get(1, [], 'MONITORS_UNAVAILABLE').map(m => ({
         id: m.id, name: String(m.name), width: m.width, height: m.height, focused: Boolean(m.focused),
         dpmsStatus: m.dpmsStatus !== undefined ? Boolean(m.dpmsStatus) : true,
+        activeWorkspace: Number.isInteger(m.activeWorkspace?.id) ? m.activeWorkspace.id : null,
         model: m.model ? String(m.model) : (m.description ? String(m.description) : undefined),
       })),
-      workspaces: get(2, [], 'WORKSPACES_UNAVAILABLE').map(w => ({ ...workspace(w), windows: Number(w.windows) || 0 })),
+      workspaces: get(2, [], 'WORKSPACES_UNAVAILABLE').map(w => ({ ...workspace(w), windows: Number(w.windows) || 0, monitor: typeof w.monitor === 'string' ? w.monitor.slice(0, 150) : null })),
       windows: get(3, [], 'WINDOWS_UNAVAILABLE').map(windowInfo).filter(Boolean),
       volume: { value: match ? Math.max(0, Math.min(1, Number(match[1]))) : 0, muted: rawVolume.includes('[MUTED]') },
       capabilities: caps, warningCodes: warnings, warnings: warnings.map(code => message(code, locale)),
@@ -242,34 +324,14 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       case 'mouse.clickAt': {
         const buttons = { left: '0xC0', right: '0xC1', middle: '0xC2' };
         if (!Object.hasOwn(buttons, value.button)) throw new ApiError(400, 'INVALID_BUTTON');
-        if (typeof value.monitor !== 'string' || value.monitor.length < 1 || value.monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
-        const x = numberIn(value.x, 0, 32767, true);
-        const y = numberIn(value.y, 0, 32767, true);
-        const monitors = await readHypr('monitors');
-        const monitor = monitors.find(item => item.name === value.monitor);
-        if (!monitor) throw new ApiError(400, 'INVALID_MONITOR');
-        const width = Number(monitor.width);
-        const height = Number(monitor.height);
-        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new ApiError(400, 'INVALID_MONITOR');
-        numberIn(x, 0, width - 1, true);
-        numberIn(y, 0, height - 1, true);
-        const gx = (Number(monitor.x) || 0) + x;
-        const gy = (Number(monitor.y) || 0) + y;
-        await run('ydotool', ['mousemove', '--absolute', '--', String(gx), String(gy)]);
+        const point = await monitorPoint(value);
+        await placePointer(point);
         await run('ydotool', ['click', buttons[value.button]]);
         break;
       }
       case 'mouse.moveTo': {
-        if (typeof value.monitor !== 'string' || value.monitor.length < 1 || value.monitor.length > 150 || /[\u0000-\u001f\u007f]/.test(value.monitor)) throw new ApiError(400, 'INVALID_MONITOR');
-        const x = numberIn(value.x, 0, 32767, true);
-        const y = numberIn(value.y, 0, 32767, true);
-        const monitors = await readHypr('monitors');
-        const monitor = monitors.find(item => item.name === value.monitor);
-        if (!monitor) throw new ApiError(400, 'INVALID_MONITOR');
-        const width = Number(monitor.width), height = Number(monitor.height);
-        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new ApiError(400, 'INVALID_MONITOR');
-        numberIn(x, 0, width - 1, true); numberIn(y, 0, height - 1, true);
-        await run('ydotool', ['mousemove', '--absolute', '--', String((Number(monitor.x) || 0) + x), String((Number(monitor.y) || 0) + y)]);
+        const point = await monitorPoint(value);
+        await placePointer(point);
         break;
       }
       case 'mouse.scroll': {
@@ -289,10 +351,47 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         dragTimer.unref();
         break;
       }
+      case 'mouse.dragStartAt': {
+        const point = await monitorPoint(value);
+        // A new semantic drag supersedes a stale held button from a lost phone
+        // pointer. Pressing at the requested pixel focuses the window beneath
+        // it, which lets us return the exact window captured by this gesture.
+        if (dragging) await releaseDrag();
+        if (value.modifier !== undefined && value.modifier !== 'super') throw new ApiError(400, 'INVALID_ACTION');
+        await placePointer(point);
+        dragging = true;
+        // Hyprland moves (floating) or swaps (tiled) a window under Super+drag;
+        // a bare left drag only reaches the window's own contents.
+        dragModifier = value.modifier === 'super' ? 125 : 0;
+        try {
+          if (dragModifier) await run('ydotool', ['key', `${dragModifier}:1`]);
+          await run('ydotool', ['click', '0x40']);
+        }
+        catch (error) { await releaseDrag().catch(() => {}); throw error; }
+        clearTimeout(dragTimer);
+        dragTimer = setTimeout(() => { releaseDrag().catch(() => {}); }, dragTimeout);
+        dragTimer.unref();
+        let captured = null;
+        try {
+          const active = await readHypr('activewindow');
+          const at = active?.at, size = active?.size;
+          // A click on wallpaper leaves the previous active window unchanged.
+          // Only capture it when Hyprland's live geometry proves this gesture
+          // actually began inside that window (with a small decoration margin).
+          const geometry = Array.isArray(at) && Array.isArray(size) && at.length === 2 && size.length === 2
+            && [...at, ...size].every(Number.isFinite) && size[0] > 0 && size[1] > 0;
+          if (geometry && point.x >= at[0] - 12 && point.y >= at[1] - 12 && point.x <= at[0] + size[0] + 12 && point.y <= at[1] + size[1] + 12) captured = windowInfo(active);
+        } catch {}
+        return { ok: true, window: captured };
+      }
       case 'keyboard.text': {
         if (typeof value.text !== 'string' || !value.text.length || value.text.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value.text)) throw new ApiError(400, 'INVALID_TEXT');
-        // Unicode goes via stdin so leading dashes are never options.
-        await run('wtype', ['-'], { input: value.text, timeout: 8000 }); break;
+        // Unicode goes via stdin so leading dashes are never options. With
+        // enter, the whole line lands in one serialized action: a phone on a
+        // relay cannot lose the Enter between two requests.
+        await run('wtype', ['-'], { input: value.text, timeout: 8000 });
+        if (value.enter === true) await pressKeys(keyCodes.Enter);
+        break;
       }
       case 'keyboard.key': {
         if (!Object.hasOwn(keyCodes, value.key)) throw new ApiError(400, 'KEY_NOT_ALLOWED');
@@ -300,6 +399,18 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       }
       case 'workspace.focus': {
         const id = numberIn(value.id, 1, 100, true);
+        // A workspace nobody has opened yet appears on the monitor under the
+        // cursor. The phone streams one monitor, so put the cursor there first
+        // when asked; an existing workspace keeps its own monitor.
+        if (typeof value.monitor === 'string') {
+          const workspaces = await readHypr('workspaces');
+          if (!workspaces.some(ws => Number(ws.id) === id)) {
+            const monitors = await readHypr('monitors');
+            const monitor = monitors.find(item => item.name === value.monitor);
+            if (!monitor || !validMonitorName(monitor.name)) throw new ApiError(400, 'INVALID_MONITOR');
+            await placePointer({ x: (Number(monitor.x) || 0) + Math.floor(Number(monitor.width) / 2), y: (Number(monitor.y) || 0) + Math.floor(Number(monitor.height) / 2) });
+          }
+        }
         // Hyprland 0.56+ uses Lua dispatch expressions. Only the bounded integer
         // enters this fixed expression; no request-provided code is accepted.
         await run('hyprctl', ['dispatch', `hl.dsp.focus({ workspace = "${id}" })`]); break;
@@ -309,6 +420,20 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         const windows = await readHypr('clients');
         if (!windows.some(w => w.address === value.address)) throw new ApiError(404, 'WINDOW_CLOSED');
         await run('hyprctl', ['dispatch', `hl.dsp.focus({ window = "address:${value.address}" })`]); break;
+      }
+      case 'window.moveToWorkspace': {
+        const id = numberIn(value.id, 1, 100, true);
+        if (typeof value.address !== 'string' || !/^0x[\da-f]{1,32}$/i.test(value.address)) throw new ApiError(400, 'INVALID_WINDOW');
+        const windows = await readHypr('clients');
+        const target = windows.find(w => w.address === value.address);
+        if (!target) throw new ApiError(404, 'WINDOW_CLOSED');
+        if (dragging) await releaseDrag();
+        if (Number(target.workspace?.id) === id) return { ok: true, moved: false, workspace: id };
+        // Hyprland 0.56's dispatcher accepts an exact window selector. Keeping
+        // follow=false moves the captured window without pulling the phone's
+        // viewed workspace away from the user's current context.
+        await run('hyprctl', ['dispatch', `hl.dsp.window.move({ workspace = "${id}", follow = false, window = "address:${value.address}" })`]);
+        return { ok: true, moved: true, workspace: id };
       }
       case 'volume.set': {
         const volume = numberIn(value.value, 0, 1);

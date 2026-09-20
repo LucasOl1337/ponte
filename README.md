@@ -20,7 +20,7 @@ These are Android 11 emulator captures of the current interface in Portuguese; t
 
 | Control | Behavior |
 | --- | --- |
-| Screen | Opens first. The monitor fills the phone: tap clicks, long-press right-clicks or drags, pinch zooms, one finger pans while zoomed, two fingers scroll the PC. Tap a text field on the PC and the phone keyboard rises; what you type goes to the PC live |
+| Screen | Opens first. The monitor fills the phone: tap clicks, drag selects or moves like a held mouse button, long-press right-clicks or opens workspace dragging, pinch zooms, one finger pans while zoomed, and two fingers scroll the PC. Drop a long-pressed window on the workspace shelf to move that exact window. Tap a text field and the Android keyboard rises; what you type goes to the PC live |
 | Screen buttons | Switch to the next monitor, force landscape edge to edge (and release it), dictate into the focused field |
 | Terminals | Read and type in dedicated text sessions, or **speak**: the PC transcribes and types into the selected session, then presses Enter |
 | Windows | Browse windows and workspaces, then focus the one you want |
@@ -31,7 +31,7 @@ These are Android 11 emulator captures of the current interface in Portuguese; t
 | Voice | Record, review, send to the PC and play back |
 | Pairing | Pair once. The app remembers the connection across restarts |
 
-Live view is authenticated MJPEG. The default *Sharp* profile streams native pixels at up to 15 fps; *Balanced* and *Light* trade resolution for bandwidth. Zoom is a continuous transform on the phone, like Chrome Remote Desktop: the frame never gets re-cropped mid-pinch, and the *Sharp* profile stays crisp up to 1:1. It does not stream system audio. This is intended for desktop control and checking progress, not gaming.
+Live view is authenticated MJPEG. The default *Auto* profile starts light and climbs to *Sharp* (native pixels, up to 15 fps) while frames keep arriving on time, then backs off when the link lags, so the same app works on home Wi-Fi and on 4G. You can also pin *Sharp*, *Balanced* or *Light*. Zoom is a continuous transform on the phone, like Chrome Remote Desktop: the frame never gets re-cropped mid-pinch, and the *Sharp* profile stays crisp up to 1:1. It does not stream system audio. This is intended for desktop control and checking progress, not gaming.
 
 The keyboard raise relies on fcitx5 running on the PC, which is how Ponte learns that a text field has focus. Dictation uses the Sussurro socket when it is running, or any OpenAI-compatible transcription endpoint (`PONTE_STT_URL`, OmniVoice Studio by default). Audio is transcribed and discarded. See the [screen and terminal guide](docs/screen-and-terminals.md).
 
@@ -66,7 +66,7 @@ See the [CLI and configuration guide](docs/setup.md) and [Android build guide](a
 
 ## Connection and privacy
 
-Ponte runs a Node server on your PC. The Android app serves the interface through a private loopback proxy and connects to the PC's Tailscale address over TLS. The APK pins the exact server certificate before sending authorization. HTTP stays on loopback.
+Ponte runs a Node server on your PC. The Android app serves the interface through a private loopback proxy and connects to the PC's Tailscale address over TLS. The APK pins the installation CA and checks the PC's certificate against it before sending authorization; the server certificate can be renewed without a new app. HTTP stays on loopback.
 
 Every control API requires a pairing token. The server uses an explicit action list and bounded subprocess arguments. It stores voice files on your PC. Ponte has no analytics SDK and does not send recordings to an AI provider.
 
@@ -88,7 +88,7 @@ Tests use temporary data and synthetic servers. They do not need a real phone or
 | --- | --- |
 | `backend/` and `server.mjs` | Authentication, desktop actions, monitor capture and audio storage |
 | `public/` | Mobile interface, live frame parser and recording controls |
-| `android/` | Android shell, certificate pinning and loopback transport |
+| `android/` | Android shell, CA pinning and loopback transport |
 | `ponte` | Local configuration and user service management |
 | `docs/` | Setup, measured evidence, project page and presentation |
 

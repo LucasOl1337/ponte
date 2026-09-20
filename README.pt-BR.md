@@ -18,7 +18,7 @@ O Ponte nasceu da vontade de abrir um app no celular e continuar usando o PC. A 
 
 Capturas do emulador (Android 11) da interface atual; o desktop transmitido aparece pixelado porque é uma sessão de trabalho real.
 
-A Tela é um modo só: o monitor ocupa o celular e você toca nele como num celular. Toque clica, toque longo e solta é botão direito, toque longo e arrasta arrasta no PC, pinça amplia, um dedo navega com zoom, dois dedos rolam. Tocou num campo de texto no PC, o teclado do celular sobe sozinho e o que você digita vai ao vivo (o Ponte descobre o foco pelo fcitx5). O zoom é uma transformação contínua no celular, como no Chrome Remote Desktop: nunca recorta o stream no meio da pinça, e o perfil Nítido fica cravado até 1:1. Três botões flutuam ao lado da navegação: trocar de monitor, forçar paisagem de ponta a ponta e ditar. Veja o [guia de tela e terminais](docs/screen-and-terminals.md) e o [changelog](CHANGELOG.md).
+A Tela é um modo só: o monitor ocupa o celular e você toca nele como num celular. Toque clica; arrastar em 1× segura o botão esquerdo como um mouse, permitindo selecionar texto, mover sliders e arrastar itens; toque longo e solta é botão direito; toque longo e arrasta abre a prateleira de workspaces; pinça amplia; um dedo navega com zoom; dois dedos rolam. Solte numa área da prateleira para levar exatamente aquela janela ao workspace, sem trocar a área que você está vendo. Tocou num campo de texto no PC, o teclado do Android sobe sozinho e o que você digita vai ao vivo (o Ponte descobre o foco pelo fcitx5). O zoom é uma transformação contínua no celular, como no Chrome Remote Desktop: nunca recorta o stream no meio da pinça, e o perfil Nítido fica cravado até 1:1. Três botões flutuam ao lado da navegação: trocar de monitor, forçar paisagem de ponta a ponta e ditar. Veja o [guia de tela e terminais](docs/screen-and-terminals.md) e o [changelog](CHANGELOG.md).
 
 Para ver e controlar o celular a partir deste PC pela Tailscale: `./ponte phone status`, depois `./ponte phone connect` (padrão `100.111.221.82:5555`) e `./ponte phone view`. Passo a passo: [PC controla o celular](docs/pc-controls-phone.pt-BR.md).
 
@@ -36,7 +36,7 @@ cd ponte
 
 Transfira `.work/Ponte.apk` para seu celular e instale. Abra o app e faça o pareamento uma vez com a chave exibida por `./ponte pair`. Depois, o app lembra o acesso. Coloque o ícone na primeira tela para abrir com facilidade.
 
-Cada instalação gera configuração e certificado próprios. O APK é personalizado para seu PC e deve ficar privado. O processo inicial ainda exige compilação e pareamento manual, que pretendemos simplificar.
+Cada instalação gera configuração e uma CA próprias. O APK é personalizado para seu PC (pina a CA da instalação; o certificado do servidor pode ser renovado com `./ponte renew-cert` sem gerar app novo) e deve ficar privado. `./ponte doctor` confere PC, Tailscale, serviço, pareamento e APK de uma vez. O processo inicial ainda exige compilação e pareamento manual, que pretendemos simplificar.
 
 ## O que já está disponível
 
@@ -66,7 +66,7 @@ O Ponte inclui controles de energia no painel inicial do celular:
 - **APK no celular:** O app atualizado (versionCode 8, alpha.5) inclui WoL, energia, luzes, sessão, ditado e a Tela nova. Instale por cima do app atual, com a mesma chave de assinatura.
 - **Por SSH:** com a Tailscale SSH ligada no PC, `ssh usuario@<ip-tailscale> ./ponte pc suspend` (ou `lock`, `unlock`, `sleep`, `wake`, `reboot`, `off`, `monitors on|off [nome]`, `lights <preset>`) roda as mesmas ações sem o app.
 
-A imagem usa MJPEG autenticado. O perfil Nítido manda pixel nativo a até 15 quadros/s (medido: 15 fps a 2,4 MB/s na rede local); Equilibrado e Leve trocam resolução por banda. Não transmite o áudio do sistema. Ainda não medimos a experiência por rede celular ou fora de casa.
+A imagem usa MJPEG autenticado. O perfil Automático (padrão) começa leve e sobe até o Nítido (pixel nativo, até 15 quadros/s) enquanto os quadros chegam em dia, e recua sozinho quando a conexão atrasa; assim o mesmo app serve no Wi-Fi de casa e no 4G. Dá pra cravar Nítido, Equilibrado ou Leve. Medido num monitor 1440p: Nítido ~49 Mbit/s, Equilibrado ~7, Leve ~2. Não transmite o áudio do sistema.
 
 Leia o [guia de configuração](docs/setup.md), o [guia Android](android/README.md) e o [modelo de segurança](SECURITY.md). Um celular pareado pode operar sua sessão real do PC. A [especificação do caminho inverso](docs/pc-controls-phone.pt-BR.md) avalia operar o celular a partir do PC pela mesma rede Tailscale. Valide as novidades no aparelho com o [roteiro de teste manual](docs/manual-test-checklist.pt-BR.md).
 

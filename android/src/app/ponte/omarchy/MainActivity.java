@@ -8,6 +8,7 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.*;
 import android.view.*;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.*;
 import android.widget.*;
 import java.io.*;
@@ -27,6 +28,18 @@ public final class MainActivity extends Activity {
     private SharedPreferences preferences;
     private boolean paused;
     private boolean destroyed;
+    // Started by an agent over adb ("--ez ponte.agent true"): show above the
+    // lock screen and turn the screen on, so the app can be exercised without
+    // unlocking the phone. The rest of the phone stays locked, and the moment
+    // this instance leaves the foreground it finishes, so a locked phone never
+    // keeps PC control one power-button press away.
+    private boolean agentSession;
+    // A cold start right after the screen turns on can race the VPN coming
+    // back: the first request fails while the tunnel is still waking. Retry a
+    // few times quietly before asking the user to.
+    private int loadAttempts;
+    private boolean loadFailed;
+    private boolean messageShown;
     private boolean reloadOnResume;
     private String origin;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -35,12 +48,17 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         preferences = getSharedPreferences("ponte-pairing", MODE_PRIVATE);
         consumePairingIntent(getIntent());
+        agentSession = getIntent() != null && getIntent().getBooleanExtra("ponte.agent", false);
+        if (agentSession && android.os.Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true); }
         getWindow().setStatusBarColor(Color.rgb(21, 23, 20));
         getWindow().setNavigationBarColor(Color.rgb(21, 23, 20));
+        // A remote control is watched, not touched, for minutes at a time: the
+        // phone must not dim and lock in the middle of a stream.
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(21, 23, 20));
         setContentView(root);
-        try (InputStream certificate = getAssets().open("pc-certificate.pem")) {
+        try (InputStream certificate = getAssets().open("pc-ca.pem")) {
             proxy = new LoopbackProxy(URI.create(BuildConfig.UPSTREAM), certificate, 18987, mac -> {
                 if (mac != null && !mac.isEmpty()) {
                     preferences.edit().putString("wol_mac", mac).apply();
@@ -85,11 +103,18 @@ public final class MainActivity extends Activity {
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setSafeBrowsingEnabled(true);
         settings.setUserAgentString(settings.getUserAgentString() + " PonteAndroid/" + BuildConfig.VERSION_NAME);
+        // Only @JavascriptInterface methods are exposed on the supported API
+        // levels. Every call still verifies the WebView's current loopback
+        // origin before it can affect the Activity.
+        browser.addJavascriptInterface(new PageBridge(), "PonteNative");
         CookieManager.getInstance().setAcceptCookie(false);
         CookieManager.getInstance().setAcceptThirdPartyCookies(browser, false);
-        WebView.setWebContentsDebuggingEnabled(false);
+        // Inspectable only in an explicitly debuggable dogfooding build.
+        WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0);
         browser.setWebViewClient(new WebViewClient() {
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { loadFailed = false; }
             @Override public void onPageFinished(WebView view, String url) {
+                if (!loadFailed) loadAttempts = 0;
                 Uri address = Uri.parse(view.getUrl() == null ? url : view.getUrl());
                 if (ownOrigin(address) && (address.getFragment() == null || !address.getFragment().startsWith("pair="))) {
                     // The web app consumed the fragment into its private DOM
@@ -99,8 +124,9 @@ public final class MainActivity extends Activity {
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri target = request.getUrl();
-                // The page has no JavaScript bridge; a navigation to ponte://orientation/…
-                // is the one bridge-free signal it may send, and it only rotates the screen.
+                // The page has no JavaScript bridge. Its closed ponte:// command
+                // set can only rotate the Activity or raise the keyboard for a
+                // DOM field that the trusted loopback page already focused.
                 if (target != null && "ponte".equals(target.getScheme())) { handlePageCommand(target); return true; }
                 return !ownOrigin(target);
             }
@@ -109,10 +135,12 @@ public final class MainActivity extends Activity {
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, android.net.http.SslError error) { handler.cancel(); }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame() && !paused && !destroyed) showUnavailable();
+                if (request.isForMainFrame() && !paused && !destroyed) { loadFailed = true; showUnavailable(); }
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse error) {
-                if (request.isForMainFrame() && error.getStatusCode() >= 400 && !paused && !destroyed) showUnavailable();
+                if (!request.isForMainFrame() || error.getStatusCode() < 400 || paused || destroyed) return;
+                loadFailed = true;
+                if ("proxy_certificate".equals(error.getReasonPhrase())) showCertificateChanged(); else showUnavailable();
             }
         });
         ServiceWorkerController.getInstance().getServiceWorkerWebSettings().setAllowFileAccess(false);
@@ -163,15 +191,52 @@ public final class MainActivity extends Activity {
     }
 
     private void handlePageCommand(Uri command) {
-        if (destroyed || !"orientation".equals(command.getHost())) return;
+        if (destroyed || browser == null || !ownOrigin(Uri.parse(browser.getUrl() == null ? "" : browser.getUrl()))) return;
         String mode = command.getPath() == null ? "" : command.getPath().replace("/", "");
-        if ("landscape".equals(mode)) {
-            setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
-            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-        } else {
-            setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
-            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+        if ("orientation".equals(command.getHost())) {
+            if ("landscape".equals(mode)) {
+                setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+                getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            } else if ("auto".equals(mode)) {
+                setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+            }
+            return;
         }
+        if (!paused && "keyboard".equals(command.getHost()) && "show".equals(mode)) {
+            requestPhoneKeyboard();
+        }
+    }
+    private final class PageBridge {
+        @JavascriptInterface public void showKeyboard() {
+            runOnUiThread(() -> requestPhoneKeyboard());
+        }
+        // The typing bar closed (PC field lost focus, connection dropped): the
+        // IME must go with it, or keys land in a WebView with nothing focused.
+        @JavascriptInterface public void hideKeyboard() {
+            runOnUiThread(() -> hidePhoneKeyboard());
+        }
+    }
+    private void hidePhoneKeyboard() {
+        if (destroyed || browser == null) return;
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(browser.getWindowToken(), 0);
+    }
+    private void requestPhoneKeyboard() {
+        if (destroyed || paused || browser == null || !ownOrigin(Uri.parse(browser.getUrl() == null ? "" : browser.getUrl()))) return;
+        browser.setFocusableInTouchMode(true);
+        // Re-requesting focus on a WebView that already has it moves the page
+        // focus away from the typing field; only ask when it is really missing.
+        if (!browser.hasFocus()) browser.requestFocusFromTouch();
+        browser.postDelayed(() -> showPhoneKeyboard(0), 40);
+    }
+    private void showPhoneKeyboard(int attempt) {
+        if (destroyed || paused || browser == null || !ownOrigin(Uri.parse(browser.getUrl() == null ? "" : browser.getUrl()))) return;
+        InputMethodManager keyboard = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (keyboard == null) return;
+        keyboard.restartInput(browser);
+        boolean shown = keyboard.showSoftInput(browser, InputMethodManager.SHOW_IMPLICIT);
+        if (!shown && attempt == 0) browser.postDelayed(() -> showPhoneKeyboard(1), 140);
     }
     private boolean ownOrigin(Uri uri) {
         return uri != null && "http".equals(uri.getScheme()) && "127.0.0.1".equals(uri.getHost()) && uri.getPort() == 18987 && uri.getUserInfo() == null;
@@ -183,13 +248,30 @@ public final class MainActivity extends Activity {
     private void loadHome() {
         if (browser == null || destroyed) return;
         root.removeAllViews(); root.addView(browser, new FrameLayout.LayoutParams(-1, -1)); browser.setVisibility(View.VISIBLE);
+        messageShown = false;
         String token = preferences.getString("pair_token", "");
         String url = origin + "/";
         if (token.matches("[A-Za-z0-9_-]{32,128}")) url += "#pair=" + Uri.encode(token);
         browser.loadUrl(url);
         reloadOnResume = false;
     }
+    private void showCertificateChanged() {
+        runOnUiThread(() -> showMessage(nativeText("Your PC's certificate changed", "O certificado do seu PC mudou"),
+            nativeText("This app was built for a previous certificate. On the PC, run ./android/build.sh and install the new Ponte.apk over this one.",
+                       "Este app foi gerado para um certificado anterior. No PC, rode ./android/build.sh e instale o novo Ponte.apk por cima deste."), true));
+    }
     private void showUnavailable() {
+        if (++loadAttempts <= 3) {
+            long delay = 1500L * loadAttempts;
+            runOnUiThread(() -> {
+                showMessage(nativeText("Connecting to your PC…", "Conectando ao seu PC…"), nativeText("Waiting for Tailscale.", "Aguardando o Tailscale."), false);
+                // The WebView is detached while a message shows, so its own
+                // postDelayed would only run once re-attached; use the Activity's.
+                handler.postDelayed(() -> { if (!paused && !destroyed && loadFailed) loadHome(); }, delay);
+            });
+            return;
+        }
+        loadAttempts = 0;
         runOnUiThread(() -> showMessage(nativeText("Your PC has not responded", "Seu PC ainda não respondeu"), nativeText("Connect Tailscale on your phone and keep your PC awake. Then try again.", "Conecte o Tailscale no celular e mantenha o PC ligado. Depois, tente novamente."), true));
     }
     private String nativeText(String english, String portuguese) {
@@ -197,6 +279,7 @@ public final class MainActivity extends Activity {
     }
     private void showMessage(String title, String detail, boolean retry) {
         if (destroyed) return;
+        messageShown = true;
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL); panel.setGravity(Gravity.CENTER_VERTICAL);
         int padding = (int) (28 * getResources().getDisplayMetrics().density);
@@ -297,6 +380,7 @@ public final class MainActivity extends Activity {
         cancelMicrophonePermission();
         pauseWebContent(false);
         super.onStop();
+        if (agentSession && !destroyed && !isFinishing()) finish();
     }
     @Override protected void onResume() {
         super.onResume(); paused = false; ++pauseGeneration;
@@ -304,7 +388,10 @@ public final class MainActivity extends Activity {
         if (proxy != null) proxy.setPaused(false);
         if (browser != null) {
             browser.onResume();
-            if (reloadOnResume) loadHome();
+            // A load that failed while we were being paused (the keyguard
+            // transition of an agent session, a permission dialog) is retried
+            // on its own instead of waiting for a tap on "Try again".
+            if (reloadOnResume || (loadFailed && messageShown)) loadHome();
             else browser.evaluateJavascript("window.dispatchEvent(new Event('ponte-native-resume'));", null);
         }
         resolveMicrophonePermission();

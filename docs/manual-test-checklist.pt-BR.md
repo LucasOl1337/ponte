@@ -12,17 +12,22 @@ Teste no Redmi Note 13 Pro+ (Android 14) com a Tailscale ligada e o PC acordado.
 - Faça: abra o Ponte e toque em Tela.
 - Espere: o monitor do PC aparece ao vivo e continua atualizando na página.
 
-## 3. Zoom por região
+## 3. Toque e zoom
 
-- Faça: dê pinça para ler um texto pequeno, arraste para outra área, toque em 1:1 e volte o zoom.
-- Espere: o recorte com zoom fica nítido (captura em resolução real, sem esticar) e preenche a prévia sem barras pretas; 1:1 mostra pixels nativos de um recorte que dá para arrastar; ao voltar, a tela inteira retorna.
+- Faça: toque no X de uma janela com a oscilação normal do dedo; em 1×, arraste sobre um texto do PC e mova um slider. Dê pinça para ler um texto pequeno, navegue com um dedo enquanto ampliado e volte o zoom. Role uma página com dois dedos juntos.
+- Espere: a janela fecha com o toque, o arraste em 1× seleciona texto e move o slider como o botão esquerdo segurado, a pinça permanece suave e centrada nos dedos, um dedo move somente a vista ampliada e dois dedos rolam o PC quando não há pinça.
 
-## 4. Toque direto
+## 4. Mover uma janela para outro workspace
 
-- Faça: mude para Toque direto, toque num ícone, segure para botão direito, arraste com um dedo, pinça com dois.
-- Espere: o monitor ganha uma borda lima e um selo de Toque direto; o texto de ajuda explica toque/toque longo/arraste/pinça; na primeira vez, um aviso curto diz que o toque clica no PC. Toque clica na posição, segurar clica com direito, um dedo move a imagem, dois dão pinça; o mouse do PC só mexe no Toque direto.
+- Faça: toque longo na barra de título de uma janela, comece a mover, arraste até um número da prateleira de workspaces que aparece e solte. Repita um arraste comum e solte fora da prateleira.
+- Espere: a primeira janela vai para aquele workspace sem trocar a área visível. O segundo continua sendo um arraste comum no PC. Tocar longo no wallpaper e soltar num workspace não move uma janela que estava em foco antes.
 
-## 5. Card Energia (um monitor só)
+## 5. Tocar num campo de texto do PC
+
+- Faça: toque num campo de texto na tela transmitida, digite uma frase curta, pressione Enter e depois toque num alvo que não aceita texto.
+- Espere: o teclado do Android e a barra fina de digitação sobem sozinhos; texto e Enter chegam ao campo em foco no PC. Tocar fora fecha a barra que abriu automaticamente. O app não pede nenhuma permissão nova do Android.
+
+## 6. Card Energia (um monitor só)
 
 - Faça: em Energia, Desligue UM monitor e Ligue de novo.
 - Espere: só aquela tela apaga e volta; o aviso diz "Monitor desligado/ligado".
@@ -30,7 +35,7 @@ Teste no Redmi Note 13 Pro+ (Android 14) com a Tailscale ligada e o PC acordado.
 - Faça: toque em Dormir inteligente, espere e toque em Acordar.
 - Espere: monitores e luzes RGB apagam ("Dormindo...") e voltam ("PC acordado..."); o PC segue acessível pela Tailscale o tempo todo.
 
-## 6. Terminais
+## 7. Terminais
 
 - Faça: abra Terminais, crie Nova sessão, use Digitar com `echo ok` e pressione Enter.
 - Espere: a saída mostra `ok`; Ctrl+C interrompe; a mesma sessão abre no PC.

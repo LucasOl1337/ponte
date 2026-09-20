@@ -11,6 +11,7 @@ import secrets
 import shutil
 import stat
 import subprocess
+import time
 import sys
 import tempfile
 
@@ -99,32 +100,74 @@ def dns_name():
         return None
 
 
-def make_tls(directory, host):
-    private_dir(directory)
-    ca_key, ca_cert = directory / 'ca.key', directory / 'ca.crt'
-    server_key, server_cert = directory / 'server.key', directory / 'server.crt'
+SERVER_CERT_DAYS = 365
+
+
+def issue_server_certificate(directory, host, ca_key, ca_cert, server_key, server_cert):
+    """Issue a one-year server certificate for host under the installation CA.
+
+    The Android app pins the CA, so this can run again at renewal time without
+    rebuilding the app. New files are written beside the old ones and swapped
+    in only after they verify, so a failed run never leaves a broken listener.
+    """
     request, extensions = directory / 'server.csr', directory / 'server.ext'
-    if any(directory.iterdir()):
-        raise ValueError(f'TLS directory is not empty; refusing to overwrite keys: {directory}')
+    new_key, new_cert = directory / 'server.key.new', directory / 'server.crt.new'
     extensions.write_text('\n'.join([
         'basicConstraints=critical,CA:FALSE', 'keyUsage=critical,digitalSignature,keyEncipherment',
         'extendedKeyUsage=serverAuth', f'subjectAltName=IP:{host}', '',
     ]))
     try:
-        run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '3650',
-            '-keyout', str(ca_key), '-out', str(ca_cert), '-subj', '/CN=Ponte installation CA',
-            '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign', capture=True)
         run('openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-sha256',
-            '-keyout', str(server_key), '-out', str(request), '-subj', '/CN=Ponte server', capture=True)
+            '-keyout', str(new_key), '-out', str(request), '-subj', '/CN=Ponte server', capture=True)
         run('openssl', 'x509', '-req', '-in', str(request), '-CA', str(ca_cert), '-CAkey', str(ca_key),
-            '-set_serial', str(secrets.randbits(128)), '-days', '365', '-sha256', '-extfile', str(extensions), '-out', str(server_cert), capture=True)
-        for target in [ca_key, ca_cert, server_key, server_cert]:
+            '-set_serial', str(secrets.randbits(128)), '-days', str(SERVER_CERT_DAYS), '-sha256', '-extfile', str(extensions), '-out', str(new_cert), capture=True)
+        for target in [new_key, new_cert]:
             target.chmod(0o600)
-        run('openssl', 'verify', '-CAfile', str(ca_cert), '-verify_ip', host, str(server_cert), capture=True)
+        run('openssl', 'verify', '-CAfile', str(ca_cert), '-verify_ip', host, str(new_cert), capture=True)
+        os.replace(new_key, server_key)
+        os.replace(new_cert, server_cert)
     finally:
-        request.unlink(missing_ok=True)
-        extensions.unlink(missing_ok=True)
+        for leftover in [request, extensions, new_key, new_cert]:
+            leftover.unlink(missing_ok=True)
+
+
+def make_tls(directory, host):
+    private_dir(directory)
+    ca_key, ca_cert = directory / 'ca.key', directory / 'ca.crt'
+    server_key, server_cert = directory / 'server.key', directory / 'server.crt'
+    if any(directory.iterdir()):
+        raise ValueError(f'TLS directory is not empty; refusing to overwrite keys: {directory}')
+    run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '3650',
+        '-keyout', str(ca_key), '-out', str(ca_cert), '-subj', '/CN=Ponte installation CA',
+        '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign', capture=True)
+    for target in [ca_key, ca_cert]:
+        target.chmod(0o600)
+    issue_server_certificate(directory, host, ca_key, ca_cert, server_key, server_cert)
     return {'host': host, 'certFile': str(server_cert), 'keyFile': str(server_key), 'caFile': str(ca_cert)}
+
+
+def renew_certificate(config_file):
+    """Reissue the server certificate under the existing CA and restart the service."""
+    config = load_config(config_file)
+    tls = config.get('nativeTls')
+    if not tls:
+        raise ValueError('This installation is local-only; native TLS is not configured.')
+    server_cert, server_key = Path(tls['certFile']), Path(tls['keyFile'])
+    ca_cert = Path(tls.get('caFile', ''))
+    ca_key = ca_cert.with_name('ca.key')
+    directory = server_cert.parent
+    if not (ca_cert.is_file() and ca_key.is_file()):
+        raise ValueError('The installation CA is missing; a new CA needs ./ponte setup and a new APK.')
+    if server_key.parent != directory or ca_cert.parent != directory:
+        raise ValueError('TLS files must live in one private directory.')
+    issue_server_certificate(directory, tls['host'], ca_key, ca_cert, server_key, server_cert)
+    print(f'Server certificate renewed for {SERVER_CERT_DAYS} days: {server_cert}')
+    print('The app keeps working: it pins the installation CA, not this certificate.')
+    if subprocess.run(['systemctl', '--user', 'is-active', '--quiet', SERVICE]).returncode == 0:
+        run('systemctl', '--user', 'restart', SERVICE)
+        print('Ponte restarted with the new certificate.')
+    else:
+        print('Start Ponte to use it: ./ponte start')
 
 
 def setup(args):
@@ -396,6 +439,253 @@ def phone_pair(config_file, data, target, code, runner=run, which=command_path):
     print(f'Paired with {address}. Next: ./ponte phone connect {DEFAULT_PHONE}')
 
 
+# Waits between adb probes; tests set PONTE_TEST_FAST to skip them.
+SLEEP = (lambda seconds: None) if os.environ.get('PONTE_TEST_FAST') else time.sleep
+
+
+def adb_devices(runner=run):
+    """[(serial, state)] as adb reports them; a TCP serial contains ':'."""
+    try:
+        output = runner('adb', 'devices', capture=True).stdout or ''
+    except (OSError, subprocess.SubprocessError):
+        return []
+    devices = []
+    for line in output.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 2 and not parts[0].startswith('*'):
+            devices.append((parts[0], parts[1]))
+    return devices
+
+
+def adb_responds(serial, runner=run):
+    try:
+        result = runner('adb', '-s', serial, 'shell', 'echo', 'ponte', capture=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return 'ponte' in (result.stdout or '')
+
+
+def phone_ensure(config_file, data, runner=run, which=command_path, quiet=False, sleep=SLEEP):
+    """Make the phone reachable over adb through Tailscale alone.
+
+    adbd only listens on TCP after `adb tcpip PORT`, which is lost on reboot.
+    So: connect to the saved Tailscale address; if that fails, use whatever
+    transport is up right now (USB, or a Wireless-debugging session) just to
+    switch adbd to the fixed port, then come back over Tailscale. Prints the
+    single manual step left when nothing is reachable."""
+    if not which('adb'):
+        raise ValueError('adb is not installed. Install it with: pacman -S android-tools')
+    address = load_phone_address(config_file, data)
+    host, port = address.split(':')
+    say = (lambda *_: None) if quiet else print
+    if adb_device_state(address, runner=runner) == 'device' and adb_responds(address, runner=runner):
+        say(f'Phone reachable over Tailscale at {address}.')
+        return address
+    online = tailscale_phone_online(host, runner=runner)
+    if online is False:
+        say(f'Tailscale says {host} is offline; the phone must be on the tailnet before adb can reach it.')
+    try:
+        runner('adb', 'disconnect', address, capture=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        runner('adb', 'connect', address, capture=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if adb_device_state(address, runner=runner) == 'device' and adb_responds(address, runner=runner):
+        save_phone_address(config_file, data, address)
+        say(f'Phone reachable over Tailscale at {address}.')
+        return address
+    # No TCP listener: enable it through any other transport that is up.
+    others = [serial for serial, state in adb_devices(runner=runner) if serial != address and state == 'device' and not serial.startswith('emulator-')]
+    for serial in others:
+        if not adb_responds(serial, runner=runner):
+            continue
+        try:
+            runner('adb', '-s', serial, 'tcpip', port, capture=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        sleep(2)
+        for _ in range(5):
+            try:
+                runner('adb', 'connect', address, capture=True, timeout=20)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            if adb_device_state(address, runner=runner) == 'device' and adb_responds(address, runner=runner):
+                save_phone_address(config_file, data, address)
+                say(f'adbd switched to TCP port {port} through {serial}; phone reachable over Tailscale at {address}.')
+                return address
+            sleep(1)
+    unauthorized = [serial for serial, state in adb_devices(runner=runner) if state == 'unauthorized']
+    if unauthorized:
+        raise ValueError(f'adb is not authorized on {unauthorized[0]}: accept the USB debugging prompt on the phone, then run ./ponte phone ensure again.')
+    raise ValueError(
+        f'Cannot reach the phone at {address} and no other adb transport is up. adbd stops listening on TCP after a reboot: '
+        'plug the phone in once, or on Wi-Fi turn on Wireless debugging and run ./ponte phone connect IP:PORT (pairing is remembered), '
+        'then ./ponte phone ensure switches it back to the fixed port over Tailscale.'
+    )
+
+
+def phone_unlock_file(data):
+    return Path(data) / 'phone-unlock'
+
+
+def phone_wake(config_file, data, runner=run, which=command_path, sleep=SLEEP):
+    """Wake the phone and get past the lock screen so an agent can act on it.
+
+    The screen wakes with KEYCODE_WAKEUP; a swipe dismisses a lock without
+    credentials. If phone-unlock (0600, in the data dir) holds a PIN or
+    password, it is typed after the swipe. Nothing is typed when the phone is
+    already unlocked."""
+    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep)
+    adb = lambda *args, **kw: runner('adb', '-s', address, *args, capture=True, timeout=15, **kw)
+    def locked():
+        try:
+            output = adb('shell', 'dumpsys', 'window').stdout or ''
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return 'mDreamingLockscreen=true' in output or 'NotificationShade' in output.split('mCurrentFocus=')[-1].split('\n')[0]
+    def dozing():
+        try:
+            return 'mWakefulness=Awake' not in (adb('shell', 'dumpsys', 'power').stdout or '')
+        except (OSError, subprocess.SubprocessError):
+            return False
+    # HyperOS ignores KEYCODE_WAKEUP while dozing; the power key does wake it.
+    if dozing():
+        adb('shell', 'input', 'keyevent', 'KEYCODE_POWER')
+        sleep(0.8)
+    try:
+        if 'ScreenOnProximitySensorGuide' in (adb('shell', 'dumpsys', 'window').stdout or ''):
+            adb('shell', 'input', 'keyevent', 'KEYCODE_VOLUME_UP'); sleep(0.5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not locked():
+        print(f'Phone awake and unlocked ({address}).')
+        return address
+    adb('shell', 'input', 'swipe', '600', '2200', '600', '800', '250')
+    sleep(0.8)
+    secret_file = phone_unlock_file(data)
+    if locked() and secret_file.exists():
+        if secret_file.stat().st_mode & 0o077:
+            raise ValueError(f'{secret_file} must be private (chmod 600).')
+        secret = secret_file.read_text().strip()
+        if secret:
+            # The secret never appears on a command line of this PC: adb's shell
+            # gets it as one argument; on the phone it is typed into the lock UI.
+            adb('shell', 'input', 'text', secret)
+            adb('shell', 'input', 'keyevent', 'KEYCODE_ENTER')
+            sleep(1.2)
+    if locked():
+        raise ValueError(
+            f'The phone is still locked. Put the PIN in {secret_file} (chmod 600) so ./ponte phone wake can enter it, or disable the lock screen for this phone.'
+        )
+    print(f'Phone awake and unlocked ({address}).')
+    return address
+
+
+PONTE_ACTIVITY = 'app.ponte.omarchy/.MainActivity'
+
+
+def phone_app(config_file, data, runner=run, which=command_path, sleep=SLEEP):
+    """Bring Ponte to the front over Tailscale, screen on, above the lock screen.
+
+    The activity started with the agent extra shows above the keyguard and
+    turns the screen on; it finishes itself when it leaves the foreground.
+    HyperOS may show its 'do not cover the earpiece' guide on wake, which
+    Volume Up dismisses."""
+    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep)
+    adb = lambda *args, **kw: runner('adb', '-s', address, *args, capture=True, timeout=20, **kw)
+    def focus():
+        try:
+            output = adb('shell', 'dumpsys', 'window').stdout or ''
+        except (OSError, subprocess.SubprocessError):
+            return ''
+        return output.split('mCurrentFocus=')[-1].split('\n')[0] if 'mCurrentFocus=' in output else ''
+    # HyperOS/MIUI gates "show on lock screen" behind its own app op (10020),
+    # rejected by default; other Androids have no such op and the call fails
+    # harmlessly.
+    try:
+        adb('shell', 'appops', 'set', 'app.ponte.omarchy', '10020', 'allow')
+    except (OSError, subprocess.SubprocessError):
+        pass
+    for attempt in range(3):
+        adb('shell', 'am', 'start', '-n', PONTE_ACTIVITY, '--ez', 'ponte.agent', 'true')
+        for _ in range(8):
+            sleep(0.5)
+            current = focus()
+            if 'ScreenOnProximitySensorGuide' in current:
+                adb('shell', 'input', 'keyevent', 'KEYCODE_VOLUME_UP')
+                continue
+            if 'app.ponte.omarchy' in current:
+                print(f'Ponte is in front on {address} (screen on, above the lock screen).')
+                return address
+    raise ValueError(f'Ponte did not come to the front on {address}; current window: {focus() or "unknown"}. Is the installed app 0.1.0-alpha.19 or newer?')
+
+
+PHONE_TIMER = 'ponte-phone.timer'
+
+
+def phone_timer(config_file, config_home, enable, runner=run, which=command_path):
+    """A user timer that runs `ponte phone ensure --quiet` every two minutes,
+    so the phone is already an adb device when an agent needs it, and the
+    Tailscale link is re-established after the phone changes networks."""
+    units = Path(config_home) / 'systemd/user'
+    service_file, timer_file = units / 'ponte-phone.service', units / PHONE_TIMER
+    if not enable:
+        present = [f for f in (timer_file, service_file) if f.exists() or f.is_symlink()]
+        for f in present:
+            if f.is_symlink() or not f.read_text().startswith('# Managed by Ponte\n'):
+                raise ValueError(f'Refusing to remove an unmanaged unit: {f}')
+        if timer_file in present:
+            runner('systemctl', '--user', 'disable', '--now', PHONE_TIMER)
+        for f in present:
+            f.unlink()
+        runner('systemctl', '--user', 'daemon-reload')
+        print('Phone keepalive timer removed.')
+        return
+    python = which('python3') or sys.executable
+    if not which('adb'):
+        raise ValueError('adb is not installed. Install it with: pacman -S android-tools')
+    units.mkdir(parents=True, exist_ok=True)
+    service = '\n'.join([
+        '# Managed by Ponte', '[Unit]', 'Description=Ponte phone adb link over Tailscale', '', '[Service]', 'Type=oneshot',
+        'Environment=' + quoted_unit('PONTE_CONFIG=' + str(config_file)),
+        'Environment=' + quoted_unit('PATH=' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')),
+        'ExecStart=' + quoted_unit(python) + ' ' + quoted_unit(ROOT / 'ponte') + ' phone ensure --quiet', '',
+    ])
+    timer = '\n'.join([
+        '# Managed by Ponte', '[Unit]', 'Description=Keep the phone reachable over adb through Tailscale', '',
+        '[Timer]', 'OnBootSec=1min', 'OnUnitActiveSec=2min', 'AccuracySec=20s', '', '[Install]', 'WantedBy=timers.target', '',
+    ])
+    for target, content in ((service_file, service), (timer_file, timer)):
+        if target.is_symlink() or (target.exists() and not target.read_text().startswith('# Managed by Ponte\n')):
+            raise ValueError(f'Existing unit differs; refusing to replace it: {target}')
+        target.write_text(content)
+    runner('systemctl', '--user', 'daemon-reload')
+    runner('systemctl', '--user', 'enable', '--now', PHONE_TIMER)
+    print(f'Phone keepalive timer installed ({PHONE_TIMER}, every 2 min).')
+
+
+def phone_install(config_file, data, apk=None, runner=run, which=command_path, sleep=SLEEP):
+    """Install the built APK on the phone over Tailscale, then confirm the version it reports."""
+    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep)
+    target = Path(apk) if apk else Path(__file__).resolve().parent / '.work' / 'Ponte.apk'
+    if not target.is_file():
+        raise ValueError(f'{target} not found. Build it with ./android/build.sh')
+    try:
+        result = runner('adb', '-s', address, 'install', '-r', str(target), capture=True, timeout=300)
+        text = (result.stdout or '') + (result.stderr or '')
+    except subprocess.CalledProcessError as error:
+        text = (error.stdout or '') + (error.stderr or '')
+    if 'Success' not in text:
+        detail = text.strip().splitlines()[-1] if text.strip() else 'no output from adb'
+        raise ValueError(f'Install failed: {detail}')
+    probe = runner('adb', '-s', address, 'shell', 'dumpsys', 'package', 'app.ponte.omarchy', capture=True, timeout=30)
+    match = re.search(r'versionName=(\S+)', probe.stdout or '')
+    print(f'Installed {target.name} on {address}; the phone now reports Ponte {match.group(1) if match else "?"}.')
+    return address
+
+
 def phone_view(config_file, data, screen_off=False, runner=run, which=command_path):
     if not which('scrcpy'):
         raise ValueError('scrcpy is not installed. Install it with: pacman -S scrcpy')
@@ -425,16 +715,187 @@ def phone_main(argv):
     pair.add_argument('code', help='6-digit pairing code shown on the phone.')
     view = sub.add_parser('view', help='Open scrcpy against the connected phone.')
     view.add_argument('--screen-off', action='store_true', help='Turn the phone screen off while mirroring (--turn-screen-off).')
+    ensure = sub.add_parser('ensure', help='Reach the phone over Tailscale; switch adbd to the fixed TCP port through any transport that is up.')
+    ensure.add_argument('--quiet', action='store_true', help='Print nothing on success.')
+    sub.add_parser('wake', help='Wake the phone and pass the lock screen (PIN from the private phone-unlock file, if present).')
+    sub.add_parser('app', help='Bring Ponte to the front over Tailscale, screen on, above the lock screen.')
+    timer = sub.add_parser('timer', help='Install or remove the user timer that keeps the adb link alive (every 2 min).')
+    timer.add_argument('state', choices=['on', 'off'])
+    install = sub.add_parser('install', help='Install the built APK over Tailscale and report the version the phone runs.')
+    install.add_argument('apk', nargs='?', help='APK path (default .work/Ponte.apk).')
     args = parser.parse_args(argv)
-    config_file, data, _ = paths()
+    config_file, data, config_home = paths()
     if args.action == 'status':
         phone_status(config_file, data)
+    elif args.action == 'timer':
+        phone_timer(config_file, config_home, args.state == 'on')
+    elif args.action == 'ensure':
+        phone_ensure(config_file, data, quiet=args.quiet)
+    elif args.action == 'wake':
+        phone_wake(config_file, data)
+    elif args.action == 'app':
+        phone_app(config_file, data)
+    elif args.action == 'install':
+        phone_install(config_file, data, args.apk)
     elif args.action == 'connect':
         phone_connect(config_file, data, args.target)
     elif args.action == 'pair':
         phone_pair(config_file, data, args.target, args.code)
     elif args.action == 'view':
         phone_view(config_file, data, screen_off=args.screen_off)
+
+
+def certificate_dates(path):
+    text = run('openssl', 'x509', '-in', str(path), '-noout', '-enddate', '-fingerprint', '-sha256', capture=True).stdout
+    end = re.search(r'notAfter=(.+)', text)
+    fingerprint = re.search(r'Fingerprint=(.+)', text)
+    from datetime import datetime, timezone
+    expires = datetime.strptime(end.group(1).strip(), '%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc)
+    return expires, (fingerprint.group(1).strip() if fingerprint else '')
+
+
+def doctor(config_file):
+    """Check every link between this PC and the phone, in the order they can fail."""
+    import hashlib
+    import http.client
+    import ssl
+    import zipfile
+    from datetime import datetime, timezone
+    problems = 0
+
+    def report(status, message):
+        nonlocal problems
+        if status != 'ok':
+            problems += 1
+        print(f'[{status:>4}] {message}')
+
+    if not config_file.is_file():
+        report('fail', f'no configuration at {config_file}; run ./ponte setup')
+        return 1
+    config = load_config(config_file)
+    tls = config.get('nativeTls')
+    if not tls:
+        report('warn', 'local-only installation: no Tailscale TLS listener, the Android app cannot connect')
+        return 1
+    host, port = tls['host'], tls['port']
+    report('ok', f'configuration: TLS listener {host}:{port}')
+
+    ca_cert, server_cert = Path(tls.get('caFile', '')), Path(tls['certFile'])
+    now = datetime.now(timezone.utc)
+    for label, path in [('installation CA', ca_cert), ('server certificate', server_cert)]:
+        if not path.is_file():
+            report('fail', f'{label} missing: {path}')
+            continue
+        expires, _ = certificate_dates(path)
+        days = (expires - now).days
+        if days < 0:
+            report('fail', f'{label} expired {-days} days ago' + ('; run ./ponte renew-cert' if label.startswith('server') else '; run ./ponte setup again and rebuild the app'))
+        elif days < 30:
+            report('warn', f'{label} expires in {days} days' + ('; run ./ponte renew-cert' if label.startswith('server') else ''))
+        else:
+            report('ok', f'{label} valid for {days} days')
+
+    try:
+        status = json.loads(run('tailscale', 'status', '--json', capture=True).stdout)
+        self_ips = status.get('Self', {}).get('TailscaleIPs', [])
+        online = status.get('Self', {}).get('Online')
+        if host not in self_ips:
+            report('fail', f'Tailscale address changed: this PC is {", ".join(self_ips) or "offline"}, the app was built for {host}')
+        elif not online:
+            report('fail', 'Tailscale is not connected on this PC')
+        else:
+            report('ok', f'Tailscale connected as {host}')
+        phones = [peer for peer in status.get('Peer', {}).values() if peer.get('OS') == 'android']
+        for peer in phones:
+            if not peer.get('Online') and (now - datetime.fromisoformat(peer.get('LastSeen', '0001-01-01T00:00:00Z').replace('Z', '+00:00'))).days > 30:
+                continue  # a phone that has not been seen in a month is an old enrollment, not today's problem
+            path = 'direct' if peer.get('CurAddr') else f"relay {peer.get('Relay') or '?'}"
+            report('ok' if peer.get('Online') else 'warn', f"phone {peer.get('HostName')} ({peer.get('TailscaleIPs', ['?'])[0]}): {'online, ' + path if peer.get('Online') else 'offline'}")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        report('fail', 'tailscale is not available on this PC')
+
+    for unit in [SERVICE, 'ponte-input.service']:
+        active = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', unit]).returncode == 0
+        report('ok' if active else 'fail', f'{unit} {"running" if active else "not running; ./ponte start, then ./ponte logs"}')
+    if not shutil.which('ydotoold'):
+        report('fail', 'ydotoold not found: touch input cannot reach the desktop (a snapshot boot? check /proc/cmdline)')
+
+    context = ssl.create_default_context(cafile=str(ca_cert)) if ca_cert.is_file() else None
+    if context:
+        context.check_hostname = False  # the SAN is an IP; verify_ip below covers it
+        try:
+            connection = http.client.HTTPSConnection(host, port, context=context, timeout=5)
+            connection.request('GET', '/api/health')
+            response = connection.getresponse()
+            body = json.loads(response.read())
+            peer = ssl.DER_cert_to_PEM_cert(connection.sock.getpeercert(binary_form=True))
+            served = hashlib.sha256(peer.encode()).hexdigest()
+            expected = hashlib.sha256(server_cert.read_bytes()).hexdigest() if server_cert.is_file() else None
+            if response.status != 200:
+                report('fail', f'/api/health answered {response.status}')
+            elif not body.get('autoPair'):
+                report('fail', 'auto-pairing disabled on the listener (PONTE_TAILSCALE_AUTO=0?)')
+            else:
+                report('ok', f'TLS listener answers, version {body.get("version")}')
+            if expected and served != expected:
+                report('warn', 'the running service serves an older certificate than the one on disk; ./ponte restart')
+            connection.close()
+            connection = http.client.HTTPSConnection(host, port, context=context, timeout=5)
+            connection.request('GET', '/api/pair')
+            response = connection.getresponse()
+            response.read()
+            if response.status == 200:
+                report('ok', 'auto-pairing: this PC is recognized as the tailnet owner')
+            else:
+                report('fail', f'auto-pairing denied ({response.status}): the owner was not resolved; tailscale whois {host} must answer, then ./ponte restart')
+            connection.close()
+        except (OSError, ssl.SSLError, ValueError) as error:
+            report('fail', f'TLS listener unreachable at {host}:{port}: {error}')
+
+    apk = Path(__file__).resolve().parent / '.work' / 'Ponte.apk'
+    if not apk.is_file():
+        report('warn', 'no APK built yet: ./android/build.sh')
+    else:
+        try:
+            with zipfile.ZipFile(apk) as archive:
+                names = set(archive.namelist())
+                if 'assets/pc-ca.pem' in names:
+                    same = ca_cert.is_file() and archive.read('assets/pc-ca.pem') == ca_cert.read_bytes()
+                    report('ok' if same else 'fail', 'APK pins ' + ('the current installation CA' if same else 'a different CA; rebuild with ./android/build.sh and reinstall on the phone'))
+                elif 'assets/pc-certificate.pem' in names:
+                    report('fail', 'APK is an old build that pins the server certificate; rebuild with ./android/build.sh and reinstall on the phone')
+                else:
+                    report('fail', 'APK carries no trust anchor; rebuild with ./android/build.sh')
+        except zipfile.BadZipFile:
+            report('fail', f'{apk} is not a valid APK')
+        version = config.get('android', {}).get('versionName')
+        if version and shutil.which('adb'):
+            serial = os.environ.get('ANDROID_SERIAL')
+            if not serial:
+                # Prefer the phone's Tailscale address (the transport agents use),
+                # then any physical phone, then an emulator.
+                devices = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=15).stdout
+                attached = [line.split('\t')[0] for line in devices.splitlines()[1:] if line.endswith('\tdevice')]
+                tailnet = load_phone_address(config_file, paths()[1])
+                serial = tailnet if tailnet in attached else next((s for s in attached if not s.startswith('emulator-')), attached[0] if attached else None)
+                if tailnet in attached:
+                    report('ok', f'phone adb over Tailscale: {tailnet} (no USB or Wi-Fi needed)')
+                else:
+                    report('warn', f'phone adb over Tailscale: {tailnet} not connected; run ./ponte phone ensure')
+            command = ['adb', *(['-s', serial] if serial else []), 'shell', 'dumpsys', 'package', 'app.ponte.omarchy']
+            probe = subprocess.run(command, capture_output=True, text=True, timeout=15)
+            match = re.search(r'versionName=(\S+)', probe.stdout)
+            if probe.returncode != 0 or 'more than one device' in probe.stderr:
+                report('warn', 'phone not reachable over adb (optional): ' + (probe.stderr.strip().splitlines() or ['no device'])[-1])
+            elif not match:
+                report('warn', 'phone reachable over adb but Ponte is not installed')
+            elif match.group(1) != version:
+                report('warn', f'phone runs Ponte {match.group(1)}, this PC builds {version}; install the new APK')
+            else:
+                report('ok', f'phone runs Ponte {version}, same as this build')
+
+    print('All checks passed.' if problems == 0 else f'{problems} check(s) need attention.')
+    return 0 if problems == 0 else 1
 
 
 def pc_main(argv):
@@ -464,7 +925,7 @@ def main():
         pc_main(sys.argv[2:])
         return
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'pair', 'serve', 'android-config'])
+    parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config'])
     parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')
     parser.add_argument('--tailscale-ip', help='Explicit canonical Tailscale IPv4 instead of automatic detection.')
     parser.add_argument('--http-port', type=port, default=8787)
@@ -486,6 +947,10 @@ def main():
             run('systemctl', '--user', 'stop', 'ponte-input.service')
     elif args.command == 'logs':
         run('journalctl', '--user', '-u', SERVICE, '-n', '40', '--no-pager')
+    elif args.command == 'doctor':
+        raise SystemExit(doctor(config_file))
+    elif args.command == 'renew-cert':
+        renew_certificate(config_file)
     else:
         config = load_config(config_file)
         if args.command == 'pair':

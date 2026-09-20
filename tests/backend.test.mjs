@@ -135,8 +135,8 @@ test('state normalizes live desktop output and marks degraded integrations', asy
   const state = await response.json();
   assert.deepEqual(state.activeWindow, {...window,monitor:null});
   assert.deepEqual(state.volume, { value: 0.67, muted: true });
-  assert.deepEqual(state.monitors, [{ name: 'DP-1', width: 1920, height: 1080, focused: true, dpmsStatus: true }]);
-  assert.deepEqual(state.workspaces, [{ id: 3, name: '3', windows: 1 }]);
+  assert.deepEqual(state.monitors, [{ name: 'DP-1', width: 1920, height: 1080, focused: true, dpmsStatus: true, activeWorkspace: null }]);
+  assert.deepEqual(state.workspaces, [{ id: 3, name: '3', windows: 1, monitor: null }]);
   assert.ok(state.wakeOnLan && typeof state.wakeOnLan.instructions === 'string');
   const degraded = createDesktop({ runner: async () => { throw new Error('private internal failure'); }, exists: async () => false });
   const degradedState = await degraded.getState();
@@ -154,10 +154,13 @@ test('actions reject shell injection and bounds before launching any process', a
     { type: 'mouse.clickAt', button: 'left', x: -1, y: 0, monitor: 'DP-1' },
     { type: 'mouse.clickAt', button: 'left', x: 1.5, y: 0, monitor: 'DP-1' },
     { type: 'mouse.clickAt', button: '__proto__', x: 0, y: 0, monitor: 'DP-1' },
+    { type: 'mouse.dragStartAt', x: -1, y: 0, monitor: 'DP-1' },
     { type: 'mouse.drag', pressed: 'true' }, { type: 'keyboard.key', key: 'Enter; touch /tmp/never' },
     { type: 'keyboard.text', text: 'a\0b' }, { type: 'keyboard.text', text: 'a'.repeat(4001) },
     { type: 'workspace.focus', id: '1;exec sh' }, { type: 'workspace.focus', id: -1 }, { type: 'workspace.focus', id: 1.1 },
     { type: 'window.focus', address: '0xabc;dispatch exec true' },
+    { type: 'window.moveToWorkspace', address: '0xabc;dispatch exec true', id: 4 },
+    { type: 'window.moveToWorkspace', address: '0xabc', id: 0 },
     { type: 'volume.set', value: 1.1 }, { type: 'volume.set', value: '0.5' },
     { type: 'app.launch', app: 'terminal; touch /tmp/never' }, { type: 'app.launch', app: '__proto__' },
     { type: 'power.dpms', monitor: 'DP-1; reboot', state: 'off' }, { type: 'power.dpms', monitor: 'DP-1', state: 'standby' }, { type: 'power.dpms', monitor: 'DP-1") os.execute("x', state: 'off' },
@@ -479,7 +482,8 @@ test('absolute clicks map monitor pixels through the output origin without shell
   };
   const desktop = createDesktop({ runner, exists: async () => true });
   await desktop.action({ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 100, y: 40, button: 'left' });
-  assert.deepEqual(calls.at(-2).args, ['mousemove', '--absolute', '--', '2660', '40']);
+  const ydotoolCalls = () => calls.filter(call => call.command === 'ydotool');
+  assert.deepEqual(ydotoolCalls().at(-2).args, ['mousemove', '--absolute', '--', '2660', '40']);
   assert.deepEqual(calls.at(-1).args, ['click', '0xC0']);
   await desktop.action({ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 8, y: 9, button: 'right' });
   assert.deepEqual(calls.at(-1).args, ['click', '0xC1']);
@@ -493,6 +497,47 @@ test('absolute clicks map monitor pixels through the output origin without shell
   const ydotool = f.calls.filter(call => call.command === 'ydotool');
   assert.deepEqual(ydotool.at(-2).args, ['mousemove', '--absolute', '--', '15', '20']);
   assert.deepEqual(ydotool.at(-1).args, ['click', '0xC0']);
+});
+
+test('semantic drag captures the touched window and moves that exact window to a workspace', async () => {
+  const calls = [];
+  const touchedWindow = { ...window, at: [2560, 40], size: [900, 700] };
+  const runner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'HDMI-A-1', x: 2560, y: 40, width: 1920, height: 1080 }]);
+    if (command === 'hyprctl' && args[1] === 'activewindow') return JSON.stringify(touchedWindow);
+    if (command === 'hyprctl' && args[1] === 'clients') return JSON.stringify([touchedWindow]);
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  const started = await desktop.action({ type: 'mouse.dragStartAt', monitor: 'HDMI-A-1', x: 100, y: 60 });
+  assert.equal(started.window.address, '0xabc');
+  assert.deepEqual(calls.filter(call => call.command === 'ydotool').map(call => call.args), [
+    ['mousemove', '--absolute', '--', '2660', '100'],
+    ['click', '0x40'],
+  ]);
+
+  const moved = await desktop.action({ type: 'window.moveToWorkspace', address: '0xabc', id: 4 });
+  assert.deepEqual(moved, { ok: true, moved: true, workspace: 4 });
+  assert.deepEqual(calls.filter(call => call.command === 'ydotool').at(-1).args, ['click', '0x80']);
+  assert.deepEqual(calls.at(-1).args, ['dispatch', 'hl.dsp.window.move({ workspace = "4", follow = false, window = "address:0xabc" })']);
+
+  const unchanged = await desktop.action({ type: 'window.moveToWorkspace', address: '0xabc', id: 3 });
+  assert.deepEqual(unchanged, { ok: true, moved: false, workspace: 3 });
+  await assert.rejects(desktop.action({ type: 'window.moveToWorkspace', address: '0xdead', id: 4 }), error => error.status === 404);
+  await desktop.close();
+});
+
+test('semantic drag never captures the previously active window when the gesture starts on wallpaper', async () => {
+  const runner = async (command, args) => {
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'DP-1', x: 0, y: 0, width: 1920, height: 1080 }]);
+    if (command === 'hyprctl' && args[1] === 'activewindow') return JSON.stringify({ ...window, at: [800, 500], size: [500, 400] });
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  const started = await desktop.action({ type: 'mouse.dragStartAt', monitor: 'DP-1', x: 20, y: 20 });
+  assert.deepEqual(started, { ok: true, window: null });
+  await desktop.close();
 });
 
 test('a reopening device replaces its own oldest live view when the cap is reached, instead of a 429', async t => {
@@ -779,7 +824,8 @@ test('absolute pointer moves and the text-input probe back the phone screen with
   const desktop = createDesktop({ runner, exists: async () => true });
   const f = await fixture(t, { desktop });
   assert.equal((await f.action({ type: 'mouse.moveTo', monitor: 'DP-1', x: 10, y: 20 })).status, 200);
-  assert.deepEqual([base.calls.at(-1).command, base.calls.at(-1).args], ['ydotool', ['mousemove', '--absolute', '--', '10', '20']]);
+  const lastYdotool = base.calls.filter(call => call.command === 'ydotool').at(-1);
+  assert.deepEqual([lastYdotool.command, lastYdotool.args], ['ydotool', ['mousemove', '--absolute', '--', '10', '20']]);
   assert.equal(base.calls.filter(call => call.command === 'ydotool' && call.args[0] === 'click').length, 0, 'moveTo never clicks');
   for (const value of [{ type: 'mouse.moveTo', monitor: 'DP-1', x: 1920, y: 0 }, { type: 'mouse.moveTo', monitor: 'NOPE', x: 0, y: 0 }, { type: 'mouse.moveTo', monitor: 'DP-1', x: 1.5, y: 0 }]) {
     assert.equal((await f.action(value)).status, 400, JSON.stringify(value));
@@ -792,3 +838,96 @@ test('absolute pointer moves and the text-input probe back the phone screen with
   assert.equal((await fetch(`${f.base}/api/textinput`)).status, 401);
 });
 
+test('the virtual pointer is set to a flat profile and every placement is verified against the compositor cursor', async () => {
+  const calls = [];
+  let cursor = { x: 0, y: 0 };
+  let accel = 2; // Hyprland's adaptive profile doubled ydotool's relative "absolute" moves on a real desktop.
+  const runner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'DP-3', x: 1920, y: 0, width: 3440, height: 1440, focused: true }]);
+    if (command === 'hyprctl' && args[1] === 'devices') return JSON.stringify({ mice: [{ name: 'ydotoold-virtual-device-1' }, { name: 'logitech-g515' }] });
+    if (command === 'hyprctl' && args[0] === 'eval') { accel = 1; return 'ok\n'; }
+    if (command === 'hyprctl' && args[0] === 'cursorpos') return `${cursor.x}, ${cursor.y}\n`;
+    if (command === 'ydotool' && args[0] === 'mousemove') {
+      const [dx, dy] = args.at(-2) === '--' || args.at(-3) === '--' ? [Number(args.at(-2)), Number(args.at(-1))] : [0, 0];
+      if (args.includes('--absolute')) cursor = { x: dx * accel, y: dy * accel };
+      else cursor = { x: cursor.x + dx * accel, y: cursor.y + dy * accel };
+    }
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-3', x: 1000, y: 700, button: 'left' });
+  const evals = calls.filter(call => call.command === 'hyprctl' && call.args[0] === 'eval');
+  assert.equal(evals.length, 1, 'the profile is applied once per calibration');
+  assert.match(evals[0].args[1], /hl\.device\(\{ name = "ydotoold-virtual-device-1", accel_profile = "flat", sensitivity = 0 \}\)/);
+  assert.ok(!evals[0].args[1].includes('logitech'), 'physical mice keep the user profile');
+  assert.deepEqual(cursor, { x: 2920, y: 700 });
+  assert.deepEqual(calls.at(-1).args, ['click', '0xC0']);
+  // The daemon restarts: a new device with the default profile again. The
+  // verification catches the miss, recalibrates and lands on the pixel.
+  accel = 2;
+  await desktop.action({ type: 'mouse.moveTo', monitor: 'DP-3', x: 10, y: 20 });
+  assert.deepEqual(cursor, { x: 1930, y: 20 });
+  assert.equal(calls.filter(call => call.command === 'hyprctl' && call.args[0] === 'eval').length, 2);
+  const state0 = await desktop.getState();
+  assert.ok(!state0.warningCodes.includes('POINTER_INACCURATE'));
+  await desktop.close();
+});
+
+test('an unfixable pointer scale is corrected with a relative nudge and reported in the state', async () => {
+  const calls = [];
+  let cursor = { x: 0, y: 0 };
+  const runner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'DP-1', x: 0, y: 0, width: 1920, height: 1080, focused: true }]);
+    if (command === 'hyprctl' && args[1] === 'devices') return JSON.stringify({ mice: [{ name: 'ydotoold-virtual-device-1' }] });
+    if (command === 'hyprctl' && args[0] === 'eval') return 'error: attempt to call nil\n';
+    if (command === 'hyprctl' && args[0] === 'cursorpos') return `${cursor.x}, ${cursor.y}\n`;
+    if (command === 'ydotool' && args[0] === 'mousemove') {
+      const dx = Number(args.at(-2)), dy = Number(args.at(-1));
+      // Small relative nudges pass through unscaled; the long leg is doubled.
+      const factor = Math.hypot(dx, dy) > 50 ? 2 : 1;
+      cursor = args.includes('--absolute') ? { x: dx * factor, y: dy * factor } : { x: cursor.x + dx * factor, y: cursor.y + dy * factor };
+    }
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  await desktop.action({ type: 'mouse.moveTo', monitor: 'DP-1', x: 100, y: 40 });
+  assert.deepEqual(cursor, { x: 100, y: 40 });
+  assert.ok(calls.some(call => call.command === 'hyprctl' && call.args[0] === 'keyword' && call.args[1] === 'device[ydotoold-virtual-device-1]:accel_profile'), 'legacy keyword fallback is attempted');
+  const relative = calls.filter(call => call.command === 'ydotool' && call.args[0] === 'mousemove' && !call.args.includes('--absolute'));
+  assert.deepEqual(relative.at(-1).args, ['mousemove', '--', '-50', '-20'], 'the nudge is divided by the observed scale');
+  const state = await desktop.getState();
+  assert.ok(!state.warningCodes.includes('POINTER_INACCURATE'), 'the nudge landed, so no warning');
+  await desktop.close();
+});
+
+test('a line with enter is typed and confirmed in one action, and a Super drag holds the modifier until release', async () => {
+  const calls = [];
+  const runner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'DP-1', x: 0, y: 0, width: 1920, height: 1080, focused: true }]);
+    if (command === 'hyprctl' && args[1] === 'activewindow') return JSON.stringify({ address: '0xabc', title: 'Editor', class: 'Editor', workspace: { id: 3, name: '3' }, at: [0, 0], size: [1920, 1080] });
+    if (command === 'hyprctl' && args[0] === 'cursorpos') return '100, 40\n';
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true, dragTimeout: 30 });
+  await desktop.action({ type: 'keyboard.text', text: 'olá mundo', enter: true });
+  const typed = calls.filter(call => ['wtype', 'ydotool'].includes(call.command));
+  assert.deepEqual(typed.at(-2).args, ['-']);
+  assert.deepEqual(typed.at(-1).args, ['key', '--key-delay', '1', '28:1', '28:0']);
+  calls.length = 0;
+  const started = await desktop.action({ type: 'mouse.dragStartAt', monitor: 'DP-1', x: 100, y: 40, modifier: 'super' });
+  assert.equal(started.window.address, '0xabc');
+  const keys = () => calls.filter(call => call.command === 'ydotool' && ['key', 'click'].includes(call.args[0])).map(call => call.args.slice(-1)[0]);
+  assert.deepEqual(keys(), ['125:1', '0x40'], 'Super goes down before the button');
+  await desktop.action({ type: 'mouse.drag', pressed: false });
+  assert.deepEqual(keys().slice(2), ['0x80', '125:0'], 'button up, then Super up');
+  calls.length = 0;
+  await assert.rejects(desktop.action({ type: 'mouse.dragStartAt', monitor: 'DP-1', x: 1, y: 1, modifier: 'alt' }), error => error.status === 400);
+  // The auto-release after a lost phone also lets go of Super.
+  await desktop.action({ type: 'mouse.dragStartAt', monitor: 'DP-1', x: 100, y: 40, modifier: 'super' });
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.deepEqual(keys().slice(-2), ['0x80', '125:0']);
+  await desktop.close();
+});

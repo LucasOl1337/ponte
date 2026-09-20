@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """No network or personal configuration: generate independent certificate fixtures."""
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -49,15 +50,16 @@ class ConfigureTest(unittest.TestCase):
         path.write_text(json.dumps(config))
         return module.configure(path, self.output, ANDROID / 'AndroidManifest.xml')
 
-    def test_generates_only_endpoint_public_leaf_and_version(self):
+    def test_generates_only_endpoint_public_ca_and_version(self):
         config = copy.deepcopy(self.base)
         config['android'] = {'versionCode': 42, 'versionName': '1.2.3-test'}
         result = self.configure(config)
         self.assertEqual(result['upstream'], 'https://100.64.0.10:8788')
         self.assertEqual(result['versionCode'], 42)
         assets = list((self.output / 'assets').iterdir())
-        self.assertEqual([p.name for p in assets], ['pc-certificate.pem'])
-        self.assertEqual(assets[0].read_bytes(), self.leaf.read_bytes())
+        self.assertEqual([p.name for p in assets], ['pc-ca.pem'])
+        self.assertEqual(assets[0].read_bytes(), self.ca.read_bytes(), 'the app pins the installation CA, not the renewable leaf')
+        self.assertEqual(result['caSha256'], hashlib.sha256(self.ca.read_bytes()).hexdigest())
         for path in self.output.rglob('*'):
             if path.is_file():
                 contents = path.read_bytes()

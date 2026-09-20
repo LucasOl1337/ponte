@@ -71,20 +71,47 @@ The Android build pins the exact public leaf certificate and reads no server pri
 ./ponte restart
 ./ponte logs
 ./ponte phone status
-./ponte phone connect
+./ponte phone ensure
+./ponte phone app
+./ponte phone install [Ponte.apk]
+./ponte phone wake
 ./ponte phone view
+./ponte phone timer on|off
 ./ponte pc lock|unlock|sleep|wake|suspend|reboot|off
 ./ponte pc monitors on|off [NAME]
 ./ponte pc lights lava|brasa|oceano|aurora|floresta|lua|sleep|restore|reapply
 ```
 
-`phone` mirrors the Redmi over Tailscale with wireless ADB and scrcpy. The default address is `100.111.221.82:5555`. See [PC controls phone](pc-controls-phone.md).
+`phone` reaches the Redmi over Tailscale alone, with adb on a fixed TCP port: no USB cable and no shared Wi-Fi. The default address is `100.111.221.82:5555`. See [PC controls phone](pc-controls-phone.md) and [Phone over Tailscale](#phone-over-tailscale-no-cable-no-wi-fi) below.
 
 `pc` runs the same validated desktop actions the phone uses, from a local shell or over Tailscale SSH (`ssh user@<tailscale-ip> ./ponte pc suspend`). It needs no HTTP server or pairing. `unlock` reads the password from stdin (`echo -n 'pw' | ./ponte pc unlock`) and only types it while the Omarchy lock is up. Dictation and the keyboard raise are optional: set `PONTE_STT_URL` / `PONTE_SUSSURRO_SOCKET` to `''` to disable a provider, and note that the phone keyboard only rises automatically when fcitx5 runs on the PC.
 
 A stopped service is unavailable to the phone. Your PC must be awake, connected to Tailscale and running the graphical session. Returning to the Android app does not automatically restart a live stream that was paused when it went into the background.
 
 `./ponte serve` is an optional, explicit Tailscale Serve operation for the browser interface. It requires a configured Tailscale DNS name in `trustedHosts`; the native Android app does not require Serve. Check your existing Serve configuration before using that command.
+
+## Phone over Tailscale (no cable, no Wi-Fi)
+
+An agent or a script on this PC can install, launch and drive the Android app while the phone is anywhere with Tailscale up, on mobile data included. adb on the phone listens on TCP port 5555 on every interface, Tailscale's among them, and this PC's adb connects to `100.111.221.82:5555`.
+
+```sh
+./ponte phone ensure          # reachable over Tailscale, or fix it through any transport that is up
+./ponte phone install         # adb install -r .work/Ponte.apk, then the version the phone reports
+./ponte phone app             # Ponte to the front: screen on, above the lock screen, live stream
+./ponte phone timer on        # user timer: ensure every 2 min, so the link survives network changes
+adb -s 100.111.221.82:5555 exec-out screencap -p > shot.png
+adb -s 100.111.221.82:5555 shell input tap 610 1106
+```
+
+What each piece does and where it stops:
+
+- **`ensure`** connects to the saved address and checks that a shell answers. If the phone is not listening (adbd forgets the TCP port on every reboot), it looks for any other adb transport that is up right now (the USB cable, or a Wireless-debugging session on Wi-Fi), runs `adb tcpip 5555` through it, and reconnects over Tailscale. With nothing up it prints the one manual step: plug the phone in once, or on Wi-Fi turn on Wireless debugging and `./ponte phone connect IP:PORT` (pairing is remembered); after that `ensure` needs nothing again until the next reboot.
+- **`app`** starts the activity with the agent extra. The app then shows above the lock screen and turns the screen on, so the phone stays locked for everything else, and it finishes itself the moment it leaves the foreground: a locked phone never keeps PC control one power-button press away. HyperOS gates "show on lock screen" behind its own app op; `app` grants it over adb (`appops set app.ponte.omarchy 10020 allow`) and dismisses the "do not cover the earpiece" guide with Volume Up. The app keeps the screen on while it is in front.
+- **`wake`** wakes the phone with the power key and, if `phone-unlock` (mode 0600, in the state directory) holds the PIN, types it after a swipe. This is only needed to reach the rest of the phone; the Ponte app itself needs no unlock.
+- **`timer on`** installs `ponte-phone.timer` for this user, which runs `ensure --quiet` every two minutes, so `adb devices` already lists the phone when something needs it and the link re-forms after the phone changes networks. `timer off` removes it.
+- **`doctor`** reports whether the Tailscale adb link is up and which app version the phone runs through it.
+
+Security: adbd on TCP accepts only keys the phone has authorized (this PC's), and the port is reachable from other networks only where the phone's network allows inbound connections (mobile carriers do not; a public Wi-Fi might, and any connection attempt from an unknown key prompts on the phone). Turn it off with `adb -s 100.111.221.82:5555 usb` when the phone leaves your hands. A build with `PONTE_ANDROID_DEBUGGABLE=1` makes the WebView inspectable over adb (`tools/lab/cdp.mjs`) for measuring gestures on the real device; keep the ordinary build for daily use.
 
 ## Power management and smart sleep
 
@@ -110,7 +137,15 @@ Ponte exposes your primary Ethernet MAC address (`d8:43:ae:8b:e8:a8`) and interf
 
 Keep your configuration, token and Android signing directory. Stop the service before updating source, run the relevant tests, then start it again. If a new CLI generates different unit definitions, review them and use `./ponte uninstall` followed by `./ponte install` rather than overwriting an unrelated service.
 
-To update Android, increment `android.versionCode` in your private config and rebuild with the same signing key. Install the update over the existing app. Do not uninstall the app if you want to keep its pairing data. A renewed or replaced server certificate also requires a new APK because the app pins the exact leaf.
+To update Android, increment `android.versionCode` in your private config and rebuild with the same signing key. Install the update over the existing app. Do not uninstall the app if you want to keep its pairing data. The app pins the installation CA, so `./ponte renew-cert` (the server certificate lasts one year) needs no new APK; only a new CA from a fresh `./ponte setup` does.
+
+## Check the whole link
+
+```sh
+./ponte doctor
+```
+
+Doctor walks every link between this PC and the phone in the order they can fail: configuration, certificate validity, Tailscale address and connectivity, both services, the TLS listener, auto-pairing (the same request the phone makes), and whether the built APK still pins the current CA. With `adb` and a phone attached it also compares the installed app version. It exits non-zero when something needs attention and says what to run.
 
 ## Remove
 
@@ -122,7 +157,7 @@ Removal stops the managed services and removes their units. It keeps configurati
 
 ## Current troubleshooting
 
-- If pairing fails, confirm Tailscale connectivity, an awake PC and an active service. The setup address, certificate and APK must belong to the same installation.
-- If Android cannot connect after certificate renewal, rebuild the APK and install it with the original signing key.
+- Start with `./ponte doctor`. It tells the difference between a PC that is off, a service that started before Tailscale (auto-pairing now retries on its own), an expired certificate and an APK built for another installation.
+- If the app says the PC certificate changed, the phone runs an APK from a different `./ponte setup`. Rebuild with `./android/build.sh` and install it with the original signing key. A renewed certificate (`./ponte renew-cert`) never triggers this.
 - If text works but the touchpad does not, inspect `ponte-input.service` and your user's `/dev/uinput` access.
 - On the original Android test device, Chromium required both `RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS`. The source includes both permissions. The updated app's physical recording test is still pending.

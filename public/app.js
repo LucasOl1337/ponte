@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.13';
+const UI_VERSION = '0.1.0-alpha.19';
 let token = '';
 let state = null;
 let connected = false;
@@ -25,6 +25,7 @@ let viewportBaseline = {width:0,height:0};
 let chosenWorkspace = 'all';
 let windowSignature = '';
 let workspaceSignature = '';
+let screenWorkspaceSignature = '';
 let monitorSignature = '';
 let audioSignature = '';
 let audioLoaded = false;
@@ -277,10 +278,42 @@ function renderVisiblePage() {
   if (!state) return;
   // The first state (and a language change) fills every page so nothing is
   // empty when navigated to; after that only the visible page is refreshed.
-  if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
+  if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderScreenWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
   if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
   else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
+  else if (currentPage === 'tela') renderScreenWorkspaces();
 }
+// Omarchy lives on numbered workspaces (Super+1…0). The screen gets the same
+// row: the workspace the streamed monitor shows is lit, a dot marks the ones
+// with windows, and a tap is Super+N with the stream following.
+function renderScreenWorkspaces() {
+  const monitor = selectedMonitor();
+  const active = monitor?.activeWorkspace ?? state?.activeWindow?.workspace?.id;
+  const spaces = state?.workspaces || [];
+  const ids = workspaceDropTargetIds(spaces, active);
+  const signature = JSON.stringify([ids, active, spaces.map(ws => [ws.id, ws.windows]), i18n.language]);
+  if (screenWorkspaceSignature === signature) return;
+  screenWorkspaceSignature = signature;
+  $('#screen-workspaces').innerHTML = ids.map(id => {
+    const ws = spaces.find(item => Number(item.id) === id);
+    const windows = Number(ws?.windows || 0);
+    return `<button type="button" class="screen-workspace ${id === active ? 'active' : ''}" data-screen-workspace="${id}" aria-label="${escaped(i18n.plural('Ir para área {workspace}, {count} janela','Ir para área {workspace}, {count} janelas',windows,{workspace:id}))}" ${id === active ? 'aria-current="true"' : ''}>${id}${windows ? '<i aria-hidden="true"></i>' : ''}</button>`;
+  }).join('');
+}
+$('#screen-workspaces').addEventListener('click', async event => {
+  const chip = event.target.closest('[data-screen-workspace]');
+  if (!chip || !connected) return;
+  const id = Number(chip.dataset.screenWorkspace);
+  const target = (state?.workspaces || []).find(ws => Number(ws.id) === id);
+  const select = $('#monitor-select');
+  // A workspace that lives on another monitor: follow it there, like the eye
+  // follows Super+N across monitors.
+  if (target?.monitor && target.monitor !== select.value && (state?.monitors || []).some(m => m.name === target.monitor)) {
+    select.value = target.monitor; select.dispatchEvent(new CustomEvent('change'));
+  }
+  const ok = await action('workspace.focus', { id, monitor: select.value || undefined }, t('Área {workspace} em foco.',{workspace:id}));
+  if (ok) renderScreenWorkspaces();
+});
 
 function isScreenPage(page) { return page === 'tela'; }
 
@@ -326,11 +359,12 @@ function syncRemoteViewport() {
   // The phone keyboard is open when an editable field has focus and the visual
   // viewport shrank. That hides the bottom nav (which would otherwise cover the
   // composer) and lets the immersive screen size itself to the visible area.
-  const active = document.activeElement;
-  const editing = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
-  const keyboardOpen = editing && viewportBaseline.height - height > 100;
+  // Only the IME shrinks the viewport this much. Do not require a focused
+  // field: the native keyboard request can land while focus is still moving,
+  // and a layout computed for "no keyboard" then puts the bar off-screen.
+  const keyboardOpen = viewportBaseline.height - height > 100;
   document.body.setAttribute('data-keyboard-open',String(keyboardOpen));
-  document.body.setAttribute('data-screen-keyboard',String(keyboardOpen && active === $('#screen-input')));
+  document.body.setAttribute('data-screen-keyboard',String(keyboardOpen && screenComposerOpen()));
   // The typing bar's height is what the monitor must leave free above it.
   const composer = $('#screen-composer');
   document.documentElement.style.setProperty('--screen-composer-h',`${composer && !composer.hidden ? (composer.offsetHeight || 60) : 0}px`);
@@ -370,7 +404,8 @@ document.addEventListener('click', event => {
     runBusy(generic, () => action(type, payload, feedback));
   }
   const key = event.target.closest('[data-key]');
-  if (key) action('keyboard.key',{key:key.dataset.key});
+  if (key && key.closest('#screen-key-row')) sendKeys(async () => { if (!(await quietAction('keyboard.key',{key:key.dataset.key}))) toast(t("A tecla não chegou ao PC."), true); });
+  else if (key) action('keyboard.key',{key:key.dataset.key});
   const workspace = event.target.closest('[data-workspace]');
   if (workspace) action('workspace.focus',{id:Number(workspace.dataset.workspace)}, t('Área {workspace} em foco.',{workspace:workspace.textContent.trim()}));
   const filter = event.target.closest('[data-filter]');
@@ -430,7 +465,9 @@ let liveRegionTimer = 0;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const LONG_PRESS_MS = 500;
 const REGION_RECONNECT_PX = 8;
-const SCREEN_PAN_SLOP = 12;
+// A fingertip never lands as a mathematically fixed point. At phone scale,
+// 12 CSS px was small enough for ordinary taps to vanish as fake pans.
+const SCREEN_GESTURE_SLOP = 24;
 
 class MjpegParser {
   constructor(onFrame,boundary = 'ponte-frame') {
@@ -513,6 +550,53 @@ function isFullMonitorRegion(region, monitorWidth, monitorHeight) {
     && region.w >= monitorWidth * 0.98 && region.h >= monitorHeight * 0.98;
 }
 
+// Adaptive quality. The PC paces frames at the requested rate and only slows
+// down when the phone cannot drain them, so the rate that actually arrives is
+// the link's honest capacity: ~49 Mbit/s for Sharp, ~7 for Balanced, ~2 for
+// Light on a 1440p monitor. Auto starts light, climbs while frames arrive on
+// time and steps down as soon as they lag, holding longer after each fall so
+// the picture does not flap on a mobile link.
+const LIVE_LADDER = ['light','balanced','sharp'];
+function createLiveAdapter({start = 'light', windowMs = 3000, climbAfter = 2, holdMs = 20000, maxHoldMs = 120000, now = Date.now} = {}) {
+  let rung = Math.max(0, LIVE_LADDER.indexOf(start));
+  let frames = 0, windowStart = now(), healthy = 0, holdUntil = 0, hold = holdMs;
+  function drop(at) {
+    healthy = 0;
+    if (rung === 0) return null;
+    rung -= 1;
+    holdUntil = at + hold;
+    hold = Math.min(maxHoldMs, hold * 2);
+    return LIVE_LADDER[rung];
+  }
+  return {
+    get profile() { return LIVE_LADDER[rung]; },
+    frame() { frames += 1; },
+    // A stream that broke or stalled is treated as one lagging window.
+    stall() { return drop(now()); },
+    // Called about once a second; answers the new profile key on a change.
+    evaluate(requestedFps) {
+      const at = now();
+      const elapsed = at - windowStart;
+      if (elapsed < windowMs) return null;
+      const ratio = frames * 1000 / elapsed / requestedFps;
+      frames = 0; windowStart = at;
+      // A window far longer than planned means the page was throttled or
+      // paused, not that the link was slow: measure again from here.
+      if (elapsed > windowMs * 2) return null;
+      if (ratio < 0.6) return drop(at);
+      if (ratio < 0.9) { healthy = 0; return null; }
+      healthy += 1;
+      if (healthy < climbAfter || rung === LIVE_LADDER.length - 1 || at < holdUntil) return null;
+      healthy = 0; rung += 1;
+      return LIVE_LADDER[rung];
+    },
+  };
+}
+function applyLiveProfile(session, key) {
+  const profile = LIVE_PROFILES[key];
+  session.fps = profile.fps; session.scale = profile.scale; session.quality = profile.quality;
+  session.profileLabel = session.adapter ? `${t('Automático')} · ${t(profile.label)}` : profile.label;
+}
 function liveStreamPath(session) {
   let path = `/stream?monitor=${encodeURIComponent(session.monitor)}&fps=${session.fps}&scale=${session.scale}`;
   if (Number.isInteger(session.quality)) path += `&q=${session.quality}`;
@@ -535,6 +619,20 @@ function classifyScreenGesture({ pointerCount, moved, durationMs }) {
   if (moved) return 'pan';
   if (durationMs >= LONG_PRESS_MS) return 'longpress';
   return 'tap';
+}
+
+function workspaceDropTargetIds(workspaces, currentId) {
+  // Omarchy exposes ten numbered workspaces by default. Keep the familiar
+  // first five reachable even while empty, then append every live numbered
+  // workspace reported by Hyprland. The shelf scrolls if a custom setup has
+  // more, while special workspaces and unsafe IDs stay out of the interface.
+  const ids = new Set([1, 2, 3, 4, 5]);
+  for (const item of workspaces || []) {
+    const id = Number(item?.id);
+    if (Number.isInteger(id) && id >= 1 && id <= 100) ids.add(id);
+  }
+  if (Number.isInteger(currentId) && currentId >= 1 && currentId <= 100) ids.add(currentId);
+  return [...ids].sort((a, b) => a - b);
 }
 
 function scaleMonitorRegion(region, factor, origin, monitorWidth, monitorHeight) {
@@ -611,9 +709,10 @@ function computeScreenBase() {
   let w = pw, h = pw / ratio;
   if (h > ph) { h = ph; w = ph * ratio; }
   screenBaseW = w; screenBaseH = h;
-  // Allow zooming a little past native 1:1 so text stays legible; never so far
-  // that it is only upscale blur.
-  screenMaxScale = Math.max(2, Math.min(8, (nw / (w || 1)) * 1.3));
+  // Allow zooming a little past native 1:1 so text stays legible. A lighter
+  // stream profile still gets 4x: blurry is fine when the point is to land a
+  // finger on a small target, and the auto profile sharpens the frame in place.
+  screenMaxScale = Math.max(4, Math.min(8, (nw / (w || 1)) * 1.3));
 }
 function centerScreenPan() {
   const { w: pw, h: ph } = screenPreviewSize();
@@ -666,6 +765,10 @@ function panScreen(dx, dy) {
   screenPanX += dx; screenPanY += dy;
   clampScreenPan(); applyScreenTransform();
   return true;
+}
+function sourceAspect(size) {
+  const [w, h] = String(size || '').split('x').map(Number);
+  return w > 0 && h > 0 ? w / h : 0;
 }
 function nativeScreenScale() {
   const image = $('#screen-image');
@@ -796,6 +899,10 @@ async function runLiveSession(session) {
     session.watchdog = setInterval(() => {
       if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 6000 && screenMode === 'live') setScreenStatus('reconnecting',t("Aguardando novos quadros do monitor…"));
       if (sessionIsCurrent(session) && Date.now()-session.lastReceived > 18000) { session.error = new Error(t("O monitor ficou sem enviar imagens.")); session.controller.abort(); }
+      // Switching profile is a refresh: the stream reopens with new parameters
+      // and keeps the last frame on screen instead of showing "reconnecting".
+      const next = sessionIsCurrent(session) && session.receiving && session.attempt === attempt ? session.adapter?.evaluate(session.fps) : null;
+      if (next) { applyLiveProfile(session, next); session.refreshing = true; session.controller.abort(); }
     },1000);
     try {
       const response = await screenResponse(liveStreamPath(session),session.controller);
@@ -807,6 +914,7 @@ async function runLiveSession(session) {
       session.receiving = true;
       const parser = new MjpegParser((bytes,timestamp) => {
         if (!sessionIsCurrent(session) || session.attempt !== attempt) return;
+        session.adapter?.frame();
         session.lastReceived = Date.now(); session.pendingFrame = {bytes,timestamp};
         renderLiveFrames(session,attempt);
       },boundary[1] || boundary[2]);
@@ -825,7 +933,11 @@ async function runLiveSession(session) {
       if (session.refreshing || refreshing) { session.refreshing = false; session.failures = 0; continue; }
       if ([400,401,403,404,415].includes(error.status)) { liveWanted = false; stopLive(error); toast(error,true); return; }
       session.failures += 1;
-      if (session.failures >= 5) { liveWanted = false; stopLive(t('Não chegaram novos quadros. Toque em iniciar para tentar novamente.')); return; }
+      // The PC restarting or a mobile hand-over used to end the stream after
+      // five misses, leaving a still frame with no way back but leaving the
+      // page. While the screen is open, keep trying at a gentle pace instead.
+      const lighter = session.adapter?.stall();
+      if (lighter) applyLiveProfile(session, lighter);
       const delay = Math.min(5000,1000*2**Math.min(session.failures-1,3));
       session.retryDelay = delay;
       setScreenStatus('reconnecting',t('{message} Tentando novamente em {seconds}s.',{message:t(session.error?.message || 'Conexão interrompida.'),seconds:delay/1000}));
@@ -839,8 +951,10 @@ function startLive() {
   const monitor = $('#monitor-select').value;
   if (!monitor) return;
   stopLive(); cancelSnapshot();
-  const profile = LIVE_PROFILES[$('#live-quality').value] || LIVE_PROFILES.balanced;
-  const session = {monitor,fps:profile.fps,scale:profile.scale,quality:profile.quality,profileLabel:profile.label,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false};
+  const choice = LIVE_PROFILES[$('#live-quality').value] ? $('#live-quality').value : 'auto';
+  const session = {monitor,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false,adapter:null};
+  if (LIVE_PROFILES[choice].auto) { session.adapter = createLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
+  else applyLiveProfile(session, choice);
   liveSession = session;
   runLiveSession(session);
 }
@@ -856,11 +970,12 @@ $('#monitor-select').addEventListener('change',() => {
 // grim scales on the CPU, so the sharp profile streams native pixels at a
 // lower JPEG quality and is both faster and crisper than a downscaled frame.
 const LIVE_PROFILES = {
+  auto:{auto:true,label:'Automático'},
   sharp:{fps:15,scale:1,quality:50,label:'Nítido · até 15 quadros/s'},
   balanced:{fps:10,scale:0.5,quality:65,label:'Equilibrado · até 10 quadros/s'},
   light:{fps:8,scale:0.35,quality:55,label:'Leve · até 8 quadros/s'},
 };
-$('#live-quality').value = LIVE_PROFILES[savedPreference('ponte-quality','balanced')] ? savedPreference('ponte-quality','balanced') : 'balanced';
+$('#live-quality').value = LIVE_PROFILES[savedPreference('ponte-quality','auto')] ? savedPreference('ponte-quality','auto') : 'auto';
 $('#live-quality').addEventListener('change',() => { savePreference('ponte-quality',$('#live-quality').value); if (liveSession) startLive(); });
 $('#screen-image').addEventListener('load',() => {
   const image = $('#screen-image');
@@ -869,7 +984,17 @@ $('#screen-image').addEventListener('load',() => {
   // Measuring layout on every frame is what made the phone stutter, so the
   // base size is only recomputed when the source changed (viewport changes
   // arrive through syncRemoteViewport → applyScreenZoom).
-  if (size !== screenSourceSize) { screenScale = 1; screenPanX = screenPanY = 0; screenSourceSize = size; computeScreenBase(); centerScreenPan(); applyScreenTransform(); }
+  if (size !== screenSourceSize) {
+    // The auto quality profile changes the frame resolution while the aspect
+    // stays the same: that is the same monitor, so a pinch the user just made
+    // must survive it. Only a different shape (another monitor) resets.
+    const sameShape = sourceAspect(screenSourceSize) > 0 && Math.abs(sourceAspect(screenSourceSize) - sourceAspect(size)) < 0.01;
+    screenSourceSize = size;
+    computeScreenBase();
+    if (sameShape) { screenScale = Math.max(1, Math.min(screenMaxScale, screenScale)); if (screenScale <= 1.001) { screenScale = 1; centerScreenPan(); } else clampScreenPan(); }
+    else { screenScale = 1; screenPanX = screenPanY = 0; centerScreenPan(); }
+    applyScreenTransform();
+  }
   else if (!screenBaseW) applyScreenZoom();
 });
 window.addEventListener('resize',applyScreenZoom);
@@ -893,8 +1018,14 @@ function monitorPixelAt(clientX, clientY) {
 // Quiet variant of action(): no toast, no state poll. Used for keystrokes and
 // drag movement, which are frequent and self-evident on the PC screen.
 async function quietAction(type, payload = {}) {
+  return !!await quietActionResult(type, payload);
+}
+async function quietActionResult(type, payload = {}) {
   if (!connected) return false;
-  try { await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}) }); return true; }
+  try {
+    const response = await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}) });
+    return await response.json();
+  }
   catch { return false; }
 }
 
@@ -902,17 +1033,50 @@ async function quietAction(type, payload = {}) {
 // Tap = click. Long press then lift = right click. Long press then move = drag
 // with the button held. Pinch = zoom. One finger while zoomed = pan. Two
 // fingers together = scroll the PC.
-const hold = { timer: null, held: false, dragging: false, lastMove: 0, lastLease: 0, generation: 0 };
+const hold = { timer: null, held: false, dragging: false, semantic: false, lastMove: 0, lastLease: 0, generation: 0, windowAddress: '', capturePromise: null, workspaceId: null };
 function clearHold() { clearTimeout(hold.timer); hold.timer = null; hold.held = false; }
-async function beginHoldDrag(pixel) {
+function renderWorkspaceDropShelf(currentId) {
+  const shelf = $('#workspace-drop-shelf');
+  const ids = workspaceDropTargetIds(state?.workspaces, currentId);
+  $('#workspace-drop-targets').innerHTML = ids.map(id => `<button type="button" role="option" class="workspace-drop-target ${id === currentId ? 'current' : ''}" data-drop-workspace="${id}" aria-selected="false" aria-label="${escaped(t('Mover janela para área {workspace}',{workspace:id}))}">${id}</button>`).join('');
+  shelf.hidden = false;
+  $('#screen-preview').classList.add('workspace-drop-active');
+}
+function hideWorkspaceDropShelf() {
+  $('#workspace-drop-shelf').hidden = true;
+  $('#screen-preview').classList.remove('workspace-drop-active');
+  hold.workspaceId = null;
+}
+function workspaceDropTargetAt(clientX, clientY) {
+  let selected = null;
+  for (const target of $$('[data-drop-workspace]', $('#workspace-drop-targets'))) {
+    const rect = target.getBoundingClientRect?.();
+    const inside = rect && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    target.classList.toggle('active', inside);
+    target.setAttribute('aria-selected', String(inside));
+    if (inside && !target.classList.contains('current')) selected = Number(target.dataset.dropWorkspace);
+  }
+  hold.workspaceId = selected;
+  return selected;
+}
+async function beginHoldDrag(pixel, semantic = true) {
   const monitor = selectedMonitor();
   if (hold.dragging || !monitor || !pixel || !connected || !state?.capabilities?.mouse) return;
   const generation = ++hold.generation;
-  hold.dragging = true; hold.lastLease = Date.now();
+  hold.dragging = true; hold.semantic = semantic; hold.lastLease = Date.now(); hold.windowAddress = '';
   $('#drag-indicator').hidden = false;
-  await quietAction('mouse.moveTo', { monitor: monitor.name, x: pixel.x, y: pixel.y });
+  if (semantic) renderWorkspaceDropShelf(state?.activeWindow?.workspace?.id);
+  // Long-press drag = move the window (Super+drag in Hyprland); a plain
+  // one-finger drag stays a mouse drag inside the window's contents.
+  const capture = quietActionResult('mouse.dragStartAt', { monitor: monitor.name, x: pixel.x, y: pixel.y, ...(semantic ? { modifier: 'super' } : {}) });
+  hold.capturePromise = capture;
+  const result = await capture;
   if (generation !== hold.generation || !hold.dragging) return;
-  if (!(await quietAction('mouse.drag', { pressed: true }))) endHoldDrag();
+  if (!result) { endHoldDrag(); return; }
+  if (semantic) {
+    hold.windowAddress = result.window?.address || '';
+    renderWorkspaceDropShelf(result.window?.workspace?.id);
+  }
 }
 function moveHoldDrag(pixel) {
   const monitor = selectedMonitor();
@@ -925,10 +1089,22 @@ function moveHoldDrag(pixel) {
   if (now - hold.lastLease > 600) { hold.lastLease = now; quietAction('mouse.drag', { pressed: true }); }
 }
 function endHoldDrag() {
-  if (!hold.dragging) return;
-  hold.dragging = false; hold.generation++;
+  if (!hold.dragging) { hideWorkspaceDropShelf(); return Promise.resolve(false); }
+  hold.dragging = false; hold.semantic = false; hold.generation++;
   $('#drag-indicator').hidden = true;
-  if (connected) quietAction('mouse.drag', { pressed: false });
+  hideWorkspaceDropShelf();
+  return connected ? quietAction('mouse.drag', { pressed: false }) : Promise.resolve(false);
+}
+// A brief ring where the finger landed, so the user sees which point became
+// the click (the fingertip hides it) without looking for the PC cursor.
+let tapMarkerTimer = 0;
+function showTapMarker(clientX, clientY, kind) {
+  const marker = $('#tap-marker');
+  const rect = screenPreview.getBoundingClientRect?.() || { left: 0, top: 0 };
+  marker.style.left = `${clientX - rect.left}px`; marker.style.top = `${clientY - rect.top}px`;
+  marker.setAttribute('data-kind', kind);
+  marker.hidden = false; marker.classList.remove('show'); void marker.offsetWidth; marker.classList.add('show');
+  clearTimeout(tapMarkerTimer); tapMarkerTimer = setTimeout(() => { marker.hidden = true; marker.classList.remove('show'); }, 450);
 }
 function resetScreenGesture() {
   clearHold();
@@ -951,6 +1127,14 @@ function stopPointerMoves() {
 screenPreview.addEventListener('pointerdown',event => {
   if (!screenshotURL || event.target.closest('button')) return;
   if (event.button > 0) return;
+  // A still frame is not the PC: clicking on it would land on whatever the
+  // desktop shows now. Use the tap to bring the stream back instead.
+  if (screenMode !== 'live') {
+    event.preventDefault?.();
+    if (!liveSession) { liveWanted = true; startLive(); }
+    toast(t("A imagem está parada. Reconectando ao monitor…"));
+    return;
+  }
   // Keeping default focus behaviour off means the phone keyboard, once open
   // for a text field, stays open while you tap around the screen.
   event.preventDefault?.();
@@ -977,7 +1161,7 @@ screenPreview.addEventListener('pointermove',event => {
   const before = screenPointers.get(event.pointerId);
   if (!before) return;
   const dx = event.clientX-before.x, dy = event.clientY-before.y;
-  if (Math.hypot(event.clientX-before.startX,event.clientY-before.startY) > SCREEN_PAN_SLOP) { before.moved = true; screenGesture.moved = true; }
+  if (Math.hypot(event.clientX-before.startX,event.clientY-before.startY) > SCREEN_GESTURE_SLOP) { before.moved = true; screenGesture.moved = true; }
   screenPointers.set(event.pointerId,{...before,x:event.clientX,y:event.clientY});
   if (screenPointers.size >= 2) {
     const [a,b] = [...screenPointers.values()];
@@ -1000,32 +1184,51 @@ screenPreview.addEventListener('pointermove',event => {
     pinchDistance = distance;
   } else if (!screenGesture.twoFinger) {
     if (hold.held || hold.dragging) {
-      if (!hold.dragging && before.moved) beginHoldDrag(monitorPixelAt(before.startX, before.startY));
-      if (hold.dragging) moveHoldDrag(monitorPixelAt(event.clientX, event.clientY));
+      if (!hold.dragging && before.moved) { beginHoldDrag(monitorPixelAt(before.startX, before.startY)); event.preventDefault?.(); return; }
+      if (hold.dragging) {
+        const workspaceId = hold.semantic ? workspaceDropTargetAt(event.clientX, event.clientY) : null;
+        if (!workspaceId) moveHoldDrag(monitorPixelAt(event.clientX, event.clientY));
+      }
     } else if (before.moved) {
       if (hold.timer) clearHold();
       if (screenZoomed) { screenGesture.panned = true; panScreen(dx, dy); }
+      else { beginHoldDrag(monitorPixelAt(before.startX, before.startY), false); event.preventDefault?.(); return; }
     }
   }
   event.preventDefault?.();
 });
-function finishScreenPointer(event) {
+async function finishScreenPointer(event) {
   const pointer = screenPointers.get(event.pointerId);
   screenPointers.delete(event.pointerId);
   if (!pointer) return;
   if (screenPointers.size > 0) { pinchDistance = 0; pinchMid = null; return; }
   pinchMid = null;
   stopPointerMoves();
-  const wasHeld = hold.held, wasDragging = hold.dragging;
+  const wasHeld = hold.held, wasDragging = hold.dragging, wasSemantic = hold.semantic;
+  // Cancellation/lost capture must only release the held button. It can never
+  // become a semantic drop, even if its last coordinates crossed the shelf.
+  const workspaceId = wasDragging && wasSemantic && event.type === 'pointerup' ? workspaceDropTargetAt(event.clientX, event.clientY) : null;
+  const capturedAddress = hold.windowAddress;
+  const capturePromise = hold.capturePromise;
   clearHold();
-  if (wasDragging) { endHoldDrag(); return; }
+  if (wasDragging) {
+    await endHoldDrag();
+    if (!wasSemantic) { hold.capturePromise = null; hold.windowAddress = ''; return; }
+    const captured = capturePromise ? await capturePromise : null;
+    const address = capturedAddress || captured?.window?.address || '';
+    hold.capturePromise = null; hold.windowAddress = '';
+    if (workspaceId && address) await action('window.moveToWorkspace', { address, id: workspaceId }, t('Janela movida para a área {workspace}.',{workspace:workspaceId}));
+    else if (workspaceId) toast(t("Não foi possível identificar a janela arrastada."), true);
+    return;
+  }
   if (event.type === 'pointercancel') return;
   const moved = screenGesture.moved || pointer.moved || screenGesture.panned || screenGesture.pinch || screenGesture.twoFinger;
   if (moved) return;
   const pixel = monitorPixelAt(pointer.startX, pointer.startY);
   if (!pixel) return;
-  if (wasHeld) { sendMonitorClick(pixel, 'right'); return; }
+  if (wasHeld) { showTapMarker(pointer.startX, pointer.startY, 'right'); sendMonitorClick(pixel, 'right'); return; }
   if (Date.now() - pointer.started < 500) {
+    showTapMarker(pointer.startX, pointer.startY, 'left');
     Promise.resolve(sendMonitorClick(pixel, 'left')).then(ok => { if (ok) scheduleKeyboardCheck(); });
   }
 }
@@ -1043,26 +1246,40 @@ screenPreview.addEventListener('keydown',event => {
 // text field took focus (fcitx5 input contexts). If so, a hidden input gets
 // focus, Android raises its keyboard, and every edit is forwarded live as
 // keystrokes. Back/blur closes it; a tap on a non-text area closes it too.
-// Android only raises the soft keyboard from inside a user gesture, so the app
-// never tries to open it on its own after a tap on the PC. Instead, a tap that
-// lands on a PC text field (fcitx reports focus) lights up the keyboard button
-// as the cue: one tap on it opens the typing bar with the keyboard.
+// Some apps publish their fcitx input context a little after the click. Probe a
+// short bounded sequence instead of making one timing-sensitive decision; no
+// key is injected and taps on non-text UI remain silent.
 let keyboardCheckTimer = 0;
+const TEXT_FOCUS_RETRY_MS = [180, 360, 700, 1100];
 let keyQueue = Promise.resolve();
 function sendKeys(work) { keyQueue = keyQueue.then(work).catch(() => {}); return keyQueue; }
-function scheduleKeyboardCheck() {
+function scheduleKeyboardCheck(delay = 220, attempt = 0) {
   clearTimeout(keyboardCheckTimer);
-  keyboardCheckTimer = setTimeout(checkTextInput, 220);
+  keyboardCheckTimer = setTimeout(() => checkTextInput(attempt), delay);
 }
 function markTextFocus(focused) {
   $('#screen-keyboard').setAttribute('data-text-focused', String(focused === true));
 }
-async function checkTextInput() {
+async function checkTextInput(attempt = 0) {
+  keyboardCheckTimer = 0;
   if (!connected || !screenIsVisible()) return;
   let info;
   try { info = await (await api('/textinput',{timeout:3000})).json(); } catch { return; }
   if (!screenIsVisible()) return;
-  if (typeof info.focused === 'boolean') markTextFocus(info.focused);
+  if (typeof info.focused === 'boolean') {
+    markTextFocus(info.focused);
+    // WebView cannot raise Android's keyboard from an asynchronous JavaScript
+    // callback by itself. The native shell can, so a field tap now opens the
+    // typing bar and asks the Activity to show the IME. Plain browsers retain
+    // the highlighted keyboard button as their explicit, user-gesture path.
+    if (navigator.userAgent.includes('PonteAndroid/')) {
+      if (info.focused && !screenComposerOpen()) openScreenComposer({ automatic: true, requestNativeKeyboard: true });
+      else if (!info.focused && screenComposerAutomatic) closeScreenComposer();
+      else if (!info.focused && info.available && attempt < TEXT_FOCUS_RETRY_MS.length) {
+        scheduleKeyboardCheck(TEXT_FOCUS_RETRY_MS[attempt], attempt + 1);
+      }
+    }
+  }
 }
 // Cycle the streamed monitor; the select on Início stays the source of truth.
 $('#screen-switch-monitor').addEventListener('click', () => {
@@ -1281,10 +1498,9 @@ renderCmdHistory();
 // line in the command history shared with the terminal, and clears the field.
 // The clock button reveals that history plus New/Close; a chip types its line.
 const screenInput = $('#screen-input');
-let screenSent = '';
 let screenComposing = false;
 let screenComposerH = -1;
-const MAX_SCREEN_BACKSPACES = 500;
+let screenComposerAutomatic = false;
 function screenComposerOpen() { return !$('#screen-composer').hidden; }
 function screenKeyboardAvailable() { return connected && state?.capabilities?.keyboard !== false; }
 // The bar's height is what the monitor must leave free above it. Recompute it
@@ -1296,15 +1512,35 @@ function growScreenInput() {
   if (h !== screenComposerH) { screenComposerH = h; syncRemoteViewport(); }
 }
 function measureScreenComposer() { screenComposerH = -1; growScreenInput(); setTimeout(() => { screenComposerH = -1; growScreenInput(); }, 80); }
-function openScreenComposer() {
+// Asking the shell for the IME re-focuses the WebView, which drops the DOM
+// focus onto the screen preview (measured on the Redmi): the keyboard opens
+// with no field behind it. Put the focus back as the keyboard settles.
+let screenFocusTimers = [];
+function keepScreenInputFocused() {
+  for (const timer of screenFocusTimers) clearTimeout(timer);
+  screenFocusTimers = [50, 150, 300, 600].map(ms => setTimeout(() => {
+    if (screenComposerOpen() && document.activeElement !== screenInput) screenInput.focus({ preventScroll: true });
+  }, ms));
+}
+function requestNativeScreenKeyboard() {
+  if (!navigator.userAgent.includes('PonteAndroid/')) return;
+  try {
+    if (window.PonteNative && typeof window.PonteNative.showKeyboard === 'function') window.PonteNative.showKeyboard();
+    else location.href = 'ponte://keyboard/show';
+  } catch { try { location.href = 'ponte://keyboard/show'; } catch {} }
+  keepScreenInputFocused();
+}
+function openScreenComposer({ automatic = false, requestNativeKeyboard = false } = {}) {
   // A general keyboard that silently drops keys is worse than none: only open
   // when the PC can actually accept typed input (wtype present, connected).
   if (!screenKeyboardAvailable()) { toast(connected ? t("Digitação indisponível neste PC.") : t("Reconecte ao PC para usar este controle."), true); return; }
-  screenSent = ''; screenInput.value = ''; screenComposing = false;
+  screenComposing = false;
+  screenComposerAutomatic = automatic;
   $('#screen-composer').hidden = false;
   document.body.setAttribute('data-screen-composer', 'true');
   $('#screen-keyboard').setAttribute('aria-pressed', 'true');
   screenInput.focus({ preventScroll: true });
+  if (requestNativeKeyboard) requestNativeScreenKeyboard();
   measureScreenComposer();
 }
 function closeScreenComposer() {
@@ -1315,45 +1551,54 @@ function closeScreenComposer() {
   $('#screen-input-more').setAttribute('aria-pressed', 'false');
   document.body.setAttribute('data-screen-composer', 'false');
   $('#screen-keyboard').setAttribute('aria-pressed', 'false');
-  screenSent = ''; screenInput.value = ''; screenComposing = false; screenComposerH = -1;
+  screenInput.value = ''; screenComposing = false; screenComposerH = -1; screenComposerAutomatic = false;
+  for (const timer of screenFocusTimers) clearTimeout(timer);
   screenInput.blur();
+  // Blurring the field does not always lower the IME inside the WebView; ask
+  // the shell, otherwise an open keyboard types into nothing.
+  try { if (navigator.userAgent.includes('PonteAndroid/') && window.PonteNative && typeof window.PonteNative.hideKeyboard === 'function') window.PonteNative.hideKeyboard(); } catch {}
   syncRemoteViewport();
 }
-// A send failed (a Tailscale flap, a 401). We can no longer trust our mirror of
-// the PC field, so reset instead of risking that a later New deletes text that
-// was already there. Never persist or backspace blindly past a failure.
-function failScreenInput() { screenSent = ''; screenInput.value = ''; growScreenInput(); toast(t("O texto não entrou. Comece de novo."), true); }
-// Diff by Unicode code point (not UTF-16 unit) so an emoji is one backspace and
-// surrogate pairs are never split. Advance the mirror only on a confirmed send.
-function forwardScreenInput() {
-  if (screenComposing) return; // wait for the IME to commit its candidate
-  const prev = [...screenSent], next = [...screenInput.value];
-  const target = screenInput.value;
-  let common = 0;
-  while (common < prev.length && common < next.length && prev[common] === next[common]) common++;
-  const removed = prev.length - common, added = next.slice(common).join('');
-  if (!removed && !added) return;
-  sendKeys(async () => {
-    for (let i = 0; i < removed; i++) { if (!(await quietAction('keyboard.key',{key:'BackSpace'}))) return failScreenInput(); }
-    if (added && !(await quietAction('keyboard.text',{text:added}))) return failScreenInput();
-    if (screenInput.value === target) screenSent = target; // only if nothing newer typed meanwhile
-  });
-}
-function sendScreenEnter() {
+// A key that did not reach the PC: keep the draft so it can be sent again.
+function failScreenInput() { toast(t("O texto não entrou. Tente de novo."), true); }
+// The text stays on the phone until Send: one request types the whole line
+// and presses Enter in the same server action. Forwarding every edit as
+// keystrokes (the previous design) turned a Gboard correction over a
+// Tailscale relay into a burst of backspaces that arrived garbled or not at
+// all. The bar closes after a successful send, like a chat.
+function sendScreenText({ enter = true } = {}) {
   if (screenComposing || !screenKeyboardAvailable()) return;
-  screenSent = ''; screenInput.value = ''; growScreenInput();
+  const text = screenInput.value;
   // The screen bar types into arbitrary PC fields (including password fields),
   // so its lines are NEVER saved to history. Only the terminal composer keeps a
   // command history.
-  sendKeys(async () => { if (!(await quietAction('keyboard.key',{key:'Enter'}))) failScreenInput(); });
-  screenInput.focus({ preventScroll: true });
+  sendKeys(async () => {
+    const ok = text ? await quietAction('keyboard.text', enter ? { text, enter: true } : { text }) : (enter ? await quietAction('keyboard.key',{key:'Enter'}) : true);
+    if (!ok) { failScreenInput(); return; }
+    if (screenInput.value !== text) return; // typed more meanwhile: keep the bar
+    screenInput.value = ''; growScreenInput();
+    if (enter && text) closeScreenComposer(); else screenInput.focus({ preventScroll: true });
+  });
 }
+function sendScreenEnter() { sendScreenText({ enter: true }); }
 // A button tap must not steal focus from the field: that would close the
 // keyboard, shift the bar under the finger and lose the tap itself.
 for (const name of ['pointerdown','mousedown']) {
-  $$('#screen-input-send,#screen-input-more,#screen-input-clear').forEach(element => element.addEventListener(name, event => event.preventDefault()));
+  $$('#screen-input-send,#screen-input-more,#screen-input-clear,#screen-input-paste,#screen-key-row button').forEach(element => element.addEventListener(name, event => event.preventDefault()));
 }
-$('#screen-keyboard').addEventListener('click', () => { if (screenComposerOpen()) closeScreenComposer(); else openScreenComposer(); });
+$('#screen-keyboard').addEventListener('click', () => {
+  if (!screenComposerOpen()) { openScreenComposer({ automatic: false, requestNativeKeyboard: true }); return; }
+  // The bar is open but the phone keyboard is not (MIUI sometimes ignores the
+  // first request, or the user dismissed it with Back): the natural tap is
+  // "give me the keyboard", not "close the bar".
+  if (document.body.getAttribute('data-screen-keyboard') !== 'true' && navigator.userAgent.includes('PonteAndroid/')) {
+    screenComposerAutomatic = false;
+    screenInput.focus({ preventScroll: true });
+    requestNativeScreenKeyboard();
+    return;
+  }
+  closeScreenComposer();
+});
 $('#screen-input-close').addEventListener('click', closeScreenComposer);
 $('#screen-input-send').addEventListener('click', sendScreenEnter);
 $('#screen-input-more').addEventListener('click', () => {
@@ -1363,16 +1608,14 @@ $('#screen-input-more').addEventListener('click', () => {
   measureScreenComposer();
 });
 $('#screen-input-clear').addEventListener('click', () => {
-  // New line: erase what was typed on the PC too, so the field stays a mirror.
-  // Bounded so a huge unsent buffer cannot queue thousands of backspaces.
-  const count = Math.min(MAX_SCREEN_BACKSPACES, [...screenSent].length);
-  screenSent = ''; screenInput.value = ''; growScreenInput();
-  if (count) sendKeys(async () => { for (let i = 0; i < count; i++) { if (!(await quietAction('keyboard.key',{key:'BackSpace'}))) return failScreenInput(); } });
+  // Nothing was sent yet, so New only clears the phone's draft.
+  screenInput.value = ''; growScreenInput();
   screenInput.focus({ preventScroll: true });
 });
-screenInput.addEventListener('input', () => { forwardScreenInput(); growScreenInput(); });
+$('#screen-input-paste').addEventListener('click', () => sendScreenText({ enter: false }));
+screenInput.addEventListener('input', growScreenInput);
 screenInput.addEventListener('compositionstart', () => { screenComposing = true; });
-screenInput.addEventListener('compositionend', () => { screenComposing = false; forwardScreenInput(); });
+screenInput.addEventListener('compositionend', () => { screenComposing = false; });
 screenInput.addEventListener('keydown', event => {
   // Ignore Enter/Backspace mid-IME-composition (isComposing, or Android's 229
   // placeholder keycode): otherwise confirming a candidate sends a stray Enter.
@@ -1699,7 +1942,7 @@ $('#unpair-button').addEventListener('click', async () => {
   if (screenshotURL) URL.revokeObjectURL(screenshotURL);
   screenshotURL = null; $('#screen-image').removeAttribute('src'); $('#screen-image').hidden = true; $('#screen-empty').hidden = false;
   for (const url of audioURLs.values()) URL.revokeObjectURL(url);
-  audioURLs.clear(); audioLoaded = false; audioSignature = ''; workspaceSignature = ''; windowSignature = ''; monitorSignature = '';
+  audioURLs.clear(); audioLoaded = false; audioSignature = ''; workspaceSignature = ''; screenWorkspaceSignature = ''; windowSignature = ''; monitorSignature = '';
   $('#connection-dialog').close();
   history.replaceState(null,'',location.pathname+location.search);
   showPairing(); connectOverTailscale();

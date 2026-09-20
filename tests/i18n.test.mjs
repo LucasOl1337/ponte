@@ -96,14 +96,14 @@ test('Screen is the first destination and native pause prevents polling from res
  assert.ok(h.calls.filter(call=>call.path.startsWith('/api/stream')).length>before);
 });
 
-test('The screen is one direct-touch mode: taps click at monitor pixels, holds right-click, moves never click',async()=>{
+test('The screen is one direct-touch mode with mouse-style tap, drag, hold, zoom and scroll gestures',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
  assert.equal(h.run('currentPage'),'tela');
  assert.equal(h.el('.control-tabs'),null,'no mode tabs');
  assert.equal(h.el('#touchpad'),null,'no touchpad panel');
  assert.equal(h.el('#keyboard-text'),null,'no keyboard panel');
  assert.equal(h.el('#live-toggle'),null);assert.equal(h.el('#zoom-button'),null);assert.equal(h.el('#fullscreen-button'),null);
- assert.match(h.el('#screen-preview').getAttribute('aria-label'),/Tap clicks, long-press/);
+ assert.match(h.el('#screen-preview').getAttribute('aria-label'),/Tap clicks, drag selects or moves like a mouse/);
  h.run("connected=true;screenshotURL='blob:screen'");
  const pixel=h.run("JSON.stringify(mapTouchToMonitorPixel(240,135,{imageWidth:480,imageHeight:270,monitorWidth:1920,monitorHeight:1080}))");
  assert.equal(pixel,'{"x":960,"y":540}');
@@ -155,7 +155,7 @@ test('Leaving the screen discards queued scroll and releases a held drag',async(
  assert.deepEqual(actions,[{type:'mouse.drag',pressed:false}]);
 });
 
-test('A tap on a PC text field only lights the keyboard button; the typing bar opens from that button, streams edits as keystrokes, and never persists what is typed',async()=>{
+test('A tap on a PC text field only lights the keyboard button; the typing bar opens from that button, sends the line in one action on Enter, closes, and never persists what is typed',async()=>{
  let focused=true;
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path,options)=>path==='/api/textinput'?{ok:true,json:async()=>({available:true,focused})}:{ok:true,json:async()=>path==='/api/audio'?{recordings:[]}:fixture}});await flush();
  h.window.innerWidth=390;h.window.innerHeight=844;
@@ -168,30 +168,38 @@ test('A tap on a PC text field only lights the keyboard button; the typing bar o
  h.el('#screen-keyboard').click();
  assert.equal(h.el('#screen-composer').hidden,false);assert.equal(h.document.activeElement,h.el('#screen-input'));
  assert.equal(h.document.body.getAttribute('data-screen-composer'),'true');
+ // The IME shrinking the viewport is the keyboard signal, whatever has focus at that instant.
  h.window.innerHeight=420;h.run('syncRemoteViewport()');
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'true');
  assert.equal(h.document.body.getAttribute('data-screen-keyboard'),'true');
  const keys=h.el('#screen-input');
+ // Edits stay on the phone: no keystroke leaves while the line is being written.
  keys.value='ola';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
  keys.value='ol';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
  keys.value='olá mundo';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
+ const actions=()=>h.calls.filter(call=>call.path==='/api/action').map(call=>JSON.parse(call.options.body));
+ assert.deepEqual(actions(),[]);
  keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
- const actions=h.calls.filter(call=>call.path==='/api/action').map(call=>JSON.parse(call.options.body));
- assert.deepEqual(actions,[
-  {type:'keyboard.text',text:'ola'},
-  {type:'keyboard.key',key:'BackSpace'},
-  {type:'keyboard.text',text:'á mundo'},
-  {type:'keyboard.key',key:'Enter'},
- ]);
- assert.equal(keys.value,'','Enter starts a fresh line');
- assert.equal(h.document.activeElement,keys,'the field keeps focus so the keyboard stays up');
+ assert.deepEqual(actions(),[{type:'keyboard.text',text:'olá mundo',enter:true}],'one action types the line and presses Enter');
+ assert.equal(keys.value,'');
+ assert.equal(h.el('#screen-composer').hidden,true,'the bar closes after a sent line, like a chat');
+ assert.equal(h.document.body.getAttribute('data-screen-composer'),'false');
  // Security: the screen bar types into arbitrary PC fields (passwords included),
  // so nothing typed there is ever saved to the command history.
  assert.equal(h.run('cmdHistory.length'),0,'screen typing is never persisted to history');
  assert.equal(h.el('#screen-cmd-history'),null,'the screen bar has no history list');
- // The options button just reveals New/Close, no history.
+ // Empty line + Enter is just Enter on the PC, and the bar stays for the next line.
+ h.el('#screen-keyboard').click();h.calls.length=0;
+ keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[{type:'keyboard.key',key:'Enter'}]);
+ assert.equal(h.el('#screen-composer').hidden,false);
+ // Send without Enter pastes the text and keeps the bar open.
  h.el('#screen-input-more').click();
  assert.equal(h.el('#screen-composer-tools').hidden,false);
+ h.calls.length=0;keys.value='só texto';keys.dispatchEvent({type:'input'});
+ h.el('#screen-input-paste').click();await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[{type:'keyboard.text',text:'só texto'}]);
+ assert.equal(h.el('#screen-composer').hidden,false);assert.equal(keys.value,'');
  // Focus leaving the PC field only dims the cue; the bar stays until closed.
  focused=false;await h.run('checkTextInput()');await flush();
  assert.equal(h.el('#screen-keyboard').getAttribute('data-text-focused'),'false');assert.equal(h.el('#screen-composer').hidden,false);
@@ -201,7 +209,7 @@ test('A tap on a PC text field only lights the keyboard button; the typing bar o
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'false');
 });
 
-test('the screen typing bar holds keys during IME composition and resets its mirror when a keystroke fails to reach the PC',async()=>{
+test('the screen typing bar swallows Enter during IME composition and keeps the draft when the PC did not take it',async()=>{
  let failAction=false;
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path)=>{
   if(path==='/api/action'&&failAction)return{ok:false,status:503,json:async()=>({error:'x'})};
@@ -212,22 +220,25 @@ test('the screen typing bar holds keys during IME composition and resets its mir
  h.el('#screen-keyboard').click();
  const keys=h.el('#screen-input');
  assert.equal(h.el('#screen-composer').hidden,false);
- // Mid-composition: nothing is forwarded and Enter is swallowed (isComposing/keycode 229).
+ // Mid-composition: Enter is swallowed (isComposing/keycode 229), nothing is sent.
  keys.dispatchEvent({type:'compositionstart'});
  keys.value='码';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
  keys.dispatchEvent({type:'keydown',key:'Enter',isComposing:true,preventDefault(){}});await flush();
  let actions=()=>h.calls.filter(c=>c.path==='/api/action').map(c=>JSON.parse(c.options.body));
  assert.equal(actions().length,0,'nothing sent while the IME is composing');
- // compositionend commits the candidate as a single forward.
- keys.dispatchEvent({type:'compositionend'});await h.run('keyQueue');await flush();
- assert.deepEqual(actions().at(-1),{type:'keyboard.text',text:'码'});
- // A delivery failure resets the field and the mirror, so a later New/Backspace can't delete unrelated text.
+ keys.dispatchEvent({type:'compositionend'});await flush();
+ assert.equal(actions().length,0,'the committed candidate still waits for Send');
+ // A delivery failure keeps the draft on the phone so it can be sent again.
  failAction=true;
- keys.value='码x';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
- assert.equal(keys.value,'','the composer resets after a delivery failure');
- assert.equal(h.run('screenSent'),'');
+ keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[{type:'keyboard.text',text:'码',enter:true}]);
+ assert.equal(keys.value,'码','the draft survives a failed send');
+ assert.equal(h.el('#screen-composer').hidden,false);
+ failAction=false;h.calls.length=0;
+ keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[{type:'keyboard.text',text:'码',enter:true}]);
+ assert.equal(h.el('#screen-composer').hidden,true);
 });
-
 test('the command composer sends text with an atomic Enter, records reusable history and reuses a past command',async()=>{
  const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'x'};
  const sent=[];

@@ -54,6 +54,26 @@ test('auto-pairing is disabled when the owner cannot be resolved or PONTE_TAILSC
   assert.equal(await off.authorize('100.111.221.82'), false);
 });
 
+test('a daemon that was still starting at boot is retried instead of latching auto-pairing off', async () => {
+  let up = false;
+  const calls = [];
+  const runner = async (command, args) => {
+    calls.push(args[2]);
+    if (!up) throw new Error('tailscale not ready');
+    return whois(args[2], { User: OWNER });
+  };
+  const identity = createTailscaleIdentity({ runner, selfAddress: '100.100.100.100', env: {}, retryInterval: 0 });
+  await identity.ready;
+  assert.equal(identity.ownerUserId, null);
+  assert.equal(await identity.authorize('100.111.221.82'), false, 'denied while the daemon is down');
+  up = true;
+  assert.equal(await identity.authorize('100.111.221.82'), true, 'the owner is resolved once the daemon answers');
+  assert.equal(identity.ownerUserId, OWNER);
+  const before = calls.length;
+  await identity.authorize('100.111.221.82');
+  assert.equal(calls.length, before, 'a resolved owner is not looked up again');
+});
+
 test('GET /api/pair hands the key to an owner device over the tailnet and denies everyone else', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-autopair-'));
   t.after(() => rm(root, { recursive: true, force: true }));

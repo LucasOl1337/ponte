@@ -30,10 +30,10 @@ if "launchable-activity: name='app.ponte.omarchy.MainActivity'" not in badging:
 metadata = json.loads((Path(build) / 'public-build.json').read_text())
 with zipfile.ZipFile(apk) as archive:
     assets = {name for name in archive.namelist() if name.startswith('assets/')}
-    if assets != {'assets/pc-certificate.pem'}:
-        raise SystemExit('APK must contain only the selected public server certificate as an asset')
-    if archive.read('assets/pc-certificate.pem') != (Path(build) / 'assets/pc-certificate.pem').read_bytes():
-        raise SystemExit('APK certificate does not match the configured public leaf')
+    if assets != {'assets/pc-ca.pem'}:
+        raise SystemExit('APK must contain only the public installation CA as an asset')
+    if archive.read('assets/pc-ca.pem') != (Path(build) / 'assets/pc-ca.pem').read_bytes():
+        raise SystemExit('APK trust anchor does not match the configured public CA')
     dex = [archive.read(name) for name in archive.namelist() if re.fullmatch(r'classes[0-9]*\.dex', name)]
     if not any(metadata['upstream'].encode() in contents for contents in dex):
         raise SystemExit('APK endpoint does not match the configured Tailscale origin')

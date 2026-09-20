@@ -11,17 +11,20 @@ Gestures on the image:
 | Gesture | What happens on the PC |
 | --- | --- |
 | Tap | Left click at that monitor pixel |
+| One-finger drag at fitted 1× | Hold the left mouse button and move: select text, move sliders or drag items |
 | Long-press, then lift | Right click |
-| Long-press, then move | Drag with the left button held (move a window, select text); lifting releases |
+| Long-press, then move | Drag with the left button held; a workspace shelf appears, and dropping on a number moves that exact window there |
 | Pinch | Zoom, continuous and centred on your fingers |
 | One finger while zoomed | Pan the view |
 | Two fingers together | Scroll the PC (mouse wheel) |
 
 Zoom is a CSS transform on the phone, like Chrome Remote Desktop. The whole frame is always streamed and never re-cropped mid-gesture, so pinching is smooth and the *Sharp* profile stays crisp up to one monitor pixel per screen pixel. There is no pause, freeze, 1:1 or fullscreen button anymore; the floating buttons beside the mic are **switch monitor** (cycles the monitors in `/api/state`) and **rotate** (forces landscape, hides the system and app bars so the monitor runs edge to edge; tap again to release).
 
+At fitted 1×, a deliberate one-finger movement behaves like a real held left mouse button; ordinary fingertip wobble remains a click. The workspace shelf is reserved for a long-press drag and is semantic rather than a fake extension of the desktop. Hyprland workspaces are not adjacent screen coordinates, so Ponte captures the window under the initial press, releases the mouse before moving it, and asks Hyprland to move that exact address with `follow = false`. Releasing away from the shelf is an ordinary desktop drag. The first five numbered workspaces are always available; any other active numbered workspace is appended. A press on wallpaper captures no window and therefore cannot move a previously focused window accidentally.
+
 ### The phone keyboard
 
-Tap a text field on the PC and the phone keyboard rises by itself. After each tap-click the app asks `GET /api/textinput`; the server reads fcitx5's input contexts over DBus and answers `focused: true` only while an enabled text field has focus (a terminal counts; a dialog with only buttons does not). A hidden input then takes focus, Android shows its keyboard, and every edit is forwarded live: typed characters as `keyboard.text`, deletions and autocorrect revisions as Backspace plus the replacement, the send key as Enter. Tapping elsewhere on the screen keeps the keyboard open; it closes on Back, or when the PC field loses focus. While the keyboard is open the monitor fills the area above it and the app navigation steps aside.
+Tap a text field on the PC and the phone keyboard rises by itself in the Android app. After each tap-click the app asks `GET /api/textinput`; the server reads fcitx5's input contexts over DBus and answers `focused: true` only while an enabled text field has focus (a terminal counts; a dialog with only buttons does not). Since some apps publish that context late, Ponte retries for a short bounded window. The trusted WebView page focuses the typing bar, then uses its guarded native bridge (with the closed `ponte://keyboard/show` command as a compatibility fallback); Android raises its IME even though the focus answer arrived asynchronously. Every edit is forwarded live: typed characters as `keyboard.text`, deletions and autocorrect revisions as Backspace plus the replacement, and the send key as Enter. Tapping a non-text target closes a bar opened automatically. In a regular browser, the focus probe highlights the keyboard button and one tap on that button opens it. While the keyboard is open the monitor fills the area above it and the app navigation steps aside.
 
 This depends on fcitx5 running on the PC. Without it, `/api/textinput` reports `available: false` and the keyboard does not rise; the Terminals page's text field remains the way to type.
 
@@ -31,7 +34,7 @@ The mic button records until you tap it again, sends the audio to the PC, and ty
 
 <p><img src="assets/screen-single-mode.png" width="24%" alt="Screen page in portrait"> <img src="assets/screen-keyboard.png" width="24%" alt="Screen page with the phone keyboard raised"> <img src="assets/screen-landscape.png" width="48%" alt="Forced landscape"></p>
 
-These are Android 11 emulator captures with the streamed desktop pixelated. Browser checks cover tap-to-pixel mapping under zoom and pan, taps versus drags versus holds, keystroke forwarding (insert, delete, autocorrect replacement, Enter), monitor cycling, forced landscape release when leaving the page, and the continuous zoom never touching the stream. Backend tests cover `mouse.moveTo`, the text-input probe and the dictation routes.
+These are Android 11 emulator captures with the streamed desktop pixelated. Browser checks cover tap-to-pixel mapping under zoom and pan, taps versus drags versus holds, exact-window workspace drops, native keyboard raising, keystroke forwarding (insert, delete, autocorrect replacement, Enter), monitor cycling, forced landscape release when leaving the page, and the continuous zoom never touching the stream. Backend tests cover semantic drag capture, wallpaper rejection, exact-address workspace moves, `mouse.moveTo`, the text-input probe and the dictation routes.
 
 ## Work in a terminal
 

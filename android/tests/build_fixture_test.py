@@ -16,13 +16,13 @@ try:
     environment = dict(os.environ, PONTE_CONFIG=str(config), PONTE_ANDROID_KEYS=str(fixture.root / 'signing'), PONTE_ANDROID_APK=str(apk))
     subprocess.run([str(ANDROID / 'build.sh')], check=True, env=environment)
     with zipfile.ZipFile(apk) as archive:
-        assert archive.read('assets/pc-certificate.pem') == fixture.leaf.read_bytes()
+        assert archive.read('assets/pc-ca.pem') == fixture.ca.read_bytes()
         for name in archive.namelist():
             contents = archive.read(name)
             assert b'PRIVATE KEY' not in contents, name
             assert fixture.base['pairToken'].encode() not in contents, name
             assert b'must-never-be-read.key' not in contents, name
         assert not any(name.endswith(('.key', '.p12', 'config.json')) for name in archive.namelist())
-    print('Synthetic APK built: expected leaf only; pairing sentinel, private keys and config absent.')
+    print('Synthetic APK built: installation CA only; pairing sentinel, private keys and config absent.')
 finally:
     ConfigureTest.tearDownClass()

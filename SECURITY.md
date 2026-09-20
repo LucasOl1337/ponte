@@ -5,7 +5,7 @@ Ponte is an experimental remote-control application. A paired device can control
 ## Boundaries
 
 - Plain HTTP binds only to loopback. Native TLS binds a configured Tailscale IPv4 address.
-- The native Android app pins the exact leaf certificate during the TLS handshake. It never accepts an arbitrary certificate, redirects or hostname mismatch. Renewing that certificate requires a new APK signed with the same Android key.
+- The native Android app pins the installation CA created by `./ponte setup` and requires the PC's certificate to be issued directly by it, with the configured IP in its SAN. It never accepts an arbitrary certificate, redirects or hostname mismatch. The one-year server certificate can be reissued under that CA with `./ponte renew-cert` without touching the phone; only a new CA (a fresh `./ponte setup`) requires a new APK signed with the same Android key. A certificate the app does not trust is reported as a certificate error, never as an unreachable PC.
 - Protected endpoints require a pairing token. Host and Origin validation add request checks, but do not replace authentication.
 - Desktop actions use an explicit action list and argument arrays without a shell. This still grants substantial desktop access. A keyboard command can type into a terminal that the user has open.
 - Terminal sessions run shells as the desktop user. They are not a sandbox. A private tmux socket and exact pane IDs prevent input from reaching an unrelated terminal; they do not restrict what an authenticated shell command can do. Input uses stdin with a separate Enter action, and terminal output is rendered as plain text.

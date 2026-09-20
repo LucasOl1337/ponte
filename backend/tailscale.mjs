@@ -19,11 +19,12 @@ export function normalizePeerAddress(remoteAddress) {
   return isIP(address) ? address : null;
 }
 
-export function createTailscaleIdentity({ runner = runCommand, selfAddress, env = process.env, ttl = 15000, timeout = 2500 } = {}) {
+export function createTailscaleIdentity({ runner = runCommand, selfAddress, env = process.env, ttl = 15000, timeout = 2500, retryInterval = 5000 } = {}) {
   const binary = env.PONTE_TAILSCALE_BIN || 'tailscale';
   const disabled = env.PONTE_TAILSCALE_AUTO === '0';
   let ownerUserId = null;
   let ownerResolved = false;
+  let ownerAttemptAt = 0;
   const cache = new Map();
 
   async function whoisUser(address) {
@@ -35,11 +36,21 @@ export function createTailscaleIdentity({ runner = runCommand, selfAddress, env 
     return typeof user === 'number' && user > 0 ? user : null;
   }
 
+  // The daemon is often still coming up when this service starts at login
+  // (the TLS listener itself waits for the tailnet address), so a failed whois
+  // must not latch auto-pairing off for the life of the process. Only a real
+  // answer is final; a failure is retried on the next request, throttled so a
+  // stopped daemon is not hammered on every pairing attempt.
   async function resolveOwner() {
     if (ownerResolved || disabled) return ownerUserId;
-    ownerResolved = true;
-    if (!selfAddress) return null;
-    try { ownerUserId = await whoisUser(selfAddress); } catch { ownerUserId = null; }
+    if (!selfAddress) { ownerResolved = true; return null; }
+    const now = Date.now();
+    if (now - ownerAttemptAt < retryInterval) return ownerUserId;
+    ownerAttemptAt = now;
+    try {
+      ownerUserId = await whoisUser(selfAddress);
+      ownerResolved = true;
+    } catch { ownerUserId = null; }
     return ownerUserId;
   }
 

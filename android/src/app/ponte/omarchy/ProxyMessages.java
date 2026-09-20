@@ -6,6 +6,7 @@ final class ProxyMessages {
         boolean pt = language != null && language.toLowerCase(java.util.Locale.ROOT).matches("^pt(?:-[a-z]+)?(?:[,;].*)?$");
         switch (code) {
             case "proxy_redirect": return pt ? "O PC tentou redirecionar a conexão." : "The PC tried to redirect the connection.";
+            case "proxy_certificate": return pt ? "O certificado do PC mudou. Gere e instale o app de novo a partir do PC." : "The PC certificate changed. Rebuild and reinstall the app from your PC.";
             case "proxy_unavailable": return pt ? "Não foi possível conectar ao PC com segurança. Confira o Tailscale." : "Could not connect securely to the PC. Check Tailscale.";
             case "proxy_background": return pt ? "Ponte está em segundo plano." : "Ponte is in the background.";
             case "proxy_incomplete": return pt ? "Pedido incompleto." : "Incomplete request.";
