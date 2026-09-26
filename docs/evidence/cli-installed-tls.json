@@ -1,0 +1,26 @@
+{
+  "verifiedConfiguredHttps": true,
+  "privateCAUsed": true,
+  "explicitTokenFileAuthObserved": true,
+  "queries": [
+    {
+      "command": "health",
+      "exit": 0,
+      "keys": [
+        "autoPair",
+        "name",
+        "requiresPairing",
+        "version"
+      ]
+    },
+    {
+      "command": "terminals list",
+      "exit": 0,
+      "keys": [
+        "available",
+        "limit",
+        "sessions"
+      ]
+    }
+  ]
+}

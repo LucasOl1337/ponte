@@ -1,0 +1,182 @@
+{
+  "queries": [
+    {
+      "command": "health",
+      "exit": 0,
+      "elapsedMs": 63,
+      "dataType": "dict",
+      "keys": [
+        "autoPair",
+        "name",
+        "requiresPairing",
+        "version"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "state",
+      "exit": 0,
+      "elapsedMs": 110,
+      "dataType": "dict",
+      "keys": [
+        "activeWindow",
+        "capabilities",
+        "hostname",
+        "lights",
+        "monitors",
+        "power",
+        "session",
+        "textInput",
+        "uptime",
+        "version",
+        "volume",
+        "wakeOnLan",
+        "warningCodes",
+        "warnings",
+        "windows",
+        "workspaces"
+      ],
+      "count": null,
+      "warningCodes": []
+    },
+    {
+      "command": "capabilities",
+      "exit": 0,
+      "elapsedMs": 101,
+      "dataType": "dict",
+      "keys": [
+        "audio",
+        "keyboard",
+        "lights",
+        "live",
+        "lock",
+        "mouse",
+        "screenshot",
+        "stt"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "windows",
+      "exit": 0,
+      "elapsedMs": 100,
+      "dataType": "list",
+      "keys": null,
+      "count": 12,
+      "warningCodes": null
+    },
+    {
+      "command": "workspaces",
+      "exit": 0,
+      "elapsedMs": 101,
+      "dataType": "list",
+      "keys": null,
+      "count": 11,
+      "warningCodes": null
+    },
+    {
+      "command": "monitors",
+      "exit": 0,
+      "elapsedMs": 98,
+      "dataType": "list",
+      "keys": null,
+      "count": 3,
+      "warningCodes": null
+    },
+    {
+      "command": "volume",
+      "exit": 0,
+      "elapsedMs": 99,
+      "dataType": "dict",
+      "keys": [
+        "muted",
+        "value"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "lights",
+      "exit": 0,
+      "elapsedMs": 98,
+      "dataType": "dict",
+      "keys": [
+        "brightness",
+        "preset",
+        "presets",
+        "sleeping"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "session",
+      "exit": 0,
+      "elapsedMs": 99,
+      "dataType": "dict",
+      "keys": [
+        "lockAvailable",
+        "locked"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "textinput",
+      "exit": 0,
+      "elapsedMs": 67,
+      "dataType": "dict",
+      "keys": [
+        "available",
+        "focused"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "power",
+      "exit": 0,
+      "elapsedMs": 99,
+      "dataType": "dict",
+      "keys": [
+        "monitors",
+        "power",
+        "wakeOnLan"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "terminals list",
+      "exit": 0,
+      "elapsedMs": 67,
+      "dataType": "dict",
+      "keys": [
+        "available",
+        "limit",
+        "sessions"
+      ],
+      "count": null,
+      "warningCodes": null
+    },
+    {
+      "command": "audio list",
+      "exit": 0,
+      "elapsedMs": 62,
+      "dataType": "dict",
+      "keys": [
+        "recordings"
+      ],
+      "count": null,
+      "warningCodes": null
+    }
+  ],
+  "schemaCommands": 59,
+  "offlineSchema20StartsMs": {
+    "median": 58.0,
+    "p95": 63,
+    "max": 64
+  }
+}

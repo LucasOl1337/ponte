@@ -5,6 +5,10 @@ O ponto de entrada é `./ponte`. Pra controlar o app sem interface, use
 sem dependências npm, daemon extra ou uma segunda implementação do desktop.
 Requer Node.js 22+ e Python 3.12+, já usados pelo projeto.
 
+[Aceitação no serviço instalado](cli-acceptance.md): fluxo real de terminal,
+consultas e TLS, com [cobertura por comando](cli-command-evidence.md) e limites
+dos efeitos que só foram testados em ambiente sintético.
+
 ## Comece por aqui
 
 ```sh

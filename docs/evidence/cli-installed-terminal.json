@@ -1,0 +1,145 @@
+{
+  "ok": true,
+  "serviceVersion": "0.1.0-alpha.19",
+  "existingSessionsPreserved": 1,
+  "noImplicitEnterObserved": true,
+  "unicodeExactOutputObserved": true,
+  "createdSize": [
+    90,
+    28
+  ],
+  "observedResizedSize": [
+    100,
+    30
+  ],
+  "removeConfirmationObserved": true,
+  "ownTerminalRemoved": true,
+  "postRemovalError": "TERMINAL_NOT_FOUND",
+  "events": [
+    {
+      "command": [
+        "health"
+      ],
+      "exit": 0,
+      "elapsedMs": 63,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "list"
+      ],
+      "exit": 0,
+      "elapsedMs": 66,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "create"
+      ],
+      "exit": 0,
+      "elapsedMs": 73,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "input"
+      ],
+      "exit": 0,
+      "elapsedMs": 75,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "read"
+      ],
+      "exit": 0,
+      "elapsedMs": 70,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "key"
+      ],
+      "exit": 0,
+      "elapsedMs": 73,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "read"
+      ],
+      "exit": 0,
+      "elapsedMs": 70,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "resize"
+      ],
+      "exit": 0,
+      "elapsedMs": 70,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "read"
+      ],
+      "exit": 0,
+      "elapsedMs": 69,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "remove"
+      ],
+      "exit": 2,
+      "elapsedMs": 57,
+      "errorCode": "CONFIRMATION_REQUIRED"
+    },
+    {
+      "command": [
+        "terminals",
+        "list"
+      ],
+      "exit": 0,
+      "elapsedMs": 66,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "remove"
+      ],
+      "exit": 0,
+      "elapsedMs": 67,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "list"
+      ],
+      "exit": 0,
+      "elapsedMs": 69,
+      "errorCode": null
+    },
+    {
+      "command": [
+        "terminals",
+        "read"
+      ],
+      "exit": 6,
+      "elapsedMs": 70,
+      "errorCode": "TERMINAL_NOT_FOUND"
+    }
+  ]
+}

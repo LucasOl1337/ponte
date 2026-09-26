@@ -113,7 +113,25 @@ with an explicitly nonexistent private configuration.
 | Stay lightweight and fast | No production npm dependencies. Twenty fresh `ctl schema` processes: median 57 ms, p95 61 ms, max 62 ms, including Python, Node and JSON serialization | Measured startup remains short; numbers are local measurements, not a cross-machine guarantee |
 | Make repository tests available to agents | Executed the documented `npm run test:cli` after push: 65 passed, 0 failures, 0 skipped in 12.4 seconds | Administration regressions, new client transport and CLI acceptance workflows all pass through one documented command |
 
-These observations close the engineering acceptance loop for the requested CLI.
-They do not claim a new physical-phone deployment or live power/input exercise:
-those effects deliberately remain isolated, and phone-only preferences remain
-outside the server's control contract.
+These observations verify discovery, speed, compatibility and a terminal flow,
+but the isolated server/adapters do not establish live acceptance of every
+desktop effect. Physical-phone deployment and live power/input remain untested
+in that round, and phone-only preferences remain outside the server contract.
+
+## Installed-service acceptance, 2026-09-26
+
+The published client subsequently completed a terminal workflow against the
+**already installed server**, not a fixture: create, type Unicode without Enter,
+observe no execution, press Enter, observe the exact assembled output, resize,
+reject removal without confirmation, remove its own target and verify the
+original session set was preserved. Thirteen public read-only queries returned
+valid selected data. Real configured HTTPS with private CA and token-file also
+completed health and authenticated terminal listing.
+
+The [acceptance record](cli-acceptance.md) includes sanitized outputs, a
+requirement-to-observation matrix and explicit live-testing constraints. The
+[per-command matrix](cli-command-evidence.md) links all 59 commands and other
+public outputs to concrete tests. Desktop/hardware effects remain only
+synthetically integrated where machine policy prevents live acceptance. This
+is partial live acceptance of the broad CLI, not a claim that mocks prove all
+physical effects. No service restart or personal-terminal input was performed.
