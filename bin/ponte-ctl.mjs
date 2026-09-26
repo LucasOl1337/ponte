@@ -22,7 +22,7 @@ const globals = {
 };
 const exitCodes = { success: 0, internal: 1, usage: 2, connection: 3, timeout: 4, authentication: 5, api: 6, interrupted: 130 };
 const actionInput = 'action TYPE --data JSON | --stdin | --file JSON_FILE';
-const legacy = ['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config', 'pc', 'phone'];
+const legacy = ['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config', 'pc', 'phone', 'desktop'];
 const fail = message => { throw new CliError('USAGE', message, 2); };
 const controller = new AbortController();
 process.once('SIGINT', () => controller.abort());

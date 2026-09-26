@@ -119,7 +119,7 @@ async function fixture(t, { realTerminals = false } = {}) {
   const recording = { id: AUDIO_ID, name: 'Synthetic recording', createdAt: '2026-01-01T00:00:00Z', size: AUDIO.length, mime: 'audio/ogg' };
   let session = { id: TERMINAL_ID, title: 'Terminal 1', cols: 80, rows: 24, inMode: false, attachCommand: 'synthetic attach command' };
   let text = 'synthetic terminal output\n';
-  const controls = { failState: false, missingField: null, actionDelay: 0, actionFinished: Promise.resolve() };
+  const controls = { failState: false, missingField: null, actionDelay: 0, actionFinished: Promise.resolve(), actionResult: { ok: true } };
   const record = (kind, value) => calls.push({ kind, value });
   // Desktop/audio/STT/Tailscale always stay synthetic. A single opt-in test
   // below replaces only terminals with a real private tmux socket and shell.
@@ -137,7 +137,7 @@ async function fixture(t, { realTerminals = false } = {}) {
         controls.actionFinished = new Promise(resolve => setTimeout(resolve, controls.actionDelay));
         await controls.actionFinished;
       }
-      return { ok: true };
+      return structuredClone(controls.actionResult);
     },
     async screenshot(monitor, scale) { record('screenshot', { monitor, scale }); return JPEG; },
     async prepareLive(options) { record('stream', { monitor: options.monitor, fps: options.fps, scale: options.scale, quality: options.quality, region: options.region }); return { monitor: 'TEST-1', region: null, capture: async () => JPEG }; },
@@ -221,6 +221,7 @@ test('ctl help, schema and version work offline without private configuration or
   assert.equal(help.code, 0); assert.match(help.stdout, /Usage: ponte ctl/); assert.equal(help.stderr, '');
   assert.match(help.stdout, /--dry-run/); assert.match(help.stdout, /--yes/);
   const schema = envelope(await subprocess(env, ['schema'])).data;
+  assert.ok(schema.legacy.includes('desktop'), 'agent discovery must include the companion entry point');
   assert.deepEqual(schema.commands.map(c => c.name), COMMANDS.map(c => c.name));
   assert.deepEqual(envelope(await subprocess(env, ['schema', 'mouse', 'click-at'])).data.commands.map(c => c.name), ['mouse click-at']);
   const jsonHelp = envelope(await subprocess(env, ['help', '--json'])).data;
@@ -532,6 +533,19 @@ test('ctl missing selected response field is INVALID_RESPONSE instead of a succe
   const result = await f.cli(['volume']);
   const error = envelope(result, false).error;
   assert.equal(error.code, 'INVALID_RESPONSE'); assert.equal(result.code, 6);
+});
+
+test('ctl preserves action-specific response fields instead of reducing replies to ok', async t => {
+  const f = await fixture(t);
+  for (const [args, data] of [
+    [['mouse', 'drag-start', '--monitor', 'TEST-1', '--x', '10', '--y', '20'], { ok: true, window: { address: '0xabc', title: 'Synthetic window' } }],
+    [['mouse', 'drag-start', '--monitor', 'TEST-1', '--x', '10', '--y', '20'], { ok: true, window: null }],
+    [['window', 'move', '--address', '0xabc', '--id', '7'], { ok: true, moved: true, workspace: 7 }],
+    [['action', 'window.moveToWorkspace', '--data', '{"address":"0xabc","id":7}'], { ok: true, moved: false, workspace: 7 }],
+  ]) {
+    f.controls.actionResult = data;
+    assert.deepEqual(envelope(await f.cli(args)).data, data);
+  }
 });
 
 test('ctl real isolated tmux completes create, execute, observe, resize and remove without the human desktop', async t => {
