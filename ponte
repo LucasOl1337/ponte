@@ -916,15 +916,32 @@ def pc_main(argv):
         raise ValueError('node was not found. Install Node.js 22+ or set PONTE_NODE.')
 
 
+def ctl_main(argv):
+    """Replace Python with the HTTP client, keeping signals and exit codes."""
+    node = os.environ.get('PONTE_NODE', 'node')
+    helper = ROOT / 'bin' / 'ponte-ctl.mjs'
+    try:
+        os.execvp(node, [node, str(helper), *argv])
+    except OSError:
+        print(json.dumps({'schemaVersion': 1, 'ok': False, 'error': {
+            'code': 'NODE_UNAVAILABLE',
+            'message': 'Node.js 22+ was not found. Install it or set PONTE_NODE.'
+        }}))
+        raise SystemExit(3)
+
+
 def main():
     os.umask(0o077)
+    if sys.argv[1:2] == ['ctl']:
+        ctl_main(sys.argv[2:])
+        return
     if sys.argv[1:2] == ['phone']:
         phone_main(sys.argv[2:])
         return
     if sys.argv[1:2] == ['pc']:
         pc_main(sys.argv[2:])
         return
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Agent control: ./ponte ctl help (JSON API client, state, input, terminals, audio, capture). Offline discovery: ./ponte ctl schema. Other groups: ./ponte pc --help and ./ponte phone --help.')
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config'])
     parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')
     parser.add_argument('--tailscale-ip', help='Explicit canonical Tailscale IPv4 instead of automatic detection.')
