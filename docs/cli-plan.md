@@ -94,3 +94,26 @@ administration/Android tools are preserved, and phone-only zoom/orientation/
 preferences and Wake-on-LAN packet delivery are not invented as server APIs.
 Desktop/power effects were tested with synthetic adapters rather than executed
 on the owner's running session. See `docs/cli.md` for all commands and limits.
+
+## Post-push acceptance observation
+
+The delivered commit `cafb3fc` was exercised again, not just inspected. To
+establish the improvement, the original Python entry point from `99f93cf` was
+executed from Git in a separate process with its original repository path. The
+same `ctl schema` request was then run against the delivered entry point, both
+with an explicitly nonexistent private configuration.
+
+| Requirement | Executed observation | Result |
+| --- | --- | --- |
+| Discover app controls without UI or setup | Original entry point: `ctl schema` exits 2, invalid command. Delivered entry point: exits 0 and returns 59 command descriptors from the nonexistent-config environment | A previously unavailable agent workflow now works offline |
+| Cover all public desktop actions | CLI suite sends every one of the 32 named actions through the real router and checks all five aliases against the backend cases | No uncovered backend action, requests match expected payloads |
+| Complete an autonomous workflow, not just issue requests | Real private tmux: CLI creates a session, types and executes a split Unicode sentinel, reads the assembled output, resizes to 100x30, removes it and confirms empty sessions/registry | Output proves actual shell execution rather than input echo, with no GUI interaction |
+| Easy, deterministic safety checks | Generic `power.poweroff --dry-run` exits 0 and reports confirmation needed. Without confirmation, the same action with a nonexistent input file exits 2 with `CONFIRMATION_REQUIRED`, before file/config reads | Dry-run and confirmation work for aliases without effects or prompts |
+| Work with the existing app | Delivered `ctl health --timeout 3000` returns `Ponte`, version `0.1.0-alpha.19`, exit 0 from the installed server | No restart, installation or server change required |
+| Stay lightweight and fast | No production npm dependencies. Twenty fresh `ctl schema` processes: median 57 ms, p95 61 ms, max 62 ms, including Python, Node and JSON serialization | Measured startup remains short; numbers are local measurements, not a cross-machine guarantee |
+| Make repository tests available to agents | Executed the documented `npm run test:cli` after push: 65 passed, 0 failures, 0 skipped in 12.4 seconds | Administration regressions, new client transport and CLI acceptance workflows all pass through one documented command |
+
+These observations close the engineering acceptance loop for the requested CLI.
+They do not claim a new physical-phone deployment or live power/input exercise:
+those effects deliberately remain isolated, and phone-only preferences remain
+outside the server's control contract.
