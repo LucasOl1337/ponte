@@ -64,6 +64,27 @@ npm start
 
 See the [CLI and configuration guide](docs/setup.md) and [Android build guide](android/README.md) for paths, lifecycle, updates and troubleshooting.
 
+## Desktop app: control Android from the PC
+
+Ponte now also has a native Linux companion. `./ponte desktop` opens connection
+and pairing controls, explicit Android device selection, quality profiles,
+navigation buttons and private screenshots. Its managed scrcpy window provides
+live video, mouse and keyboard control, without changing the existing APK.
+Audio and automatic clipboard synchronization are opt-in.
+
+```sh
+./ponte desktop                 # requires PySide6, adb and scrcpy
+./ponte desktop install         # optional per-user application-menu entry
+./ponte desktop --demo          # clearly labeled synthetic UI, no phone access
+./ponte desktop schema          # CLI discovery, no Qt needed
+```
+
+ADB authorization on the phone is required, via USB or wireless debugging.
+There is no automatic device fallback or unlocking. See the [desktop guide
+(PT-BR)](docs/desktop.md) for setup, controls, testing and platform limits.
+See [observed acceptance](docs/desktop-acceptance.md) for real Android emulator
+video/input, screenshots and exactly what was and was not live-tested.
+
 ## Agent CLI
 
 `./ponte ctl` controls the running app through its authenticated API, without
@@ -107,6 +128,7 @@ Tests use temporary data and synthetic servers. They do not need a real phone or
 | --- | --- |
 | `backend/` and `server.mjs` | Authentication, desktop actions, monitor capture and audio storage |
 | `public/` | Mobile interface, live frame parser and recording controls |
+| `desktop/` | Native Linux companion and explicitly targeted Android control CLI |
 | `android/` | Android shell, CA pinning and loopback transport |
 | `ponte` and `bin/ctl-*.mjs` | Installation, phone lifecycle and authenticated agent CLI |
 | `docs/` | Setup, measured evidence, project page and presentation |

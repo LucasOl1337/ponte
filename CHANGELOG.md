@@ -4,6 +4,19 @@ All notable changes to Ponte. The project is an experimental alpha; entries desc
 
 ## Unreleased
 
+- Added **Ponte Desktop** for Linux: `./ponte desktop` opens a native PySide6
+  manager for authorized Android devices, with connection/pairing, explicit
+  selection, quality profiles, read-only mode, navigation and private screenshots.
+  Video and mouse/keyboard control run in a managed, separate scrcpy window.
+- Added a stdlib-only `ponte desktop` JSON CLI, offline help/schema, stdin-only
+  pairing codes and per-user menu installation. No new server, autostart, APK
+  permission or implicit device fallback. Audio and clipboard autosync are opt-in.
+- Verified live Android 11 video and input in an isolated emulator: a mouse drag
+  opened notifications, the native Back button restored Home, read-only blocked
+  input, the screenshot dialog saved a private PNG, and stopping/closing the app
+  ended only its viewer. Tests cover the bridge, CLI, Qt widgets and process
+  lifecycle. Physical USB and wireless pairing were not live-tested in this round.
+  See `docs/desktop.md` and `docs/desktop-acceptance.md` for setup and evidence.
 - Added `./ponte ctl`: 59 discoverable commands covering the running server's
   public control API, including all 32 desktop actions and five legacy aliases,
   state/capability queries, terminal sessions, audio, dictation and bounded

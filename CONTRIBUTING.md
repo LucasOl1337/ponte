@@ -13,6 +13,13 @@ For agent-driven app control, start with `./ponte ctl schema` and the
 cover them through `tests/ctl.test.mjs`. Help and dry-run must stay offline,
 passwords must stay out of argv, and mutating requests must never auto-retry.
 
+The native companion is under `desktop/`. `npm run test:desktop` runs its stdlib
+bridge and subprocess CLI tests with fake Android tools. With PySide6 and an
+isolated graphical test session, also run `python3 -m unittest discover -s
+desktop/tests -p test_gui.py`. Never use a personal phone for incidental tests.
+The `./ponte desktop --demo` UI does not use ADB or scrcpy. This first native
+companion UI is PT-BR only. The web/Android language policy below is unchanged.
+
 Do not commit local configuration, certificates, pairing tokens, signing keys, recordings or customized APKs. A screenshot must exclude private notifications and unrelated applications. Label simulated demonstrations and generated artwork clearly.
 
 English is the default interface language, with Portuguese as an optional saved preference. Update both catalogs when changing interface text. Improvements to first-time pairing are welcome. Avoid adding cloud services or analytics to complete local tasks.

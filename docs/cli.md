@@ -259,6 +259,11 @@ os parâmetros, mas não lê nem valida o conteúdo do áudio.
 
 ## Administração e Android continuam no mesmo CLI
 
+O app desktop e o controle no sentido PC → Android estão em `./ponte desktop`.
+Use `./ponte desktop schema` para automação de dispositivos explicitamente
+selecionados. Veja [o guia desktop](desktop.md). `ctl` continua sendo o cliente
+da API que controla o PC, não uma nova API ADB exposta na rede.
+
 | Tarefa | Interface existente |
 | --- | --- |
 | Configurar e instalar | `./ponte setup`, `install`, `uninstall` |

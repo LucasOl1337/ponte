@@ -59,3 +59,22 @@ pareado, mantendo o app Android atual que controla o computador.
   pré-requisitos, limitações e observações, sem prometer controle sem pareamento.
 - Se não houver sessão Android isolada disponível, espelhamento físico fica
   explicitamente não validado, sem usar o celular pessoal como atalho.
+
+## Resultado entregue
+
+Implementado o app Qt, o núcleo ADB/scrcpy, a CLI JSON e o instalador por usuário.
+O app Android e o servidor existentes foram preservados. Não ficou só em demo:
+um Android 11 isolado transmitiu vídeo pelo scrcpy e respondeu ao mouse e ao
+botão Voltar do app. Somente leitura, captura e encerramento também foram
+exercitados no fluxo real.
+
+A observação visual encontrou controles sobrepostos no painel inicial. O layout
+foi corrigido com container dedicado, área rolável e regressões de geometria.
+No fluxo conectado, dois textos também foram corrigidos: o badge não deve dizer
+"pronto pra abrir" com viewer aberto, e a ilustração não deve afirmar que não
+existe aparelho conectado. Ela continua explicitamente estática.
+
+Resultados, imagens, limites e matriz requisito → verificação estão em
+[Aceitação do Ponte Desktop](desktop-acceptance.md). O teste usou somente o
+emulador descartável, um servidor ADB privado e a bancada da tarefa. Nenhum
+telefone físico foi usado como atalho para obter evidência.

@@ -70,6 +70,26 @@ A imagem usa MJPEG autenticado. O perfil Automático (padrão) começa leve e so
 
 Leia o [guia de configuração](docs/setup.md), o [guia Android](android/README.md) e o [modelo de segurança](SECURITY.md). Um celular pareado pode operar sua sessão real do PC. A [especificação do caminho inverso](docs/pc-controls-phone.pt-BR.md) avalia operar o celular a partir do PC pela mesma rede Tailscale. Valide as novidades no aparelho com o [roteiro de teste manual](docs/manual-test-checklist.pt-BR.md).
 
+## App de computador: controle o celular pelo PC
+
+`./ponte desktop` abre o app nativo Linux, com conexão e pareamento, seleção
+explícita do Android, perfis de qualidade, botões de navegação e screenshot.
+A tela ao vivo abre numa janela scrcpy gerenciada pelo Ponte, com mouse e
+teclado. Áudio e clipboard automático ficam desligados por padrão.
+
+```sh
+./ponte desktop                 # precisa de PySide6, adb e scrcpy
+./ponte desktop install         # opcional: atalho no menu de aplicativos
+./ponte desktop --demo          # demonstração sintética, sem acessar celular
+./ponte desktop schema          # comandos de automação, sem precisar de Qt
+```
+
+O celular precisa autorizar o ADB, por USB ou depuração sem fio. Não muda o APK,
+não desbloqueia sozinho e não troca para outro aparelho quando o alvo cai.
+Veja [instalação, controles e limites](docs/desktop.md).
+O [registro de aceitação](docs/desktop-acceptance.md) mostra vídeo e controle
+reais num Android isolado, com capturas e limites do que foi testado.
+
 ## CLI pra agentes
 
 `./ponte ctl` controla o app pela mesma API autenticada do Android, sem abrir a

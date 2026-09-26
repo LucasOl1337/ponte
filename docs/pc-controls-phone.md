@@ -1,7 +1,10 @@
 # PC controls phone (vice-versa)
 
-Status: Option A CLI is implemented (`ponte phone`). Options B and C remain
-specification. This document describes how the PC controls the already-paired
+Status: Option A now includes a native Linux desktop app (`ponte desktop`) and
+its agent CLI, in addition to the legacy `ponte phone` commands. See the
+[current desktop guide](desktop.md) and [implementation plan](desktop-plan.md).
+Options B and C remain specification. Historical source references below may
+describe earlier versions. This document describes how the PC controls the already-paired
 Android phone over the same Tailscale network, mirroring what Ponte does today
 in the opposite direction.
 
