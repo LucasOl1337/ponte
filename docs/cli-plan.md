@@ -59,3 +59,38 @@ The backend and UI have no production npm dependencies. Preserve that property.
   flows against an isolated real server, without injecting desktop input.
 - No production dependency, service restart, phone installation or credential
   rotation is needed for this delivery.
+
+## Delivered and verified, 2026-09-25
+
+- `ponte ctl` contains 59 named commands, all 32 canonical desktop actions and
+  five aliases. A source-to-catalog test compares every backend action case.
+- `npm test`: 179 tests, 178 passed, zero failures, one opt-in systemd lifecycle
+  test skipped. Existing administration/phone CLI fixture tests remain green.
+- New suites contain 18 CLI workflow tests and 27 transport tests. They cover
+  every named action, aliases, queries, uploads/downloads, transcription,
+  confirmations, offline help/schema/dry-run, private configuration redaction,
+  malformed inputs, timeout ambiguity, TLS trust/hostname and cleanup.
+- The CLI also completed a real private tmux workflow: create, send a Unicode
+  command, observe its distinct output, resize, remove and verify an empty
+  registry. It used its own HOME, socket and shell, not the user's tmux or GUI.
+- `./android/test.sh`: 129 proxy checks, 17 microphone permission checks,
+  124 Wake-on-LAN checks and seven Python configuration tests passed. No phone
+  or customized APK was needed.
+- `./ponte ctl health --timeout 3000` succeeded against the installed service,
+  returning its version. No installed service was restarted and no real display
+  was captured or controlled.
+- Ten process-start measurements on this PC: offline `schema` median 70 ms
+  (68-81 ms), `version` median 71 ms (69-74 ms). These include the Python entry
+  point and Node startup, not just an in-process function benchmark.
+- Review fixed generic action help/schema, confirmation and password-source
+  checks before input reads, contradictory DPMS parameters, invalid output
+  paths, missing selected fields and configuration error redaction. A stream
+  cancellation race in an intermediate implementation was fixed using an exact
+  duration-stop sentinel. Thirty repeated focused transport/real-router checks
+  then passed, followed by the complete suite.
+
+Scope remains explicit: server actions are available through the CLI, existing
+administration/Android tools are preserved, and phone-only zoom/orientation/
+preferences and Wake-on-LAN packet delivery are not invented as server APIs.
+Desktop/power effects were tested with synthetic adapters rather than executed
+on the owner's running session. See `docs/cli.md` for all commands and limits.

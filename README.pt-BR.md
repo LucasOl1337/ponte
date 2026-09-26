@@ -70,4 +70,23 @@ A imagem usa MJPEG autenticado. O perfil Automático (padrão) começa leve e so
 
 Leia o [guia de configuração](docs/setup.md), o [guia Android](android/README.md) e o [modelo de segurança](SECURITY.md). Um celular pareado pode operar sua sessão real do PC. A [especificação do caminho inverso](docs/pc-controls-phone.pt-BR.md) avalia operar o celular a partir do PC pela mesma rede Tailscale. Valide as novidades no aparelho com o [roteiro de teste manual](docs/manual-test-checklist.pt-BR.md).
 
+## CLI pra agentes
+
+`./ponte ctl` controla o app pela mesma API autenticada do Android, sem abrir a
+interface nem instalar dependências npm. Dá pra consultar estado e capacidades,
+comandar desktop, terminais, áudio e ditado, salvar screenshots e capturar MJPEG
+com duração limitada. Os comandos de instalação e celular continuam funcionando.
+
+```sh
+./ponte ctl help
+./ponte ctl schema                  # catálogo JSON com parâmetros e limites, offline
+./ponte ctl state --pretty
+./ponte ctl mouse move --dx 20 --dy -5 --dry-run
+```
+
+Saída e erros em JSON, exit codes definidos e `--yes` nas operações destrutivas.
+Teste controles numa fixture isolada, não na sessão de trabalho do dono.
+O [guia completo do CLI](docs/cli.md) explica cada grupo, conexão, segurança e
+testes. A [matriz de cobertura](docs/cli-plan.md) registra o planejamento.
+
 O código é aberto sob a [licença MIT](LICENSE). Sugestões e contribuições são bem-vindas.

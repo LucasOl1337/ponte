@@ -65,6 +65,12 @@ The Android build pins the exact public leaf certificate and reads no server pri
 
 ## Daily commands
 
+For programmatic app control, use `./ponte ctl help` and `./ponte ctl schema`.
+The [agent CLI guide](cli.md) covers JSON state queries, every desktop action,
+terminal sessions, audio/dictation and bounded captures. It reuses the running
+server and the private configuration below. These older administration commands
+retain their existing output and behavior.
+
 ```sh
 ./ponte stop
 ./ponte start

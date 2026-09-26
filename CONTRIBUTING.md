@@ -8,6 +8,11 @@ For service lifecycle changes, also run `PONTE_SYSTEMD_TEST=1 node --test tests/
 
 Use dependency injection for desktop command tests. Use a dedicated graphical test session when a real GUI is necessary. Phone tests need temporary exclusivity over that physical phone.
 
+For agent-driven app control, start with `./ponte ctl schema` and the
+[CLI guide](docs/cli.md). Add new server actions to `bin/ctl-catalog.mjs` and
+cover them through `tests/ctl.test.mjs`. Help and dry-run must stay offline,
+passwords must stay out of argv, and mutating requests must never auto-retry.
+
 Do not commit local configuration, certificates, pairing tokens, signing keys, recordings or customized APKs. A screenshot must exclude private notifications and unrelated applications. Label simulated demonstrations and generated artwork clearly.
 
 English is the default interface language, with Portuguese as an optional saved preference. Update both catalogs when changing interface text. Improvements to first-time pairing are welcome. Avoid adding cloud services or analytics to complete local tasks.

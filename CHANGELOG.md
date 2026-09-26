@@ -2,6 +2,28 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## Unreleased
+
+- Added `./ponte ctl`: 59 discoverable commands covering the running server's
+  public control API, including all 32 desktop actions and five legacy aliases,
+  state/capability queries, terminal sessions, audio, dictation and bounded
+  JPEG/MJPEG captures. Installation, phone and direct `pc` commands stay compatible.
+- Added offline help/schema and redacted dry runs, a versioned JSON result/error
+  envelope, stable exit codes, stdin-only unlock passwords and explicit
+  confirmation for shutdown, reboot, suspend and terminal removal. Terminal
+  dictation does not press Enter unless requested.
+- The dependency-free client reuses private config/token files, verifies HTTPS
+  certificates, refuses redirects/retries and output overwrites, bounds transfers
+  and cleans up its incomplete files. Timeouts warn that a mutation may already
+  have happened.
+- Documented commands, limits, client-only UI boundaries and isolated testing in
+  `docs/cli.md`, with an audit and coverage matrix in `docs/cli-plan.md`.
+- Verified through real CLI subprocesses and the HTTP router with synthetic
+  effects, local HTTP/HTTPS transport tests, the Node suite and native Android
+  checks. The installed server's health endpoint was checked without restarting
+  services, injecting desktop input, capturing the user's display or installing
+  an APK. No application version bump is needed for this client-only addition.
+
 ## 0.1.0-alpha.19 — 2026-09-18
 
 Second round on the Redmi, this time with the WebView inspectable (a debuggable dogfooding build, `PONTE_ANDROID_DEBUGGABLE=1`), so the keyboard complaints could be measured instead of guessed.

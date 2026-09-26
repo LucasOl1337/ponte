@@ -64,6 +64,25 @@ npm start
 
 See the [CLI and configuration guide](docs/setup.md) and [Android build guide](android/README.md) for paths, lifecycle, updates and troubleshooting.
 
+## Agent CLI
+
+`./ponte ctl` controls the running app through its authenticated API, without
+opening the UI or adding production dependencies. It covers state/capability
+queries, every desktop action, terminals, dictation, audio, screenshots and
+bounded MJPEG capture. Existing installation and phone commands are unchanged.
+
+```sh
+./ponte ctl help
+./ponte ctl schema                  # machine-readable commands and constraints, offline
+./ponte ctl state --pretty
+./ponte ctl mouse move --dx 20 --dy -5 --dry-run
+```
+
+Results and errors use a versioned JSON envelope with stable exit codes.
+Destructive operations require `--yes`. Use isolated fixtures for input and
+capture tests, never an unrelated live desktop. See the [complete CLI guide
+(PT-BR)](docs/cli.md) and [coverage plan](docs/cli-plan.md).
+
 ## Connection and privacy
 
 Ponte runs a Node server on your PC. The Android app serves the interface through a private loopback proxy and connects to the PC's Tailscale address over TLS. The APK pins the installation CA and checks the PC's certificate against it before sending authorization; the server certificate can be renewed without a new app. HTTP stays on loopback.
@@ -89,7 +108,7 @@ Tests use temporary data and synthetic servers. They do not need a real phone or
 | `backend/` and `server.mjs` | Authentication, desktop actions, monitor capture and audio storage |
 | `public/` | Mobile interface, live frame parser and recording controls |
 | `android/` | Android shell, CA pinning and loopback transport |
-| `ponte` | Local configuration and user service management |
+| `ponte` and `bin/ctl-*.mjs` | Installation, phone lifecycle and authenticated agent CLI |
 | `docs/` | Setup, measured evidence, project page and presentation |
 
 ## What comes next
