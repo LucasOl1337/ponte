@@ -932,6 +932,9 @@ def ctl_main(argv):
 
 def main():
     os.umask(0o077)
+    if sys.argv[1:2] == ['desktop']:
+        from desktop.__main__ import main as desktop_main
+        raise SystemExit(desktop_main(sys.argv[2:]))
     if sys.argv[1:2] == ['ctl']:
         ctl_main(sys.argv[2:])
         return
@@ -941,7 +944,7 @@ def main():
     if sys.argv[1:2] == ['pc']:
         pc_main(sys.argv[2:])
         return
-    parser = argparse.ArgumentParser(description=__doc__, epilog='Agent control: ./ponte ctl help (JSON API client, state, input, terminals, audio, capture). Offline discovery: ./ponte ctl schema. Other groups: ./ponte pc --help and ./ponte phone --help.')
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Desktop app: ./ponte desktop (control Android from this PC). Agent control: ./ponte ctl help. Offline discovery: ./ponte ctl schema or ./ponte desktop schema. Other groups: ./ponte pc --help and ./ponte phone --help.')
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config'])
     parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')
     parser.add_argument('--tailscale-ip', help='Explicit canonical Tailscale IPv4 instead of automatic detection.')
