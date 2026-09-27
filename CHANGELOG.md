@@ -2,7 +2,9 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
-## Unreleased
+## 0.1.0-alpha.20 (2026-09-27)
+
+Ponte now works in both directions: the phone still drives the PC, and the PC can open and control an authorized Android phone. Agents get a JSON CLI over the running server. The Android shell did not change: phones on the alpha.19 APK need no reinstall.
 
 - Added **Ponte Desktop** for Linux: `./ponte desktop` opens a native PySide6
   manager for authorized Android devices, with connection/pairing, explicit
@@ -35,7 +37,13 @@ All notable changes to Ponte. The project is an experimental alpha; entries desc
   effects, local HTTP/HTTPS transport tests, the Node suite and native Android
   checks. The installed server's health endpoint was checked without restarting
   services, injecting desktop input, capturing the user's display or installing
-  an APK. No application version bump is needed for this client-only addition.
+  an APK.
+- Release: version bumped to 0.1.0-alpha.20 in `package.json`, the UI constant and
+  cache-busting query. The Android manifest stays at 0.1.0-alpha.19 (`versionCode 17`)
+  because the native shell is unchanged. Validated with 181 Node tests (1 opt-in
+  skipped), 120 desktop Python tests (Qt offscreen), 270 native checks and 7
+  configuration tests. A running alpha.19 server keeps serving the phone; it reports
+  the new version after its next restart.
 
 ## 0.1.0-alpha.19 — 2026-09-18
 
