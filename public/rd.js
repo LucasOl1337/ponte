@@ -167,6 +167,7 @@ let configuring = null;
 let queuedChunks = [];
 let waitingKey = true;
 let hardware = '';
+let decoderFailures = 0;
 const inflight = new Map();    // seq → { sendTime, recvAt }
 let canvasContext = null;
 let sampler = null;
@@ -345,28 +346,33 @@ async function configureDecoder(codec) {
   const base = { codec, optimizeForLatency: true };
   let config = { ...base, hardwareAcceleration: 'prefer-hardware' };
   const attempt = configuring = (async () => {
-    try { if (!(await VideoDecoder.isConfigSupported(config)).supported) config = base; } catch { config = base; }
+    try { if (!(await VideoDecoder.isConfigSupported(config)).supported) config = { ...base, hardwareAcceleration: 'prefer-software' }; }
+    catch { config = { ...base, hardwareAcceleration: 'prefer-software' }; }
   })();
   await attempt;
   if (configuring !== attempt) return;
+  decoderFailures = 0;
   startDecoder(config);
   configuring = null;
   const queued = queuedChunks; queuedChunks = [];
   for (const chunk of queued) decode(chunk);
 }
 
+// A decoder that fails restarts and waits for the next keyframe. Hardware that
+// fails (a GPU that claims H.264 and then errors) falls back to software for
+// the rest of the session; "no-preference" would pick the same hardware again.
 function startDecoder(config) {
   decoderConfig = config;
-  hardware = config.hardwareAcceleration ? 'hw' : 'sw';
+  hardware = config.hardwareAcceleration === 'prefer-hardware' ? 'hw' : 'sw';
   waitingKey = true;
   const current = new VideoDecoder({
-    output: frame => { if (decoder === current) draw(frame); else frame.close(); },
+    output: frame => { if (decoder === current) { decoderFailures = 0; draw(frame); } else frame.close(); },
     error: error => {
       if (decoder !== current) return;
       decoder = null;
-      // A hardware decoder that fails at run time falls back to software; the
-      // next keyframe restarts the picture.
-      if (decoderConfig?.hardwareAcceleration) { const { hardwareAcceleration, ...rest } = decoderConfig; startDecoder(rest); }
+      decoderFailures++;
+      if (decoderConfig.hardwareAcceleration === 'prefer-hardware') startDecoder({ ...decoderConfig, hardwareAcceleration: 'prefer-software' });
+      else if (decoderFailures <= 3) startDecoder(decoderConfig);
       else status(t('O decodificador de vídeo falhou: {error}', { error: error?.message || error }));
     },
   });

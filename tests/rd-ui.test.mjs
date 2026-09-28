@@ -272,7 +272,7 @@ test('a clipboard from the target waits for focus before being written', async (
 test('the decoder: annex B without description, hardware preferred with fallback, late deltas dropped until a keyframe', async () => {
   FakeDecoder.hardware = false;
   const soft = await harness().connect();
-  assert.deepEqual({ ...soft.decoder.config }, { codec: 'avc1.640034', optimizeForLatency: true });
+  assert.deepEqual({ ...soft.decoder.config }, { codec: 'avc1.640034', optimizeForLatency: true, hardwareAcceleration: 'prefer-software' });
   FakeDecoder.hardware = true;
   const h = await harness().connect();
   assert.deepEqual({ ...h.decoder.config }, { codec: 'avc1.640034', optimizeForLatency: true, hardwareAcceleration: 'prefer-hardware' });
@@ -303,6 +303,22 @@ test('the decoder: annex B without description, hardware preferred with fallback
   assert.equal(h.canvas.width, 1920);
   assert.equal(h.run('frameLatency.length'), 1);
   assert.equal(h.run('frameLatency[0].value'), 5);
+  // Hardware that errors at run time falls back to software, not to "no preference".
+  h.decoder.error(new Error('Decoding error.'));
+  assert.equal(h.decoder.config.hardwareAcceleration, 'prefer-software');
+  assert.equal(h.run('hardware'), 'sw');
+  h.socket.message(unit(false, 7));
+  assert.equal(h.decoder.chunks.length, 0, 'waits for a keyframe');
+  h.socket.message(unit(true, 8));
+  assert.equal(h.decoder.chunks.length, 1);
+  // Software errors restart the decoder a few times before giving up.
+  h.decoder.error(new Error('Decoding error.'));
+  h.decoder.error(new Error('Decoding error.'));
+  assert.equal(FakeDecoder.all.length, 4, 'restarted twice more (four failures without a frame in all)');
+  assert.equal(h.el('#rd-status').textContent, '');
+  h.decoder.error(new Error('Decoding error.'));
+  assert.equal(FakeDecoder.all.length, 4);
+  assert.match(h.el('#rd-status').textContent, /video decoder failed: Decoding error/);
 });
 
 test('the header byte order: big endian by default, little endian detected from an implausible send time', async () => {
