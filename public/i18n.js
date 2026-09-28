@@ -602,6 +602,7 @@
   "PC {size} · ajustar": "PC {size} · fit",
   "{size} · ajustar": "{size} · fit",
   "Ajustar a sessão ao celular": "Fit the session to the phone",
+  "Atual · {cols} colunas": "Current · {cols} columns",
   "↓ ao vivo": "↓ live",
   "Teclas do agente": "Agent keys",
   "Mensagem para a sessão": "Message to the session",

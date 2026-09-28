@@ -1632,7 +1632,7 @@ function selectTerminal(id) {
   growComposer();
   savePreference('ponte-terminal',id);
   const session = terminalSessions.find(item => item.id === id);
-  $('#terminal-size').value = String(session?.cols || 40);
+  terminalSizeOptions(session?.cols || 40);
   terminalSessionOptions();
 }
 // Reading back in the session: a finger on the output, a fling still running
@@ -1937,6 +1937,14 @@ screenInput.addEventListener('keydown', event => {
 screenInput.addEventListener('focus', measureScreenComposer);
 screenInput.addEventListener('blur', measureScreenComposer);
 
+// Sessions born at the phone's measured grid (e.g. 52 columns) show their
+// width as a fourth option instead of a blank select.
+function terminalSizeOptions(cols) {
+  const widths = [[40,'Celular · 40 colunas'],[80,'Desktop · 80 colunas'],[120,'Amplo · 120 colunas']];
+  const current = widths.some(([width]) => width === cols) ? '' : `<option value="${Number(cols)}">${escaped(t('Atual · {cols} colunas',{cols}))}</option>`;
+  $('#terminal-size').innerHTML = current + widths.map(([width, label]) => `<option value="${width}" data-i18n="${label}">${escaped(t(label))}</option>`).join('');
+  $('#terminal-size').value = String(cols);
+}
 $('#terminal-size').addEventListener('change',async event => {
   const id = terminalId;
   if (!id) return;

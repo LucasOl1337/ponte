@@ -225,3 +225,16 @@ test('the pane takes the phone grid only on the tab own layout events, never bec
   assert.equal(resizes().length, 3);
   assert.ok(resizes()[2].cols < 55, 'a bigger font fits fewer columns');
 });
+
+test('the Terminals width select shows a measured width instead of going blank', async () => {
+  const h = harness({ sessions: [claude] });
+  await flush();
+  h.run("navigate('terminais')"); await flush();
+  const select = h.el('#terminal-size');
+  assert.equal(select.value, '51');
+  const options = () => select.querySelectorAll('option').map(option => [option.attrs.value, option.textContent]);
+  assert.deepEqual(options(), [['51', 'Current · 51 columns'], ['40', 'Phone · 40 columns'], ['80', 'Desktop · 80 columns'], ['120', 'Wide · 120 columns']]);
+  h.run(`terminalSizeOptions(80)`);
+  assert.equal(select.value, '80');
+  assert.equal(options().length, 3);
+});
