@@ -18,6 +18,10 @@ const ESC_HOLD_MS = 2000;
 const RECONNECT_STEPS = [500, 1000, 2000, 4000, 8000];
 const PROBE_PATCH = 24;
 const PROBE_ROUNDS = 10;
+// The lab source paints its capture time (ms epoch, 44 bits, MSB first, white =
+// 1) as 16×16 cells from the top-left corner; y is the middle row of the cells.
+const LAB_STRIPE = { x: 0, y: 8, cell: 16, bits: 44 };
+const STRIPE_TRUST_MS = 60000;
 const MODIFIER_KIND = { ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', ShiftLeft: 'shift', ShiftRight: 'shift' };
 
 // ---- pure helpers (unit-tested) -------------------------------------------
@@ -100,9 +104,8 @@ function patchDifference(a, b) {
 }
 
 // Capture-time stripe of the lab source (DESENHO §6): `bits` cells of `cell` px
-// along the top row starting at (x, y), most significant bit first, white = 1.
-// It carries the low bits of the wall clock in ms; the high bits come from the
-// frame's own send time. The lab server describes it in ready.lab.stripe.
+// along a row starting at (x, y), most significant bit first, white = 1. With
+// fewer bits than an epoch needs, the high bits come from the frame's send time.
 function stripeTime(pixels, stripe, referenceMs) {
   let value = 0;
   for (let bit = 0; bit < stripe.bits; bit++) {
@@ -277,11 +280,23 @@ function receive(data) {
       try { socket.close(1000); } catch {}
       break;
     case 'error':
-      stopMessage = i18n.apiMessage(message.code, message.parameters || {}, message.message || message.code || t('O PC recusou a sessão.'));
+      stopMessage = errorText(message);
       if (['PAIRING_REQUIRED', 'UNAUTHORIZED', 'FORBIDDEN', 'PEER_REVOKED'].includes(message.code)) stopped = 'auth';
       else status(stopMessage);
       break;
   }
+}
+
+function errorText(message) {
+  const known = {
+    PAIRING_REQUIRED: t('A chave foi recusada. Pareie de novo com ./ponte rd.'),
+    RD_UNAVAILABLE: t('O controle remoto não está disponível nesse aparelho (falta captura ou entrada).'),
+    CAPTURE_FAILED: t('A captura de tela falhou no aparelho.'),
+    MONITORS_UNAVAILABLE: t('O aparelho não informou nenhum monitor.'),
+    INVALID_MONITOR: t('Esse monitor não existe mais.'),
+    CLIPBOARD_UNAVAILABLE: t('O aparelho não aceitou a área de transferência.'),
+  };
+  return known[message.code] || i18n.apiMessage(message.code, message.parameters || {}, message.message || message.code || t('O PC recusou a sessão.'));
 }
 
 function ready(message) {
@@ -402,10 +417,13 @@ function draw(frame) {
   const drawnAt = nowEpoch();
   framesDrawn++;
   if (info) frameLatency.push({ at: drawnAt, value: drawnAt + clockOffset - info.sendTime });
-  const stripe = session?.lab?.stripe;
-  if (stripe && info) {
-    const pixels = sample(frame, stripe.x || 0, stripe.y || 0, stripe.bits * stripe.cell, 1);
-    if (pixels) glassLatency.push({ at: drawnAt, value: drawnAt + clockOffset - stripeTime(pixels, stripe, info.sendTime) });
+  // Glass to glass, only where a capture-time stripe exists (the lab): the
+  // page reads it with ?probe=1 and trusts it only near the frame's send time.
+  const stripe = session?.lab?.stripe || (probeEnabled ? LAB_STRIPE : null);
+  if (stripe && info && width >= stripe.x + stripe.bits * stripe.cell) {
+    const pixels = sample(frame, stripe.x, stripe.y, stripe.bits * stripe.cell, 1);
+    const captured = pixels && stripeTime(pixels, stripe, info.sendTime);
+    if (captured && Math.abs(info.sendTime - captured) < STRIPE_TRUST_MS) glassLatency.push({ at: drawnAt, value: drawnAt + clockOffset - captured });
   }
   if (probe) probeFrame(frame, drawnAt);
   frame.close();

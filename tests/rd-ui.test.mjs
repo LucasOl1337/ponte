@@ -317,6 +317,30 @@ test('the header byte order: big endian by default, little endian detected from 
   assert.deepEqual(JSON.parse(JSON.stringify(h.run('(({key,seq,sendTime}) => ({key,seq,sendTime}))(parseHeader(buf, false))'))), { key: true, seq: 7, sendTime: 1_700_001_000_000 });
 });
 
+test('glass to glass: with ?probe=1 the lab band (44 bits of 16 px, MSB first) is read from each decoded frame', async () => {
+  const h = await harness({ search: '?probe=1' }).connect();
+  const captured = 1_700_000_999_950;
+  const row = new Uint8ClampedArray(44 * 16 * 4);
+  for (let bit = 0; bit < 44; bit++) {
+    const one = Math.floor(captured / 2 ** (43 - bit)) % 2;
+    for (let x = 0; x < 16; x++) row.fill(one ? 235 : 16, (bit * 16 + x) * 4, (bit * 16 + x) * 4 + 3);
+  }
+  h.context.row = row;
+  assert.equal(h.run('stripeTime(row, LAB_STRIPE, 1_700_001_000_000)'), captured);
+  const reads = [];
+  h.context.OffscreenCanvas = class { constructor(width, height) { this.width = width; this.height = height; } getContext() { return { canvas: this, drawImage: (...args) => reads.push(args.slice(1, 5)), getImageData: () => ({ data: row }) }; } };
+  h.run('inflight.set(9, { sendTime: 1_700_001_000_000, recvAt: 0 })');
+  h.decoder.output({ timestamp: 9, displayWidth: 1920, displayHeight: 1080, close() {} });
+  assert.deepEqual(reads[0], [0, 8, 704, 1]);
+  // Drawn at timeOrigin + 1 000 000 = 1 700 001 000 000: 50 ms after capture.
+  assert.equal(h.run('glassLatency[0].value'), 50);
+  // A real desktop has no band: a value far from the send time is ignored.
+  row.fill(0);
+  h.run('inflight.set(10, { sendTime: 1_700_001_000_000, recvAt: 0 })');
+  h.decoder.output({ timestamp: 10, displayWidth: 1920, displayHeight: 1080, close() {} });
+  assert.equal(h.run('glassLatency.length'), 1);
+});
+
 test('ping syncs the clock with the lowest round trip; stats go to the server every second with mean and p95 over 5 s', async () => {
   const h = await harness().connect();
   const pings = h.sent('ping');
