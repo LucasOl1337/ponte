@@ -186,6 +186,7 @@ let meters = { fps: 0, kbps: 0, drops: 0 };
 let probe = null;
 let lastProbe = null;
 let keyboardLock = 'off';
+let pointerLock = 'off';
 
 const nowEpoch = () => performance.timeOrigin + performance.now();
 
@@ -471,7 +472,7 @@ function tick() {
   if (frame) { report.latency = round(frame.mean); report.p95 = round(frame.p95); }
   if (glass) { report.glass = round(glass.mean); report.glassP95 = round(glass.p95); }
   send(report);
-  window.ponteRdStats = { ...report, hardware, keyboardLock, engaged, mode, monitor: session.monitor, probe: lastProbe };
+  window.ponteRdStats = { ...report, hardware, keyboardLock, pointerLock, engaged, mode, monitor: session.monitor, probe: lastProbe };
   renderStats(frame, glass);
 }
 const round = value => Math.round(value * 10) / 10;
@@ -544,10 +545,10 @@ function renderMode() {
 
 async function lockPointer() {
   const stage = $('#rd-stage');
-  try { await stage.requestPointerLock({ unadjustedMovement: true }); }
+  try { await stage.requestPointerLock({ unadjustedMovement: true }); pointerLock = 'raw'; }
   catch (error) {
     // Raw movement is not available everywhere (NotSupportedError): plain lock.
-    try { await stage.requestPointerLock(); } catch { note(t('O navegador recusou travar o ponteiro.')); }
+    try { await stage.requestPointerLock(); pointerLock = 'plain'; } catch { pointerLock = 'refused'; note(t('O navegador recusou travar o ponteiro.')); }
   }
 }
 
