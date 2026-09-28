@@ -472,6 +472,138 @@ test('direct touch tolerates finger jitter and a deliberate one-finger move drag
   assert.equal(actions().at(-1).pressed, false);
 });
 
+async function scrollScreenHarness() {
+  const h = powerUiHarness();
+  await flushTicks();
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
+  const preview = h.el('#screen-preview');
+  const evt = (type, id, x, y) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  const actions = () => h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
+  const send = async (type, id, x, y) => { if (type === 'pointerdown') h.run("screenMode='live'"); preview.dispatchEvent(evt(type, id, x, y)); await h.run('flushMovement()'); await flushTicks(); };
+  // The first finger has been resting on the glass for a while.
+  const rest = id => h.run(`screenPointers.get(${id}).started-=1000`);
+  return { h, preview, actions, send, rest };
+}
+
+test('hold one finger and drag another: the PC scrolls under the held finger, and it never clicks or drags', async () => {
+  const { h, actions, send, rest } = await scrollScreenHarness();
+  await flushTicks();
+  await send('pointerdown', 1, 100, 100);
+  rest(1);
+  await send('pointerdown', 2, 260, 180);
+  await send('pointermove', 2, 262, 110);
+  await send('pointermove', 1, 104, 97); // the resting finger wobbles: ignored
+  await send('pointermove', 2, 262, 40);
+  await send('pointerup', 2, 262, 40);
+  await send('pointerdown', 3, 260, 60); // flick again with the finger still resting
+  await send('pointermove', 3, 260, 130);
+  await send('pointerup', 3, 260, 130);
+  await send('pointerup', 1, 104, 97);
+  await flushTicks(30);
+  const sent = actions();
+  assert.ok(sent.length >= 2, JSON.stringify(sent));
+  assert.deepEqual([...new Set(sent.map(item => item.type))], ['mouse.scroll'], 'only wheel, no click or drag');
+  assert.deepEqual(sent[0], { type: 'mouse.scroll', dy: 10, monitor: 'HDMI-A-1', x: 492, y: 493 }, 'the first scroll carries the held finger\'s pixel');
+  assert.ok(sent.slice(1).every(item => item.monitor === undefined), 'the pointer is placed once per gesture');
+  const total = sent.reduce((sum, item) => sum + item.dy, 0);
+  assert.equal(total, 20 - 10, '140 px up then 70 px down at 7 px per wheel step');
+  assert.equal(h.run('screenScale'), 1, 'no zoom');
+  assert.equal(h.el('#tap-marker').getAttribute('data-kind'), 'scroll');
+});
+
+test('hold-and-drag scrolls while zoomed instead of panning, and pinch and two-finger pan stay as before', async () => {
+  const { h, actions, send, rest } = await scrollScreenHarness();
+  await flushTicks();
+  h.run('zoomScreenAround(3, 195, 110)');
+  const pan = h.run('JSON.stringify([screenPanX, screenPanY])');
+  await send('pointerdown', 1, 100, 100);
+  rest(1);
+  const pixel = h.run('JSON.stringify(monitorPixelAt(100, 100))');
+  await send('pointerdown', 2, 260, 180);
+  await send('pointermove', 2, 250, 110);
+  await send('pointerup', 2, 250, 110);
+  await send('pointerup', 1, 100, 100);
+  await flushTicks(30);
+  let sent = actions();
+  assert.deepEqual(sent.map(item => item.type), ['mouse.scroll']);
+  assert.deepEqual({ x: sent[0].x, y: sent[0].y }, JSON.parse(pixel), 'zoomed pixel under the held finger');
+  assert.equal(sent[0].dy, 10);
+  assert.equal(h.run('screenScale'), 3, 'zoom untouched');
+  assert.equal(h.run('JSON.stringify([screenPanX, screenPanY])'), pan, 'view did not pan');
+
+  // Two fingers landing together while zoomed still pan the view, never scroll.
+  h.calls.length = 0;
+  await send('pointerdown', 4, 100, 100);
+  await send('pointerdown', 5, 200, 100);
+  await send('pointermove', 4, 100, 60);
+  await send('pointermove', 5, 200, 60);
+  await send('pointerup', 4, 100, 60);
+  await send('pointerup', 5, 200, 60);
+  await flushTicks(30);
+  assert.deepEqual(actions(), [], 'zoomed two-finger drag is a local pan');
+  assert.notEqual(h.run('JSON.stringify([screenPanX, screenPanY])'), pan);
+
+  // A pinch lands both fingers together; even with one of them nearly still it zooms.
+  h.calls.length = 0;
+  h.run('screenScale=1;applyScreenZoom()');
+  await send('pointerdown', 6, 150, 110);
+  await send('pointerdown', 7, 200, 110);
+  await send('pointermove', 7, 260, 110);
+  await send('pointermove', 7, 300, 110);
+  await send('pointerup', 7, 300, 110);
+  await send('pointerup', 6, 150, 110);
+  await flushTicks(30);
+  assert.deepEqual(actions(), [], 'a pinch never scrolls or clicks');
+  assert.ok(h.run('screenScale') > 2, 'the pinch zoomed');
+});
+
+test('two fingers together at 1x scroll at their midpoint, so the wheel reaches the window between them', async () => {
+  const { h, actions, send } = await scrollScreenHarness();
+  await flushTicks();
+  await send('pointerdown', 1, 100, 100);
+  await send('pointerdown', 2, 140, 100);
+  // Real fingers report small interleaved steps; the spacing barely changes.
+  for (let y = 95; y >= 50; y -= 5) { await send('pointermove', 1, 100, y); await send('pointermove', 2, 140, y); }
+  await send('pointerup', 1, 100, 50);
+  await send('pointerup', 2, 140, 50);
+  await flushTicks(30);
+  const sent = actions();
+  assert.deepEqual([...new Set(sent.map(item => item.type))], ['mouse.scroll']);
+  assert.equal(sent[0].monitor, 'HDMI-A-1');
+  assert.deepEqual({ x: sent[0].x, y: sent[0].y }, JSON.parse(h.run('JSON.stringify(monitorPixelAt(120, 100))')));
+  assert.equal(h.run('screenScale'), 1);
+});
+
+test('scroll buttons step the wheel at the last touch (or the view centre), repeat while held, and never click', async () => {
+  const { h, actions, send } = await scrollScreenHarness();
+  const up = h.all('[data-scroll-step]').find(button => button.dataset.scrollStep === '1');
+  const down = h.all('[data-scroll-step]').find(button => button.dataset.scrollStep === '-1');
+  assert.ok(up && down, 'both buttons are in the screen FABs');
+  assert.equal(h.el('.screen-fabs').querySelector('#screen-scroll').querySelectorAll('[data-scroll-step]').length, 2, 'they live with the floating buttons, outside the monitor');
+  const press = button => button.dispatchEvent({ type: 'pointerdown', pointerId: 9, button: 0, target: button, preventDefault(){} });
+  const lift = button => button.dispatchEvent({ type: 'pointerup', pointerId: 9, button: 0, target: button, preventDefault(){} });
+  // No touch yet: the centre of what the phone shows.
+  const centre = JSON.parse(h.run("(() => { const r = screenPreview.getBoundingClientRect(); return JSON.stringify(monitorPixelAt(r.left + (r.width || screenPreview.clientWidth) / 2, r.top + (r.height || screenPreview.clientHeight) / 2)); })()"));
+  press(up); await flushTicks(); lift(up); await flushTicks();
+  assert.deepEqual(actions(), [{ type: 'mouse.scroll', dy: 3, monitor: 'HDMI-A-1', x: centre.x, y: centre.y }]);
+  // After a tap, the wheel goes where the finger was. Holding repeats without re-placing.
+  await send('pointerdown', 1, 100, 100); await send('pointerup', 1, 100, 100);
+  h.calls.length = 0;
+  press(down); await flushTicks();
+  const repeat = h.run('scrollButtonTimer');
+  await h.runTimer(repeat);
+  await h.runTimer(h.run('scrollButtonTimer'));
+  lift(down); await flushTicks();
+  assert.equal(h.run('scrollButtonTimer'), 0, 'lifting stops the repeat');
+  const sent = actions();
+  assert.deepEqual(sent[0], { type: 'mouse.scroll', dy: -3, monitor: 'HDMI-A-1', x: 492, y: 493 });
+  assert.deepEqual(sent.slice(1), [{ type: 'mouse.scroll', dy: -3 }, { type: 'mouse.scroll', dy: -3 }]);
+  // Leaving the screen cancels a held button.
+  press(up); await flushTicks();
+  h.run("navigate('inicio')");
+  assert.equal(h.run('scrollButtonTimer'), 0);
+});
+
 test('dragging a window onto the workspace shelf moves the captured window without switching view', async () => {
   const state = { ...powerFixture, activeWindow: { address: '0xabc', workspace: { id: 1 } }, workspaces: [{ id: 1, name: '1', windows: 1 }, { id: 3, name: '3', windows: 0 }] };
   const h = powerUiHarness({ state, actionResult: body => body.type === 'mouse.dragStartAt' ? { ok: true, window: { address: '0xabc', workspace: { id: 1 } } } : { ok: true } });

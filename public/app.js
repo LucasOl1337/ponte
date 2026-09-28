@@ -468,6 +468,9 @@ const REGION_RECONNECT_PX = 8;
 // A fingertip never lands as a mathematically fixed point. At phone scale,
 // 12 CSS px was small enough for ordinary taps to vanish as fake pans.
 const SCREEN_GESTURE_SLOP = 24;
+// Hold one finger still this long, then drag another: the wheel scrolls under
+// the held finger. A pinch lands both fingers together, well under this.
+const ANCHOR_SCROLL_MS = 250;
 
 class MjpegParser {
   constructor(onFrame,boundary = 'ponte-frame') {
@@ -1003,7 +1006,8 @@ const screenPointers = new Map();
 const screenPreview = $('#screen-preview');
 let pinchDistance = 0;
 let pinchMid = null;
-let screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false };
+let scrollAt = null;
+let screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false, anchor: null };
 const pointerDistance = () => { const [a,b] = [...screenPointers.values()]; return a && b ? Math.hypot(a.x-b.x,a.y-b.y) : 0; };
 function imageLocalPoint(clientX, clientY) {
   const rect = $('#screen-image').getBoundingClientRect?.() || { left: 0, top: 0 };
@@ -1032,7 +1036,9 @@ async function quietActionResult(type, payload = {}) {
 // ---- Direct touch: the image is the monitor. One mode, phone gestures only.
 // Tap = click. Long press then lift = right click. Long press then move = drag
 // with the button held. Pinch = zoom. One finger while zoomed = pan. Two
-// fingers together = scroll the PC.
+// fingers together = scroll the PC (pan while zoomed). Hold one finger still,
+// then drag another = scroll under the held finger, zoomed or not; it never
+// clicks or drags.
 const hold = { timer: null, held: false, dragging: false, semantic: false, lastMove: 0, lastLease: 0, generation: 0, windowAddress: '', capturePromise: null, workspaceId: null };
 function clearHold() { clearTimeout(hold.timer); hold.timer = null; hold.held = false; }
 function renderWorkspaceDropShelf(currentId) {
@@ -1111,9 +1117,15 @@ function resetScreenGesture() {
   const ids = [...screenPointers.keys()];
   screenPointers.clear();
   for (const id of ids) { if (screenPreview.hasPointerCapture?.(id)) screenPreview.releasePointerCapture(id); }
-  screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false };
-  pinchMid = null; pinchDistance = 0;
+  screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false, anchor: null };
+  pinchMid = null; pinchDistance = 0; scrollAt = null;
   endHoldDrag();
+}
+// The next scroll request carries this point once, so the PC moves its pointer
+// there and the wheel reaches the window under the finger.
+function anchorScroll(pixel) {
+  const monitor = selectedMonitor();
+  scrollAt = monitor && pixel ? { monitor: monitor.name, x: pixel.x, y: pixel.y } : null;
 }
 function queueScroll(dy) {
   if (!connected || !state?.capabilities?.mouse) return;
@@ -1140,8 +1152,10 @@ screenPreview.addEventListener('pointerdown',event => {
   event.preventDefault?.();
   screenPreview.setPointerCapture?.(event.pointerId);
   screenPointers.set(event.pointerId,{x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,started:Date.now(),moved:false});
+  const touched = monitorPixelAt(event.clientX, event.clientY), touchedMonitor = selectedMonitor();
+  if (touched && touchedMonitor) lastScreenTouch = { monitor: touchedMonitor.name, x: touched.x, y: touched.y };
   if (screenPointers.size === 1) {
-    screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false };
+    screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false, anchor: null };
     pinchMid = null; pinchDistance = 0;
     clearHold();
     hold.timer = setTimeout(() => {
@@ -1150,8 +1164,15 @@ screenPreview.addEventListener('pointerdown',event => {
       if (pointer && !pointer.moved && screenPointers.size === 1) { hold.held = true; try { navigator.vibrate?.(12); } catch {} }
     },LONG_PRESS_MS);
   } else {
+    const [firstId, first] = screenPointers.entries().next().value;
+    const anchored = screenGesture.anchor === firstId || (!screenGesture.twoFinger && !first.moved && Date.now() - first.started >= ANCHOR_SCROLL_MS);
     screenGesture.twoFinger = true;
     clearHold(); endHoldDrag();
+    if (anchored && !screenGesture.pinch && screenGesture.anchor !== firstId) {
+      screenGesture.anchor = firstId;
+      anchorScroll(monitorPixelAt(first.startX, first.startY));
+      showTapMarker(first.startX, first.startY, 'scroll');
+    }
     const [a,b] = [...screenPointers.values()];
     pinchMid = { x: (a.x+b.x)/2, y: (a.y+b.y)/2 };
     pinchDistance = pointerDistance();
@@ -1163,7 +1184,10 @@ screenPreview.addEventListener('pointermove',event => {
   const dx = event.clientX-before.x, dy = event.clientY-before.y;
   if (Math.hypot(event.clientX-before.startX,event.clientY-before.startY) > SCREEN_GESTURE_SLOP) { before.moved = true; screenGesture.moved = true; }
   screenPointers.set(event.pointerId,{...before,x:event.clientX,y:event.clientY});
-  if (screenPointers.size >= 2) {
+  if (screenGesture.anchor !== null && screenPointers.has(screenGesture.anchor)) {
+    screenGesture.panned = true;
+    if (screenPointers.size >= 2 && event.pointerId !== screenGesture.anchor) queueScroll(dy);
+  } else if (screenPointers.size >= 2) {
     const [a,b] = [...screenPointers.values()];
     const midX = (a.x+b.x)/2, midY = (a.y+b.y)/2;
     const distance = pointerDistance();
@@ -1177,6 +1201,7 @@ screenPreview.addEventListener('pointermove',event => {
       screenGesture.panned = true;
       panScreen(midX-prevMid.x, midY-prevMid.y);
     } else {
+      if (!screenGesture.panned) anchorScroll(monitorPixelAt(prevMid.x, prevMid.y));
       screenGesture.panned = true;
       queueScroll(midY - prevMid.y);
     }
@@ -1234,6 +1259,40 @@ async function finishScreenPointer(event) {
 }
 for (const name of ['pointerup','pointercancel','lostpointercapture']) screenPreview.addEventListener(name,finishScreenPointer);
 screenPreview.addEventListener('contextmenu', event => { event.preventDefault(); });
+// Scroll buttons: a press is one step of wheel notches, holding repeats. The
+// wheel lands where the last touch was on this monitor, else at the centre of
+// what the phone shows, so reading a terminal needs neither the keyboard nor
+// a second finger.
+const SCROLL_BUTTON_NOTCHES = 3;
+let lastScreenTouch = null;
+let scrollButtonTimer = 0;
+function scrollButtonPixel() {
+  const monitor = selectedMonitor();
+  if (!monitor) return null;
+  if (lastScreenTouch && lastScreenTouch.monitor === monitor.name) return { x: lastScreenTouch.x, y: lastScreenTouch.y };
+  const rect = screenPreview.getBoundingClientRect?.() || { left: 0, top: 0, width: screenPreview.clientWidth, height: screenPreview.clientHeight };
+  return monitorPixelAt(rect.left + (rect.width || screenPreview.clientWidth) / 2, rect.top + (rect.height || screenPreview.clientHeight) / 2);
+}
+function scrollButtonStep(direction) {
+  if (!connected || !state?.capabilities?.mouse) return;
+  moveQueue.scroll += direction * SCROLL_BUTTON_NOTCHES;
+  flushMovement();
+}
+function stopScrollButton() { clearTimeout(scrollButtonTimer); scrollButtonTimer = 0; }
+for (const button of $$('[data-scroll-step]')) {
+  const direction = Number(button.dataset.scrollStep);
+  button.addEventListener('pointerdown', event => {
+    event.preventDefault?.();
+    stopScrollButton();
+    anchorScroll(scrollButtonPixel());
+    scrollButtonStep(direction);
+    const repeat = delay => { scrollButtonTimer = setTimeout(() => { scrollButtonStep(direction); repeat(110); }, delay); };
+    repeat(400);
+  });
+  for (const name of ['pointerup','pointercancel','pointerleave']) button.addEventListener(name, stopScrollButton);
+  // Keyboard and accessibility activation arrive as a click without a pointer.
+  button.addEventListener('click', event => { if (event.detail === 0) { anchorScroll(scrollButtonPixel()); scrollButtonStep(direction); } });
+}
 screenPreview.addEventListener('keydown',event => {
   if (event.key === '+' || event.key === '=') zoomScreenAround(screenScale*1.4);
   else if (event.key === '-') zoomScreenAround(screenScale/1.4);
@@ -1671,7 +1730,8 @@ let dragTimer = null;
 function resetRemoteInput() {
   remoteInputGeneration++;
   clearInterval(movementTimer); movementTimer = null;
-  moveQueue = {dx:0,dy:0,scroll:0};
+  moveQueue = {dx:0,dy:0,scroll:0}; scrollAt = null;
+  stopScrollButton();
   resetScreenGesture();
 }
 
@@ -1685,7 +1745,7 @@ async function flushMovement() {
   else { moveQueue.dx -= dx; moveQueue.dy -= dy; }
   moving = true;
   try {
-    if (scroll) await api('/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'mouse.scroll',dy:Math.round(scroll)})});
+    if (scroll) { const at = scrollAt; scrollAt = null; await api('/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'mouse.scroll',dy:Math.round(scroll),...(at || {})})}); }
     else await api('/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'mouse.move',dx:Math.round(dx),dy:Math.round(dy)})});
   } catch (error) { moveQueue = {dx:0,dy:0,scroll:0}; toast(error,true); }
   finally {
