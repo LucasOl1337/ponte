@@ -2,6 +2,42 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.25 (2026-09-28)
+
+Ponte becomes a mesh: every Omarchy machine runs the same node, and one node controls another only after being approved on it. The APK does not change (still versionCode 21); the page reloads with the new version.
+
+- **Nodes and discovery.** Each node keeps an identity (`node.json`: id and tailnet
+  name). It finds other nodes among the online, untagged tailnet devices of the same
+  owner by asking `GET /api/mesh/hello` on their tailnet listener (cached 30 s).
+- **Explicit pairing.** A asks B (`./ponte mesh pair <B>` or Home → Devices → Ask for
+  access) and both show a 6-digit code. Only B's owner approves, on B (`./ponte mesh
+  approve <code>` or B's own Devices card). A then gets a peer token that B stores as a
+  hash, bound to A's node id and tailnet address; A pins B's CA on first contact.
+  Revoking on either side cuts the link. A peer token controls like the owner but
+  cannot approve pairings, read the owner key or relay onward, and only works from
+  that node's address over the tailnet listener.
+- **Control any paired device.** Any `/api/*` call with `?node=<id>` is relayed by the
+  home node to that peer, streaming included (live view, long-polls). On the phone a
+  **Control which device** selector and a name badge on the Screen switch the whole app
+  (screen, terminals, Dev, agents) to the chosen device, with no new APK: the device
+  list rides in `/api/state` and pairing goes through `/api/action`.
+- **Key-free pairing is now for the phone only.** `/api/pair` used to hand the owner
+  key to any device of the owner on the tailnet, so another computer could take over
+  without approval. It now requires the device to be an Android or iOS phone; other
+  computers pair explicitly.
+- **One-command node install:** `tools/node-install.sh` checks dependencies (printing
+  the `pacman` line), clones or updates the checkout, runs setup and install, and says
+  how to pair. `docs/mesh.md` explains the model; `tools/lab/mesh.mjs` runs two nodes in
+  one process.
+
+Verified with `npm test` (294, 1 skip): two real nodes with separate CAs in one test
+process prove pairing, relayed state, actions and MJPEG, and every refusal (wrong
+address, owner-only routes, chains, loopback, revoked, offline, swapped CA, denied,
+tagged or foreign device, limits and expiry). In a mobile-viewport bench with the
+two-node lab, a device was discovered, asked for, approved on the other node, selected,
+and its screen, taps and typing went through the relay. Not yet on the real notebook:
+its Tailscale SSH needs the owner's browser check.
+
 ## 0.1.0-alpha.24 (2026-09-28)
 
 Alerts with the app closed, a reload that recovers on its own, and browser pairing through Tailscale Serve. Needs the new APK (versionCode 21) for the alert service and the reload fix, and a server restart for the new route.
