@@ -53,9 +53,15 @@ the PC's own node, Tailscale direct on the LAN (2 ms ping):
 - **Clipboard:** text went both ways in one session, PC to notebook and notebook to PC.
 - **SSH:** `ssh notebook` and `ssh pc` log in by key on 2222 with no prompt; 2222 is
   closed on both LAN addresses.
+- **The real client:** `rd.html` in Chromium (an agent bench, X11, software decode)
+  driving the notebook through the PC's node: 60 fps, 0 drops, frame latency (send to
+  draw) ~5 ms mean. The page's input-to-photon probe (pointer moved 2 px, timed to the
+  first drawn frame that shows it) gave 44.6 to 59.8 ms, 46 ms median, over 10 rounds.
+  A click and typed text reached the test terminal, and the clipboard went both ways
+  through the page (after the browser's clipboard permission).
 
-Not yet verified: a slow or relayed (DERP) link, and the Chromium client on the
-notebook driving the PC.
+Not yet verified: a slow or relayed (DERP) link, Keyboard Lock in full screen on a
+Hyprland session (the bench is X11), and the client on the notebook driving the PC.
 
 ## 0.1.0-alpha.26 (2026-09-28)
 
