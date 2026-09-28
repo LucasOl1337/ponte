@@ -2992,9 +2992,16 @@ $('#dev-file').addEventListener('change', async event => {
 });
 $('#dev-font-down').addEventListener('click', () => { devFont = Math.max(DEV_FONT_MIN, devFont - 1); savePreference('ponte-dev-font', String(devFont)); devApplyFont(); devRefit(); });
 $('#dev-font-up').addEventListener('click', () => { devFont = Math.min(DEV_FONT_MAX, devFont + 1); savePreference('ponte-dev-font', String(devFont)); devApplyFont(); devRefit(); });
+// Only a finger (or wheel) stops following the output; a box that changed
+// size (rotation, keyboard) keeps following and snaps back to the end.
+let devTouchedAt = 0;
+['touchstart','wheel','pointerdown'].forEach(name => $('#dev-screen').addEventListener(name, () => { devTouchedAt = Date.now(); }, {passive:true}));
 $('#dev-screen').addEventListener('scroll', () => {
   const screen = $('#dev-screen');
-  devFollow = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 8;
+  const atEnd = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 8;
+  if (atEnd) devFollow = true;
+  else if (Date.now() - devTouchedAt < 1500) devFollow = false;
+  else if (devFollow) screen.scrollTop = screen.scrollHeight;
   $('#dev-live').hidden = devFollow;
 });
 $('#dev-live').addEventListener('click', () => { const screen = $('#dev-screen'); devFollow = true; screen.scrollTop = screen.scrollHeight; $('#dev-live').hidden = true; });
@@ -3006,7 +3013,7 @@ $('#dev-open-confirm').addEventListener('click', async () => {
   try { await api(`/terminals/${encodeURIComponent(devId)}/open`,{method:'POST'}); devStatus(t('Aberta numa janela do PC.')); }
   catch (error) { devStatus(error, true); }
 });
-if (typeof ResizeObserver === 'function') new ResizeObserver(() => { if (devVisible()) devRefit(); }).observe($('#dev-screen'));
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => { if (!devVisible()) return; if (devFollow) $('#dev-screen').scrollTop = $('#dev-screen').scrollHeight; devRefit(); }).observe($('#dev-screen'));
 window.addEventListener('resize', () => { if (devVisible()) devRefit(); });
 document.addEventListener('visibilitychange', updateDevNavigation);
 window.addEventListener('pagehide', () => { clearTimeout(devTimer); devGeneration++; });

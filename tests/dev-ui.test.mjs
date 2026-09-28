@@ -174,3 +174,21 @@ test('A−/A+ change and remember the font within bounds', async () => {
   assert.equal(h.saved.get('ponte-dev-font'), '9');
   assert.equal(h.el('#dev-font-down').disabled, true);
 });
+
+test('only a finger stops following the output; a resize keeps following', async () => {
+  const h = harness();
+  await flush();
+  h.run("navigate('dev')"); await flush();
+  const screen = h.el('#dev-screen');
+  screen.scrollHeight = 1000; screen.clientHeight = 300; screen.scrollTop = 500;
+  screen.dispatchEvent({ type: 'scroll' });
+  assert.equal(h.run('devFollow'), true, 'layout-driven scroll keeps following');
+  assert.equal(screen.scrollTop, 1000);
+  assert.equal(h.el('#dev-live').hidden, true);
+  screen.dispatchEvent({ type: 'touchstart' }); screen.scrollTop = 200; screen.dispatchEvent({ type: 'scroll' });
+  assert.equal(h.run('devFollow'), false);
+  assert.equal(h.el('#dev-live').hidden, false);
+  h.el('#dev-live').click();
+  assert.equal(h.run('devFollow'), true);
+  assert.equal(h.el('#dev-live').hidden, true);
+});
