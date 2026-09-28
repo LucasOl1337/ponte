@@ -1,3 +1,7 @@
 #!/bin/sh
-# Lab stand-in for the claude CLI; see _agent.py.
-exec python3 "$(dirname -- "$0")/_agent.py" claude "$@"
+# Lab stand-in for the claude CLI. On a terminal it draws a Claude Code-like
+# TUI (_claude_tui.py); PONTE_LAB_CLAUDE=line, or no terminal, gives the
+# line-echo agent (_agent.py). Neither calls a model.
+dir="$(dirname -- "$0")"
+if [ "${PONTE_LAB_CLAUDE:-tui}" != line ] && [ -t 0 ] && [ -t 1 ]; then exec python3 "$dir/_claude_tui.py" "$@"; fi
+exec python3 "$dir/_agent.py" claude "$@"
