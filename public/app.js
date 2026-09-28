@@ -1129,7 +1129,9 @@ function anchorScroll(pixel) {
 }
 function queueScroll(dy) {
   if (!connected || !state?.capabilities?.mouse) return;
-  moveQueue.scroll += -dy / 7;
+  // Direct touch: the content follows the finger. A finger moving up shows
+  // later text (wheel down, negative REL_WHEEL through ydotool).
+  moveQueue.scroll += dy / 7;
   if (!movementTimer) movementTimer = setInterval(flushMovement,35);
 }
 function stopPointerMoves() {

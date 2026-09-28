@@ -503,10 +503,10 @@ test('hold one finger and drag another: the PC scrolls under the held finger, an
   const sent = actions();
   assert.ok(sent.length >= 2, JSON.stringify(sent));
   assert.deepEqual([...new Set(sent.map(item => item.type))], ['mouse.scroll'], 'only wheel, no click or drag');
-  assert.deepEqual(sent[0], { type: 'mouse.scroll', dy: 10, monitor: 'HDMI-A-1', x: 492, y: 493 }, 'the first scroll carries the held finger\'s pixel');
+  assert.deepEqual(sent[0], { type: 'mouse.scroll', dy: -10, monitor: 'HDMI-A-1', x: 492, y: 493 }, 'the first scroll carries the held finger\'s pixel; finger up = wheel down (later text)');
   assert.ok(sent.slice(1).every(item => item.monitor === undefined), 'the pointer is placed once per gesture');
   const total = sent.reduce((sum, item) => sum + item.dy, 0);
-  assert.equal(total, 20 - 10, '140 px up then 70 px down at 7 px per wheel step');
+  assert.equal(total, -20 + 10, '140 px up (later text) then 70 px down (earlier text) at 7 px per wheel step');
   assert.equal(h.run('screenScale'), 1, 'no zoom');
   assert.equal(h.el('#tap-marker').getAttribute('data-kind'), 'scroll');
 });
@@ -527,7 +527,7 @@ test('hold-and-drag scrolls while zoomed instead of panning, and pinch and two-f
   let sent = actions();
   assert.deepEqual(sent.map(item => item.type), ['mouse.scroll']);
   assert.deepEqual({ x: sent[0].x, y: sent[0].y }, JSON.parse(pixel), 'zoomed pixel under the held finger');
-  assert.equal(sent[0].dy, 10);
+  assert.equal(sent[0].dy, -10, 'content follows the finger while zoomed too');
   assert.equal(h.run('screenScale'), 3, 'zoom untouched');
   assert.equal(h.run('JSON.stringify([screenPanX, screenPanY])'), pan, 'view did not pan');
 
@@ -571,6 +571,7 @@ test('two fingers together at 1x scroll at their midpoint, so the wheel reaches 
   assert.deepEqual([...new Set(sent.map(item => item.type))], ['mouse.scroll']);
   assert.equal(sent[0].monitor, 'HDMI-A-1');
   assert.deepEqual({ x: sent[0].x, y: sent[0].y }, JSON.parse(h.run('JSON.stringify(monitorPixelAt(120, 100))')));
+  assert.equal(sent.reduce((sum, item) => sum + item.dy, 0), -7, 'two fingers 50 px up show later text (wheel down)');
   assert.equal(h.run('screenScale'), 1);
 });
 
