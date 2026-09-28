@@ -1,7 +1,7 @@
 import path from 'node:path';
 import net from 'node:net';
 import os from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, lstat, open, readdir, rename, realpath, stat } from 'node:fs/promises';
 import { ApiError, commandExists, runCommand } from './process.mjs';
@@ -12,6 +12,7 @@ export const PROJECT_LIMIT = 8;
 const idPattern = /^[a-f0-9]{24}$/;
 const panePattern = /^%\d+$/;
 const windowPattern = /^@\d+$/;
+const hashPattern = /^[A-Za-z0-9_-]{1,64}$/;
 const format = '#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_in_mode}';
 // A session can start an agent CLI instead of a bare shell. Only these fixed
 // program names run; the phone chooses a key, never a command.
@@ -98,7 +99,7 @@ export function createTerminals(dataDir, options = {}) {
   const socketPath = path.join(directory, 'tmux.sock');
   const registryPath = path.join(directory, 'sessions.json');
   const controller = new AbortController();
-  let initialized, registry = [], liveSessionCount = 0, tail = Promise.resolve(), pending = 0, stopping = false;
+  let initialized, registry = [], liveSessionCount = 0, tail = Promise.resolve(), readTail = Promise.resolve(), pending = 0, stopping = false;
 
   async function privateFile(file, required = false) {
     let info;
@@ -143,11 +144,15 @@ export function createTerminals(dataDir, options = {}) {
     await runner('tmux', ['-u', '-S', socketPath, '-f', '/dev/null', 'kill-session', '-t', `=ponte_${id}`], { env, timeout: 2500, maxBuffer: 16 * 1024 }).catch(() => {});
   }
 
-  async function run(callback) {
+  // Two lanes: commands that change a session (create, input, resize, remove)
+  // run one at a time in order; reads and listings run in their own lane, so
+  // typed input never waits behind the phone's output polling. The read lane
+  // never rewrites the registry.
+  async function run(callback, lane = 'write') {
     if (stopping) throw new ApiError(503, 'SERVER_RESTARTING');
     if (pending >= 12) throw new ApiError(429, 'OPERATION_BUSY');
     pending++;
-    const result = tail.then(async () => {
+    const result = (lane === 'read' ? readTail : tail).then(async () => {
       if (stopping) throw new ApiError(503, 'SERVER_RESTARTING');
       if (!await exists('tmux', env)) return callback(false);
       initialized ||= initialize();
@@ -156,16 +161,18 @@ export function createTerminals(dataDir, options = {}) {
       if (socketInfo && !socketInfo.isSocket()) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
       return callback(true);
     });
-    tail = result.catch(() => {});
+    if (lane === 'read') readTail = result.catch(() => {}); else tail = result.catch(() => {});
     try { return await result; } finally { pending--; }
   }
 
-  async function sessions() {
+  async function sessions(prune = true) {
     const panes = await probe(socketPath) ? parsePanes(await command(['-N', 'list-panes', '-a', '-F', format])) : [];
-    liveSessionCount = new Set(panes.map(pane => pane.name)).size;
     const remaining = registry.filter(item => panes.some(pane => pane.name === `ponte_${item.id}`));
-    if (remaining.length !== registry.length) { registry = remaining; await save(); }
-    return registry.map(item => {
+    if (prune) {
+      liveSessionCount = new Set(panes.map(pane => pane.name)).size;
+      if (remaining.length !== registry.length) { registry = remaining; await save(); }
+    }
+    return remaining.map(item => {
       const matches = panes.filter(pane => pane.name === `ponte_${item.id}`);
       const pane = matches.length === 1 && matches[0];
       const valid = pane && pane.paneId === item.paneId && pane.windowId === item.windowId;
@@ -173,9 +180,9 @@ export function createTerminals(dataDir, options = {}) {
     });
   }
 
-  async function target(id, available) {
+  async function target(id, available, prune = true) {
     if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
-    const item = (await sessions()).find(item => item.id === id);
+    const item = (await sessions(prune)).find(item => item.id === id);
     if (!item) throw new ApiError(404, 'TERMINAL_NOT_FOUND');
     if (!item.valid) throw new ApiError(409, 'TERMINAL_CHANGED');
     return item;
@@ -229,7 +236,7 @@ export function createTerminals(dataDir, options = {}) {
       return { projects: dated.filter(Boolean).sort((a, b) => b.changed - a.changed || a.name.localeCompare(b.name)).slice(0, PROJECT_LIMIT).map(item => item.name) };
     },
     list() {
-      return run(async available => ({ available, sessions: available ? (await sessions()).filter(item => item.valid).map(summary) : [], limit: TERMINAL_LIMIT }));
+      return run(async available => ({ available, sessions: available ? (await sessions(false)).filter(item => item.valid).map(summary) : [], limit: TERMINAL_LIMIT }), 'read');
     },
     create(value) {
       const { cols, rows } = dimensions(value, ['agent', 'prompt', 'project']);
@@ -269,18 +276,39 @@ export function createTerminals(dataDir, options = {}) {
         return summary({ id, title, ...pane });
       });
     },
-    read(id) {
+    // `since` is the hash of the text the phone already shows: when nothing
+    // changed only the hash comes back, not up to 64 KiB of the same text.
+    read(id, options = {}) {
       validateId(id);
+      const since = typeof options.since === 'string' && hashPattern.test(options.since) ? options.since : null;
       return run(async available => {
-        const item = await target(id, available);
-        const capture = await command(['capture-pane', '-p', '-t', item.paneId, '-S', '-1000']);
+        if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+        let item = registry.find(entry => entry.id === id), capture;
+        if (item) {
+          // One tmux call proves the pane still belongs to this session and
+          // captures it; anything unexpected takes the full listing below.
+          try {
+            const output = await command(['display-message', '-p', '-t', item.paneId, format, ';', 'capture-pane', '-p', '-t', item.paneId, '-S', '-1000']);
+            const newline = output.indexOf('\n');
+            const [pane, extra] = parsePanes(output.slice(0, newline));
+            if (newline > 0 && !extra && pane.name === `ponte_${id}` && pane.paneId === item.paneId && pane.windowId === item.windowId) {
+              item = { ...item, cols: pane.cols, rows: pane.rows, inMode: pane.inMode };
+              capture = output.slice(newline + 1);
+            }
+          } catch {}
+        }
+        if (capture === undefined) {
+          item = await target(id, available, false);
+          capture = await command(['capture-pane', '-p', '-t', item.paneId, '-S', '-1000']);
+        }
         const clean = capture.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
         const bytes = Buffer.from(clean);
         let offset = Math.max(0, bytes.length - TERMINAL_TEXT_LIMIT);
         while (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) offset++;
         const text = bytes.subarray(offset).toString('utf8');
-        return { ...summary(item), text };
-      });
+        const hash = createHash('sha256').update(text).digest('base64url').slice(0, 22);
+        return since === hash ? { ...summary(item), hash, unchanged: true } : { ...summary(item), hash, text };
+      }, 'read');
     },
     input(id, value) {
       validateId(id);
@@ -321,6 +349,6 @@ export function createTerminals(dataDir, options = {}) {
         return { ok: true };
       });
     },
-    close() { stopping = true; controller.abort(); return tail; },
+    close() { stopping = true; controller.abort(); return Promise.all([tail, readTail]); },
   };
 }

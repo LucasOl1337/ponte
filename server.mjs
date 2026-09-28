@@ -280,7 +280,7 @@ export async function createApp(options = {}) {
           json(res, terminalRoute ? 200 : 201, result);
         }); return;
       }
-      if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { json(res, 200, await terminals.read(terminalRoute[1])); return; }
+      if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { json(res, 200, await terminals.read(terminalRoute[1], { since: query.get('since') || undefined })); return; }
       if (terminalRoute && !terminalRoute[2] && req.method === 'DELETE') { json(res, 200, await terminals.remove(terminalRoute[1])); return; }
       if (pathname === '/api/screenshot' && req.method === 'GET') {
         if (query.getAll('scale').length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
