@@ -7,10 +7,10 @@ import { createAgents, parseStat, agentKind, claudeMessages, codexMessages, last
 import { createApp } from '../server.mjs';
 
 const BOOT = 1790000000;
-const SESSION = '6fbaff9b-af31-4e65-bdcd-6afbd38f946e';
-const CODEX = '01a0e7ad-bef0-78f3-a6b9-d9586f6da905';
-const MAESTRI_WS = '883843be-e79e-41f6-b387-1f15a6d30fe9';
-const MAESTRI_TERM = '95756fbc-d6cd-4adf-82e4-44b1a6814a45';
+const SESSION = '00000000-0000-4000-8000-000000000001';
+const CODEX = '0190a000-0000-7000-8000-000000000003';
+const MAESTRI_WS = '00000000-0000-4000-8000-0000000000a1';
+const MAESTRI_TERM = '00000000-0000-4000-8000-0000000000a2';
 const TOKEN = 'test_token_with_at_least_thirty_two_characters';
 
 // A fake /proc and home: processes with stat/cmdline/cwd/environ/fd, plus the
@@ -68,7 +68,7 @@ test('parseStat survives spaces and parentheses in comm; agentKind sees through 
 
 test('a Claude Code in a foot window is matched by pid ancestry, its session file and its transcript', async t => {
   const w = await world(t);
-  const cwd = path.join(w.home, 'nexunio', 'nexsales');
+  const cwd = path.join(w.home, 'work', 'demo');
   await w.add(47630, 'foot', 1);
   await w.add(47656, 'bash', 47630);
   await w.add(50773, 'claude', 47656, { cwd, start: 54394 });
@@ -76,7 +76,7 @@ test('a Claude Code in a foot window is matched by pid ancestry, its session fil
   await w.add(56286, 'bash', 56258);
   await w.add(99001, 'foot', 1);
   await w.add(99002, 'bash', 99001);
-  await w.file('.claude/sessions/50773.json', line({ pid: 50773, sessionId: SESSION, cwd, procStart: '54394', status: 'waiting', waitingFor: 'input needed', statusUpdatedAt: 1790592874114, name: 'nexsales-26' }));
+  await w.file('.claude/sessions/50773.json', line({ pid: 50773, sessionId: SESSION, cwd, procStart: '54394', status: 'waiting', waitingFor: 'input needed', statusUpdatedAt: 1790592874114, name: 'demo-26' }));
   const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-');
   await w.file(`.claude/projects/${encoded}/${SESSION}.jsonl`, [
     line({ type: 'user', message: { role: 'user', content: 'Caveat: meta' }, isMeta: true, timestamp: '2026-09-28T10:00:00Z' }),
@@ -88,7 +88,7 @@ test('a Claude Code in a foot window is matched by pid ancestry, its session fil
     line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Ficaram três pendências.' }] }, timestamp: '2026-09-28T10:00:06Z' }),
     'not json',
   ].join('\n'));
-  const { runner } = hypr([foot(47630, '0xa1', '✳ Nexsales trabalhos'), foot(56258, '0xa2', '~'), foot(99001, '0xa3', 'lol@lol:~')]);
+  const { runner } = hypr([foot(47630, '0xa1', '✳ Demo project work'), foot(56258, '0xa2', '~'), foot(99001, '0xa3', 'lol@lol:~')]);
   const agents = createAgents({ procRoot: w.proc, home: w.home, runner, bootMs: BOOT * 1000 });
   const { items, scanMs } = await agents.list();
   assert.ok(Number.isFinite(scanMs));
@@ -97,8 +97,8 @@ test('a Claude Code in a foot window is matched by pid ancestry, its session fil
   assert.equal(claude.state, 'waiting');
   assert.equal(claude.waitingFor, 'input needed');
   assert.equal(claude.since, 1790592874114);
-  assert.equal(claude.title, 'Nexsales trabalhos');
-  assert.equal(claude.cwd, '~/nexunio/nexsales');
+  assert.equal(claude.title, 'Demo project work');
+  assert.equal(claude.cwd, '~/work/demo');
   assert.deepEqual({ type: claude.where.type, address: claude.where.address, workspace: claude.where.workspace.id }, { type: 'terminal', address: '0xa1', workspace: 2 });
   assert.equal(claude.canReply, true);
   assert.equal(claude.transcript, true);

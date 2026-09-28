@@ -7,7 +7,7 @@ import { makeDocument, makeWindow } from './helpers/dom.mjs';
 const read = name => readFile(new URL(`../public/${name}`, import.meta.url), 'utf8');
 const [html, runtime, app] = await Promise.all(['index.html', 'i18n.js', 'app.js'].map(read));
 const state = {
-  hostname: 'test-desktop', windows: [{ address: '0xf1', title: '✳ Nexsales', class: 'foot', monitor: 0, workspace: { id: 2, name: '2' } }, { address: '0xf2', title: 'lol@lol:~', class: 'foot', monitor: 0, workspace: { id: 2, name: '2' } }],
+  hostname: 'test-desktop', windows: [{ address: '0xf1', title: '✳ Demo project', class: 'foot', monitor: 0, workspace: { id: 2, name: '2' } }, { address: '0xf2', title: 'lol@lol:~', class: 'foot', monitor: 0, workspace: { id: 2, name: '2' } }],
   activeWindow: null, workspaces: [], monitors: [{ id: 0, name: 'TEST-1', width: 1920, height: 1080, focused: true }], volume: { value: 0.3, muted: false },
   capabilities: { keyboard: true, mouse: true, screenshot: true, live: true, audio: true }, warnings: [],
 };
@@ -15,7 +15,7 @@ const session = { id: '0123456789abcdef01234567', title: 'Terminal 1', cols: 40,
 const other = { id: 'fedcba9876543210fedcba98', title: 'Terminal 2', cols: 40, rows: 24, inMode: false, attachCommand: 'y' };
 const minutesAgo = minutes => Date.now() - minutes * 60000;
 const agents = [
-  { id: 'p-50773-54394', kind: 'claude', title: 'Nexsales trabalhos', cwd: '~/nexunio/nexsales', state: 'waiting', waitingFor: 'input needed', since: minutesAgo(3), where: { type: 'terminal', address: '0xf1', monitor: 0, workspace: { id: 2, name: '2' } }, headless: false, transcript: true, canReply: true },
+  { id: 'p-50773-54394', kind: 'claude', title: 'Demo project work', cwd: '~/work/demo', state: 'waiting', waitingFor: 'input needed', since: minutesAgo(3), where: { type: 'terminal', address: '0xf1', monitor: 0, workspace: { id: 2, name: '2' } }, headless: false, transcript: true, canReply: true },
   { id: 'p-336172-244681', kind: 'claude', title: 'Trilho', cwd: '~/Projects/ponte-wt/agentes', state: 'working', since: minutesAgo(0), where: { type: 'maestri' }, headless: false, transcript: true, canReply: false },
   { id: 'p-702-7020', kind: 'codex', title: 'agentes', cwd: '~', state: 'idle', since: minutesAgo(125), where: { type: 'ponte', session: session.id }, headless: false, transcript: true, canReply: true },
   { id: 'w-f2', kind: 'terminal', title: 'lol@lol:~', cwd: '', state: 'terminal', where: { type: 'terminal', address: '0xf2', monitor: 0, workspace: { id: 2, name: '2' } }, transcript: false, canReply: false },
@@ -51,7 +51,7 @@ test('Terminals shows one list: agents with state, place, folder and age, plain 
   const cards = h.el('#agent-list').querySelectorAll('.agent-card');
   const text = cards.map(card => card.textContent.replace(/\s+/g, ' ').trim());
   assert.equal(cards.length, 5, text.join('\n'));
-  assert.match(text[0], /Claude.*Nexsales trabalhos.*Window on workspace 2 · 3 min ago · ~\/nexunio\/nexsales.*Waiting for you/);
+  assert.match(text[0], /Claude.*Demo project work.*Window on workspace 2 · 3 min ago · ~\/work\/demo.*Waiting for you/);
   assert.match(text[1], /Claude.*Trilho.*Maestri · just now · ~\/Projects\/ponte-wt\/agentes.*Working/);
   assert.match(text[2], /Codex.*agentes.*Ponte session · Terminal 1 · 2 h ago · ~.*Idle/);
   assert.match(text[3], /Terminal.*lol@lol:~.*Focus and view on monitor.*Open/);
@@ -80,7 +80,7 @@ test('tapping an agent opens a readable transcript; reply is explicit, one line,
   h.run("navigate('terminais')"); await flush(); await flush();
   h.el('#agent-list').querySelectorAll('.agent-card')[0].click(); await flush(); await flush();
   assert.equal(h.el('#agent-dialog').open, true);
-  assert.equal(h.el('#agent-dialog-title').textContent, 'Nexsales trabalhos');
+  assert.equal(h.el('#agent-dialog-title').textContent, 'Demo project work');
   assert.match(h.el('#agent-dialog-kind').textContent, /Claude · Waiting for you \(input needed\)/);
   const messages = h.el('#agent-transcript').querySelectorAll('.agent-msg');
   assert.deepEqual(messages.map(item => item.getAttribute('data-role')), ['user', 'tool', 'assistant']);
@@ -117,7 +117,7 @@ test('an older native shell that blocks /api/agents still lists PC terminal wind
   h.run("navigate('terminais')"); await flush(); await flush();
   const text = h.el('#agent-list').querySelectorAll('.agent-card').map(card => card.textContent);
   assert.equal(text.length, 3);
-  assert.match(text[0], /✳ Nexsales/);
+  assert.match(text[0], /✳ Demo project/);
   assert.match(text[2], /Terminal 1/);
   assert.equal(h.el('#agent-count').textContent, '');
 });

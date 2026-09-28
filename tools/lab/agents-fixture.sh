@@ -43,21 +43,21 @@ claude_window() {
 }
 
 : > "$lab/clients.part"
-claude_window "$home/Projects/nexsales" waiting 'permission prompt' '✳ Nexsales pendências da semana' 0xa001 2 6fbaff9b-af31-4e65-bdcd-6afbd38f946e \
+claude_window "$home/Projects/demo" waiting 'permission prompt' '✳ Demo project pendências da semana' 0xa001 2 00000000-0000-4000-8000-000000000001 \
   '{"type":"user","timestamp":"@T@","message":{"role":"user","content":"quais pendências ficaram da semana?"}}' \
   '{"type":"assistant","timestamp":"@T@","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"git log --since=monday","description":"Lista commits da semana"}}]}}' \
   '{"type":"user","timestamp":"@T@","message":{"role":"user","content":[{"type":"tool_result","content":"(saída grande omitida)"}]}}' \
   '{"type":"assistant","timestamp":"@T@","message":{"role":"assistant","content":[{"type":"text","text":"Ficaram três pendências: o anexo do chat, o retorno das 3h e o relatório do cliente. Posso rodar a migração do anexo agora? Ela mexe no banco de produção."}]}}'
-claude_window "$home/Projects/ramdog" busy '' '◑ Ramdog processos agrupados' 0xa002 2 14aa97af-974b-4809-8a76-7a0a81f6c9bb \
+claude_window "$home/Projects/sample" busy '' '◑ Sample tool refactor' 0xa002 2 00000000-0000-4000-8000-000000000002 \
   '{"type":"user","timestamp":"@T@","message":{"role":"user","content":"agrupa os processos por app e mostra a RAM de cada grupo"}}' \
   '{"type":"assistant","timestamp":"@T@","message":{"role":"assistant","content":[{"type":"text","text":"Vou ler /proc/*/status e somar VmRSS por árvore de processos."}]}}' \
-  '{"type":"assistant","timestamp":"@T@","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/home/lol/Projects/ramdog/src/groups.rs"}}]}}'
+  '{"type":"assistant","timestamp":"@T@","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/home/lol/Projects/sample/src/groups.rs"}}]}}'
 # A terminal window with no agent in it.
 term="$(spawn "$home" "$bin/foot" -c 'sleep 7200; true')"
 printf '{"pid":%s,"address":"0xa003","title":"lol@lol:~","class":"foot","monitor":0,"workspace":{"id":3,"name":"3"},"at":[0,0],"size":[800,600]},' "$term" >> "$lab/clients.part"
 # A headless Codex started by an app window, holding its rollout open.
 day="$(date +%Y/%m/%d)" project="$home/Projects/DailyWork"
-rollout="$home/.codex/sessions/$day/rollout-$(date +%Y-%m-%dT%H-%M-%S)-01a0e7ad-bef0-78f3-a6b9-d9586f6da905.jsonl"
+rollout="$home/.codex/sessions/$day/rollout-$(date +%Y-%m-%dT%H-%M-%S)-0190a000-0000-7000-8000-000000000003.jsonl"
 mkdir -p "$(dirname "$rollout")" "$project"
 {
   printf '{"timestamp":"%s","type":"session_meta","payload":{"cwd":"%s"}}\n' "$(iso "$(now_ms)")" "$project"
