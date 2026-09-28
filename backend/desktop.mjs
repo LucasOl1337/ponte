@@ -336,6 +336,10 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       }
       case 'mouse.scroll': {
         const dy = numberIn(value.dy, -30, 30);
+        // The wheel scrolls whatever is under the pointer. A phone gesture
+        // names its point, so the scroll reaches the window under the finger
+        // instead of the one last clicked.
+        if (value.monitor !== undefined) await placePointer(await monitorPoint(value));
         await run('ydotool', ['mousemove', '--wheel', '--', '0', String(Math.round(dy))]); break;
       }
       case 'mouse.drag': {

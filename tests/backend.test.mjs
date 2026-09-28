@@ -473,6 +473,31 @@ test('live region is validated, clamped to the monitor, and captured at scale 1'
   fallback.abort(); await fullReader.cancel().catch(() => {});
 });
 
+test('a scroll with a point lands the pointer there first so the wheel reaches that window, and never clicks', async () => {
+  const calls = [];
+  const runner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'HDMI-A-1', x: 2560, y: 0, width: 1920, height: 1080, focused: true }]);
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  const ydotool = () => calls.filter(call => call.command === 'ydotool').map(call => call.args);
+  await desktop.action({ type: 'mouse.scroll', dy: -4, monitor: 'HDMI-A-1', x: 300, y: 500 });
+  assert.deepEqual(ydotool().at(-2), ['mousemove', '--absolute', '--', '2860', '500']);
+  assert.deepEqual(ydotool().at(-1), ['mousemove', '--wheel', '--', '0', '-4']);
+  // Without a point the wheel stays where the pointer is (CLI and older phones).
+  calls.length = 0;
+  await desktop.action({ type: 'mouse.scroll', dy: 3 });
+  assert.deepEqual(ydotool(), [['mousemove', '--wheel', '--', '0', '3']]);
+  calls.length = 0;
+  for (const value of [{ type: 'mouse.scroll', dy: 1, monitor: 'HDMI-A-1', x: 1920, y: 0 }, { type: 'mouse.scroll', dy: 1, monitor: 'missing', x: 0, y: 0 }, { type: 'mouse.scroll', dy: 1, monitor: 'HDMI-A-1', x: 1.5, y: 0 }]) {
+    await assert.rejects(desktop.action(value), error => error.status === 400, JSON.stringify(value));
+  }
+  assert.deepEqual(ydotool(), [], 'an invalid point never scrolls elsewhere');
+  assert.equal(calls.some(call => call.command === 'ydotool' && call.args[0] === 'click'), false);
+  await desktop.close();
+});
+
 test('absolute clicks map monitor pixels through the output origin without shell interpolation', async t => {
   const calls = [];
   const runner = async (command, args) => {
