@@ -30,6 +30,9 @@ fi
 export YDOTOOL_SOCKET="$sock"
 export PONTE_CONFIG="$config"
 export PATH="$root/tools/lab/bin:$PATH"
+# The fake wl-copy is first on PATH; a display name that does not exist also
+# keeps any real clipboard tool away from the owner's session.
+export WAYLAND_DISPLAY=ponte-lab-none
 export PONTE_SUSSURRO_SOCKET='' PONTE_STT_URL=''
 cd "$root"
 ( sleep 1.5; if [ -f "$PONTE_LAB_DIR/data/token" ]; then echo "lab: http://127.0.0.1:$port/#pair=$(cat "$PONTE_LAB_DIR/data/token")"; fi ) &
