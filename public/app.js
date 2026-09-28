@@ -2757,7 +2757,7 @@ function ansiToHtml(text, cursor, rows) {
     const flush = (chunk, css) => { if (chunk) html += css ? `<span style="${css}">${escaped(chunk)}</span>` : escaped(chunk); };
     for (const part of line.split(/(\x1b\[[0-9;:]*m)/)) {
       if (/^\x1b\[[0-9;:]*m$/.test(part)) { sgrApply(style, part.slice(2,-1)); continue; }
-      const clean = part.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[^[]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');
+      const clean = part.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[^[\]]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');
       const css = devStyle(style);
       if (cursorDone) { flush(clean, css); column += [...clean].reduce((sum, ch) => sum + devCellWidth(ch.codePointAt(0)), 0); continue; }
       let chunk = '';
@@ -2796,7 +2796,7 @@ function devMeasure() {
   const width = Number(window.innerWidth), height = Number(window.visualViewport && window.visualViewport.height || window.innerHeight);
   return devGrid(Math.min(width, 1160) - 40, height - 300, cellWidth, cellHeight);
 }
-function devSessionSize() { return devGridNow || devMeasure() || {cols:40,rows:24}; }
+function devSessionSize() { return devMeasure() || {cols:40,rows:24}; }
 function devSortSessions(sessions) {
   const rank = session => /^(Claude|Codex) /.test(session.title || '') ? 0 : 1;
   return sessions.slice().sort((a, b) => rank(a) - rank(b) || String(a.title).localeCompare(String(b.title)));
@@ -2808,7 +2808,6 @@ function devRenderSessions() {
   const project = savedPreference('ponte-start-project') || devProjects[0] || '';
   $('#dev-empty-label').textContent = t('Novo Claude em {project}',{project:project || '~'});
   $('#dev-empty').hidden = !!devId;
-  $('#dev-screen').hidden = !devId;
   ['#dev-open-pc','#dev-send','#dev-paste','#dev-dictate','#dev-attach'].forEach(selector => { $(selector).disabled = !devId; });
   $$('[data-dev-key],[data-dev-text]').forEach(button => { button.disabled = !devId; });
   $('#dev-font-down').disabled = devFont <= DEV_FONT_MIN; $('#dev-font-up').disabled = devFont >= DEV_FONT_MAX;
