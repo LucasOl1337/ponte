@@ -456,8 +456,16 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
   const token = (await readFile(path.join(f.dataDir, 'token'), 'utf8')).trim();
   const base = `http://127.0.0.1:${port}/rd.html#pair=${token}`;
 
-  assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), base);
+  assert.equal((await f.cli(['rd', 'self', '--print-url'])).stdout.trim(), base);
   assert.equal(requests.length, 0, 'this PC needs no lookup');
+  assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`, 'no device: the paired one that is online');
+  meshAnswer.peers = [{ id: 'cccccccccccccccc', name: 'desligado', online: false, paired: true }, ...meshAnswer.peers];
+  assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`, 'an online device comes before an offline one');
+  meshAnswer.peers[1].online = false;
+  assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), `${base}&node=cccccccccccccccc`, 'all offline: the first paired, the page says it is offline');
+  meshAnswer.peers = meshAnswer.peers.slice(2);
+  assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), base, 'nothing paired: this machine');
+  meshAnswer.peers = [{ id: 'feedfacecafebeef', name: 'notebook-teste', online: true, paired: true }, { id: 'bbbbbbbbbbbbbbbb', name: 'pedido', paired: false }];
   assert.equal((await f.cli(['rd', 'Notebook-Teste', '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`);
   assert.deepEqual(requests.at(-1), { url: '/api/mesh', authorization: `Bearer ${token}` });
   assert.equal((await f.cli(['rd', 'pc-teste', '--monitor', 'DP-3', '--print-url'])).stdout.trim(), `${base}&monitor=DP-3`);
@@ -465,6 +473,17 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
   meshAnswer = null;
   assert.equal((await f.cli(['rd', 'feedfacecafebeef', '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`, 'a node id works without the mesh route');
   await assert.rejects(f.cli(['rd', 'notebook-teste', '--print-url']), error => /device list is unavailable \(HTTP 404\)/.test(error.stderr));
+  assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), base, 'no mesh route: this machine');
+
+  // The menu entry passes --notify: it has no terminal, so a failure becomes a notification.
+  await writeFile(path.join(f.bin, 'notify-send'), await readFile(path.join(f.bin, 'tailscale'), 'utf8'), { mode: 0o755 });
+  await assert.rejects(f.cli(['rd', '--notify'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
+  const notified = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse).filter(call => call[0] === 'notify-send');
+  assert.equal(notified.length, 1);
+  assert.deepEqual(notified[0].slice(1, 3), ['--app-name=Ponte', 'Ponte Remoto']);
+  assert.match(notified[0][3], /Chromium was not found/);
+  assert.equal(notified[0].join(' ').includes(token), false, 'the key is not in the notification');
+  await rm(path.join(f.bin, 'notify-send'));
 
   await assert.rejects(f.cli(['rd'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
   await writeFile(path.join(f.bin, 'chromium'), await readFile(path.join(f.bin, 'tailscale'), 'utf8'), { mode: 0o755 });
@@ -480,6 +499,31 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
   assert.deepEqual(calls.find(call => call[0] === 'chromium'), ['chromium', `--app=${base}`, `--user-data-dir=${profile}`, '--class=ponte-rd', '--no-first-run', '--no-default-browser-check', '--password-store=basic']);
   assert.equal((await stat(profile)).mode & 0o777, 0o700);
   for (const flag of ['--disable-gpu', '--headless', '--remote-debugging-port', '--enable-automation']) assert.equal(calls.flat().some(arg => arg.startsWith(flag)), false, flag);
+});
+
+test('rd --install adds "Ponte Remoto" to the user menu, idempotent, and leaves other entries alone', async t => {
+  const f = await fixture(t);
+  const env = { XDG_DATA_HOME: path.join(f.home, 'data') };
+  const launcher = path.join(env.XDG_DATA_HOME, 'applications/ponte-rd.desktop');
+  assert.match((await f.cli(['rd', '--install'], env)).stdout, /^Added the app menu: .*ponte-rd\.desktop \(search "Ponte Remoto"\)\./);
+  const content = await readFile(launcher, 'utf8');
+  assert.ok(content.startsWith('# Managed by Ponte Desktop\n[Desktop Entry]\n'));
+  assert.match(content, /\nName=Ponte Remoto\n/);
+  assert.ok(content.includes(`\nExec="${path.join(root, 'ponte')}" rd --notify\n`), 'the menu entry reports failures, since it has no terminal');
+  assert.match(content, /\nStartupWMClass=ponte-rd\n/, 'the window class ./ponte rd gives Chromium');
+  assert.match(content, /\nTerminal=false\n/);
+  assert.equal(content.includes('sh -c'), false);
+  assert.equal((await stat(launcher)).mode & 0o777, 0o644);
+  assert.match((await f.cli(['rd', '--install'], env)).stdout, /^Already in the app menu/);
+  const android = path.join(env.XDG_DATA_HOME, 'applications/ponte-desktop.desktop');
+  await writeFile(android, '# Managed by Ponte Desktop\n[Desktop Entry]\nName=Keep me\n');
+  assert.match((await f.cli(['rd', '--uninstall'], env)).stdout, /^Removed the app menu/);
+  await assert.rejects(stat(launcher), { code: 'ENOENT' });
+  assert.equal(await readFile(android, 'utf8'), '# Managed by Ponte Desktop\n[Desktop Entry]\nName=Keep me\n', 'the Android entry is not touched');
+  assert.match((await f.cli(['rd', '--uninstall'], env)).stdout, /^Not in the app menu/);
+  await writeFile(launcher, '[Desktop Entry]\nName=Mine\nExec=mine\n');
+  await assert.rejects(f.cli(['rd', '--install'], env), error => /not managed by Ponte/.test(error.stderr));
+  assert.equal(await readFile(launcher, 'utf8'), '[Desktop Entry]\nName=Mine\nExec=mine\n', 'an entry of the owner is never replaced');
 });
 
 test('doctor names the tailnet owner the way the server resolves it: a real user, never a tagged node', async () => {

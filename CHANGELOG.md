@@ -2,6 +2,23 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## Unreleased
+
+- **Ponte Remoto in the app menu.** `./ponte rd --install` adds a per-user menu entry
+  (no autostart) that opens the remote-desktop window on the first paired device that
+  is online. The bar's picker switches to any other device. `./ponte rd` with no device
+  does the same (it used to open this machine, which is `./ponte rd self` now), and falls
+  back to this machine when nothing is paired. The menu entry passes `--notify`, so a
+  failure shows as a desktop notification instead of vanishing. `./ponte rd --uninstall`
+  removes the entry, and an entry the owner wrote under the same name is never replaced.
+- **`ponte doctor` on a mesh node without an APK** stopped warning about the missing
+  `.work/Ponte.apk`. The warning stays for a node whose config has an `android` block;
+  any other node gets an `[info]` line, which is not a problem.
+
+Verified on the real PC: the menu entry, launched in an agent bench, opened the
+notebook's screen live (eDP-1 1920x1200, 30 fps while idle, RTT 4.6 ms);
+`desktop-file-validate` accepts the entry; `npm test` and the desktop CLI tests pass.
+
 ## 0.1.0-alpha.27 (2026-09-28)
 
 The mesh on real hardware: this PC drives the notebook (and back) by agent API and by remote desktop, and the two computers reach each other over SSH with no browser check. The APK does not change (still versionCode 21).

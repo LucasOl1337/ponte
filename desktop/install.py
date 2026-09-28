@@ -6,15 +6,23 @@ import tempfile
 
 MARKER = '# Managed by Ponte Desktop\n'
 ROOT = Path(__file__).resolve().parent.parent
+# Per-user menu entries: the Android app (./ponte desktop install) and the
+# remote desktop client for the other computers of the mesh (./ponte rd --install).
+LAUNCHERS = {
+    'desktop': {'file': 'ponte-desktop.desktop', 'name': 'Ponte Desktop', 'comment': 'Veja e controle seu Android pelo computador',
+                'args': ' desktop', 'wm_class': 'ponte-desktop', 'keywords': 'Android;phone;celular;scrcpy;remote;'},
+    'rd': {'file': 'ponte-rd.desktop', 'name': 'Ponte Remoto', 'comment': 'Controle seus outros computadores por esta tela',
+           'args': ' rd --notify', 'wm_class': 'ponte-rd', 'keywords': 'remote;desktop;notebook;mesh;malha;computador;'},
+}
 
 
-def launcher_path(env=None):
+def launcher_path(env=None, kind='desktop'):
     env = os.environ if env is None else env
     home = Path(env.get('HOME', str(Path.home())))
     base = Path(env.get('XDG_DATA_HOME', str(home / '.local/share')))
     if not base.is_absolute() or any(ord(c) < 32 or ord(c) == 127 for c in str(base)) or '..' in base.parts:
         raise ValueError('XDG_DATA_HOME must be an absolute path without control characters.')
-    return base / 'applications' / 'ponte-desktop.desktop'
+    return base / 'applications' / LAUNCHERS[kind]['file']
 
 
 def safe_parents(target):
@@ -37,18 +45,19 @@ def exec_quote(value):
     return '"' + text.replace('\\', '\\\\') + '"'
 
 
-def entry(root=ROOT):
+def entry(root=ROOT, kind='desktop'):
+    spec = LAUNCHERS[kind]
     root = Path(root).resolve()
     if '%' in str(root):
         raise ValueError('Move the checkout to a path without % before installing the desktop launcher.')
     icon = str(root / 'public/icon-512.png').replace('\\', '\\\\')
     return MARKER + '\n'.join([
         '[Desktop Entry]', 'Type=Application', 'Version=1.0',
-        'Name=Ponte Desktop', 'Comment=Veja e controle seu Android pelo computador',
-        'Exec=' + exec_quote(root / 'ponte') + ' desktop',
+        'Name=' + spec['name'], 'Comment=' + spec['comment'],
+        'Exec=' + exec_quote(root / 'ponte') + spec['args'],
         'Icon=' + icon, 'Terminal=false', 'Categories=Utility;Network;RemoteAccess;',
-        'StartupNotify=true', 'StartupWMClass=ponte-desktop',
-        'Keywords=Android;phone;celular;scrcpy;remote;', '',
+        'StartupNotify=true', 'StartupWMClass=' + spec['wm_class'],
+        'Keywords=' + spec['keywords'], '',
     ])
 
 
@@ -64,9 +73,9 @@ def managed(target):
     return True
 
 
-def install(env=None, root=ROOT):
-    target = launcher_path(env)
-    content = entry(root)
+def install(env=None, root=ROOT, kind='desktop'):
+    target = launcher_path(env, kind)
+    content = entry(root, kind)
     safe_parents(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     safe_parents(target)
@@ -91,8 +100,8 @@ def install(env=None, root=ROOT):
         Path(temporary).unlink(missing_ok=True)
 
 
-def uninstall(env=None):
-    target = launcher_path(env)
+def uninstall(env=None, kind='desktop'):
+    target = launcher_path(env, kind)
     safe_parents(target)
     exists = managed(target)
     if exists:
