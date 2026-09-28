@@ -376,6 +376,44 @@
   "Veja a janela no monitor. O texto dessas janelas não é importado para as sessões acima.": "View the window on its monitor. Text from these windows is not imported into the sessions above.",
   "Focar e ver no monitor": "Focus and view on monitor",
   "Nenhuma janela de terminal aberta.": "No terminal windows are open.",
+  "Agentes e terminais": "Agents and terminals",
+  "Tudo o que está aberto no PC e no celular. Toque num agente para ler a conversa.": "Everything open on the PC and on this phone. Tap an agent to read its conversation.",
+  "Conversa do agente": "Agent conversation",
+  "Ver na tela": "View on screen",
+  "Abrir sessão": "Open session",
+  "Resposta para o agente": "Reply to the agent",
+  "Responder…": "Reply…",
+  "Trabalhando": "Working",
+  "Esperando você": "Waiting for you",
+  "Parado": "Idle",
+  "Aberto": "Open",
+  "agora": "just now",
+  "há {count} min": "{count} min ago",
+  "há {count} h": "{count} h ago",
+  "há {count} d": "{count} d ago",
+  "Sessão do Ponte": "Ponte session",
+  "Janela no workspace {workspace}": "Window on workspace {workspace}",
+  "Janela no PC": "Window on the PC",
+  "Maestri": "Maestri",
+  "Dentro de {app}": "Inside {app}",
+  "Sem janela (automático)": "No window (automated)",
+  "Sem janela": "No window",
+  "{count} ATIVOS": "{count} ACTIVE",
+  "Nenhum agente ou terminal aberto.": "No agents or terminals are open.",
+  "Este agente não está mais rodando.": "This agent is no longer running.",
+  "Só leitura aqui: responda pelo canvas do Maestri.": "Read-only here: reply on the Maestri canvas.",
+  "Só leitura: este agente não tem janela de terminal nem sessão do Ponte para digitar.": "Read-only: this agent has no terminal window or Ponte session to type into.",
+  "Enviar para a sessão": "Send to the session",
+  "Responder no PC": "Reply on the PC",
+  "Digita na sessão do Ponte e aperta Enter, sem mudar o foco do PC.": "Types into the Ponte session and presses Enter, without changing the PC's focus.",
+  "Atenção: traz esta janela para a frente no PC e digita o texto + Enter nela.": "Heads up: this brings the window to the front on the PC and types the text + Enter into it.",
+  "Você": "You",
+  "Agente": "Agent",
+  "Ação": "Action",
+  "Nada escrito ainda.": "Nothing written yet.",
+  "Sem conversa legível para este agente.": "No readable conversation for this agent.",
+  "Carregando conversa…": "Loading conversation…",
+  "Enviado para o agente.": "Sent to the agent.",
   "Conectado à sessão de texto.": "Connected to the text session.",
   "Crie uma sessão para começar.": "Create a session to begin.",
   "Instale tmux no PC para usar sessões de texto.": "Install tmux on the PC to use text sessions.",
@@ -739,6 +777,22 @@
   "WINDOW_CLOSED": {
     "en": "This window is no longer open.",
     "pt": "A janela não está mais aberta."
+  },
+  "AGENT_NOT_FOUND": {
+    "en": "This agent or terminal is no longer running.",
+    "pt": "Este agente ou terminal não está mais rodando."
+  },
+  "AGENT_NOT_INTERACTIVE": {
+    "en": "This agent has no terminal window or Ponte session to type into.",
+    "pt": "Este agente não tem janela de terminal nem sessão do Ponte para digitar."
+  },
+  "AGENT_FOCUS_FAILED": {
+    "en": "The agent's window did not take focus, so nothing was typed.",
+    "pt": "A janela do agente não recebeu o foco, então nada foi digitado."
+  },
+  "AGENT_PC_LOCKED": {
+    "en": "The PC is locked. Unlock it before replying to an agent.",
+    "pt": "O PC está bloqueado. Desbloqueie antes de responder a um agente."
   },
   "APP_NOT_ALLOWED": {
     "en": "This application is not allowed.",

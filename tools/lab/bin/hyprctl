@@ -5,12 +5,18 @@ import _lab
 args = sys.argv[1:]
 m = _lab.monitor()
 window = {'address': '0xlab', 'title': 'Ponte lab target', 'class': 'lab', 'monitor': 0, 'workspace': {'id': 1, 'name': '1'}, 'at': [0, 0], 'size': [m['width'], m['height']]}
+# Extra windows (with pids) seeded by tools/lab/agents-fixture.sh.
+try:
+    with open(os.path.join(_lab.LAB, 'clients.json')) as f: extra = json.load(f)
+except (OSError, ValueError): extra = []
+clients = [window] + extra
+active = next((c for c in clients if c['address'] == _lab.load().get('active')), window)
 if args[:1] == ['-j']:
     kind = args[1]
     if kind == 'monitors': print(json.dumps([m]))
     elif kind == 'devices': print(json.dumps({'mice': [{'name': 'ydotoold-virtual-device-1'}], 'keyboards': []}))
-    elif kind == 'activewindow': print(json.dumps(window))
-    elif kind == 'clients': print(json.dumps([window]))
+    elif kind == 'activewindow': print(json.dumps(active))
+    elif kind == 'clients': print(json.dumps(clients))
     elif kind == 'workspaces': print(json.dumps([{'id': 1, 'name': '1', 'monitor': m['name'], 'windows': 1}]))
     else: print('[]')
 elif args[:1] == ['cursorpos']:
@@ -22,4 +28,9 @@ elif args[:1] == ['eval']:
             s = _lab.load(); s['profile'] = 'flat'; _lab.save(s)
     print('ok')
 else:
-    _lab.log('hyprctl', args); print('ok')
+    _lab.log('hyprctl', args)
+    focus = 'address:' in ' '.join(args) and 'hl.dsp.focus' in ' '.join(args)
+    if focus:
+        with _lab.locked():
+            s = _lab.load(); s['active'] = ' '.join(args).split('address:', 1)[1].split('"', 1)[0]; _lab.save(s)
+    print('ok')

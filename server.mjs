@@ -14,6 +14,7 @@ import { createImageInbox, MAX_IMAGE_BYTES } from './backend/images.mjs';
 import { ApiError } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
 import { createTerminals } from './backend/terminals.mjs';
+import { createAgents } from './backend/agents.mjs';
 import { createTailscaleIdentity, pairingRejection } from './backend/tailscale.mjs';
 import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
@@ -179,6 +180,7 @@ export async function createApp(options = {}) {
   const live = createLiveStreaming(desktop);
   const terminals = options.terminals || createTerminals(initialized.dataDir, { env });
   const images = options.images || await createImageInbox(initialized.dataDir, { env, terminals, clipboard: options.clipboard });
+  const agents = options.agents || createAgents({ env, dataDir: initialized.dataDir });
   const transcriber = options.transcriber || createTranscriber(initialized.dataDir, { env });
   const tailnetIdentity = options.tailnetIdentity || createTailscaleIdentity({ env, selfAddress: settings?.nativeTls?.host || env.OMARCHY_REMOTE_NATIVE_BIND });
   const activeRequests = new Set();
@@ -338,6 +340,19 @@ export async function createApp(options = {}) {
       }
       if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { json(res, 200, await terminals.read(terminalRoute[1], { since: query.get('since') || undefined })); return; }
       if (terminalRoute && !terminalRoute[2] && req.method === 'DELETE') { json(res, 200, await terminals.remove(terminalRoute[1])); return; }
+      // Agents and terminals running on the PC: read-only listing and
+      // transcript; a reply types into that agent's own session or window.
+      if (pathname === '/api/agents' && req.method === 'GET') { json(res, 200, await limits.only('agents', 2, () => agents.list())); return; }
+      const agentRoute = pathname.match(/^\/api\/agents\/([^/]+)\/(transcript|reply)$/);
+      if (agentRoute?.[2] === 'transcript' && req.method === 'GET') { json(res, 200, await limits.only('agents', 2, () => agents.transcript(agentRoute[1]))); return; }
+      if (agentRoute?.[2] === 'reply' && req.method === 'POST') {
+        if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
+        await limits.only('body', 8, async () => {
+          const body = await readBody(req, 24 * 1024);
+          let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
+          json(res, 200, await limits.action(() => agents.reply(agentRoute[1], value, { desktop, terminals })));
+        }); return;
+      }
       if (pathname === '/api/screenshot' && req.method === 'GET') {
         if (query.getAll('scale').length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
         const bytes = await limits.only('screenshot', 1, () => desktop.screenshot(query.get('monitor') ?? undefined, query.has('scale') ? Number(query.get('scale')) : undefined));
