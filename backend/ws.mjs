@@ -242,7 +242,7 @@ export function connect(url, { ca, checkServerIdentity, headers = {}, maxMessage
   const port = Number(target.port) || (secure ? 443 : 80);
   return new Promise((resolve, reject) => {
     const socket = secure
-      ? tls.connect({ host, port, ca, checkServerIdentity, rejectUnauthorized, ALPNProtocols: ['http/1.1'], ...(net.isIP(host) ? {} : { servername: host }) })
+      ? tls.connect({ host, port, rejectUnauthorized, ALPNProtocols: ['http/1.1'], ...(ca ? { ca } : {}), ...(checkServerIdentity ? { checkServerIdentity } : {}), ...(net.isIP(host) ? {} : { servername: host }) })
       : net.connect({ host, port });
     const key = randomBytes(16).toString('base64');
     let response = Buffer.alloc(0), settled = false;

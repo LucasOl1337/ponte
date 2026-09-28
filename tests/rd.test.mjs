@@ -179,6 +179,38 @@ test('switching monitors restarts the capture and announces a new ready before t
   assert.equal(c.frames[index].keyframe, true);
 });
 
+test('over the tailnet TLS listener: wss with the pinned CA reaches a session; an unknown CA is refused', { skip: !canRun || spawnSync('openssl', ['version']).status !== 0 }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-rd-tls-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'public'));
+  await writeFile(path.join(root, 'public/index.html'), '<title>Ponte</title>');
+  const certFile = path.join(root, 'server.crt'), keyFile = path.join(root, 'server.key');
+  assert.equal(spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', keyFile, '-out', certFile,
+    '-subj', '/CN=Ponte test', '-addext', 'subjectAltName=IP:127.0.0.1', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' }).status, 0);
+  const cert = await readFile(certFile);
+  const seen = [];
+  const app = await createApp({
+    rootDir: root, dataDir: path.join(root, 'private'), token: TOKEN, env: {}, nativeTls: { cert, key: await readFile(keyFile) },
+    desktop: { getState: async () => ({}), close: async () => {} }, audio: { close: async () => {} },
+    rdOptions: { captureMode: 'lab', inputMode: 'off', readMonitors: async () => MONITORS, clipboard: fakeClipboard(), kbps: 300, log: { info() {}, error() {} } },
+  });
+  t.after(() => app.close());
+  const original = app.rd.accept;
+  app.rd.accept = (ws, req, options) => { seen.push(req.ponteNative === true); original(ws, req, options); };
+  await new Promise(resolve => app.nativeServer.listen(0, '127.0.0.1', resolve));
+  const url = `wss://127.0.0.1:${app.nativeServer.address().port}/api/rd`;
+  await assert.rejects(connect(url), /self-signed|certificate/i);
+  const ws = await connect(url, { ca: cert });
+  const texts = [];
+  ws.on('message', (data, binary) => { if (!binary) texts.push(JSON.parse(data)); });
+  ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKEN }));
+  for (let i = 0; i < 300 && !texts.some(m => m.t === 'ready'); i++) await new Promise(r => setTimeout(r, 20));
+  assert.equal(texts.find(m => m.t === 'ready')?.monitor, 'LAB-1');
+  assert.deepEqual(texts.find(m => m.t === 'ready').input, { abs: false, rel: false, keys: false, clipboard: true }); // input off: view only
+  assert.deepEqual(seen, [true]);
+  ws.close();
+});
+
 test('health and state report the rd capability', { skip: !canRun }, async t => {
   const { port } = await rdApp(t);
   const health = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
