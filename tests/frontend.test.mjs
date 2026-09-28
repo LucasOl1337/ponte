@@ -537,6 +537,16 @@ test('a tap on a frame that is not live never clicks: it brings the stream back 
   assert.equal(marker.style.left, '195px');
 });
 
+test('sharp streams native pixels (no CPU downscale in grim) at a bandwidth-capped JPEG quality', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  const sharp = JSON.parse(h.run('JSON.stringify(LIVE_PROFILES.sharp)'));
+  assert.equal(sharp.scale, 1);
+  assert.ok(sharp.quality <= 40 && sharp.quality >= 30, `quality ${sharp.quality}`);
+  h.run("var probe={monitor:'DP-3',region:null};applyLiveProfile(probe,'sharp')");
+  assert.equal(h.run('liveStreamPath(probe)'), '/stream?monitor=DP-3&fps=15&scale=1&q=40');
+});
+
 test('a pinch survives the auto quality profile changing the frame resolution, and resets for another shape', async () => {
   const h = powerUiHarness();
   await flushTicks();
