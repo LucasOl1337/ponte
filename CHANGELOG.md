@@ -29,8 +29,11 @@ reached the other one's VM through its hop alias. `npm test`
 (357, 1 skip) passes, with new cases for the allowlist, the config and the Home and Dev
 choice.
 
-Not yet verified: the SSH choice on the real phone (it was in use), and the notebook's
-service after the update.
+On the notebook, after the update, `ctl terminals places` listed both machines, and from
+the PC `ctl terminals create --agent ssh --host ALIAS --node notebook-omarchy` opened the
+Hostinger VM through the notebook's hop and answered `hostname`.
+
+Not yet verified: the SSH choice on the real phone (it was in use during the round).
 
 ## 0.1.0-alpha.28 (2026-09-28)
 
