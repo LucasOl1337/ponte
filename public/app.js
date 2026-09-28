@@ -2449,7 +2449,7 @@ $$(dynamicFields).forEach(element => element.removeAttribute('data-i18n'));
 $$('#mute-button').forEach(element => element.removeAttribute('data-i18n-aria-label'));
 $('#screen-image').removeAttribute('data-i18n-alt');
 document.addEventListener('ponte-language-change', () => {
-  const ownedText = '#toast,#pair-error,#record-error,#record-state,#record-hint,#install-hint,#connection-banner-text,#terminal-status';
+  const ownedText = '#toast,#pair-error,#record-error,#record-state,#record-hint,#install-hint,#connection-banner-text,#terminal-status,#image-result,#agent-reply-status';
   $$(ownedText).forEach(element => { element.textContent = t(element.textContent); });
   const bannerError = i18n.read($('#connection-banner-text'));
   setConnection(connected,bannerError);

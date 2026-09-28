@@ -407,3 +407,13 @@ test('Home start-work opens an agent session with the reviewed request and lands
  assert.match(h.el('#start-dictate-status').textContent,/Claude is not installed on the PC/);
  assert.equal(h.el('#start-go').disabled,false);
 });
+
+test('Status lines of the print dialog and the agent reply follow a language change',async()=>{
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
+ h.run("imageResult(t('Salva no PC: {path}',{path:'/home/lol/Imagens/Ponte/a.png'}));$('#agent-reply-status').textContent=t('Enviado para o agente.');");
+ assert.equal(h.el('#image-result').textContent,'Saved on the PC: /home/lol/Imagens/Ponte/a.png');
+ h.i18n.setLanguage('pt');await flush();
+ assert.equal(h.el('#image-result').textContent,'Salva no PC: /home/lol/Imagens/Ponte/a.png');assert.equal(h.el('#agent-reply-status').textContent,'Enviado para o agente.');
+ h.run("imageResult(t('Copiada no PC. Cole com Ctrl+V onde quiser.'))");h.i18n.setLanguage('en');await flush();
+ assert.equal(h.el('#image-result').textContent,'Copied on the PC. Paste it with Ctrl+V wherever you like.');assert.equal(h.el('#agent-reply-status').textContent,'Sent to the agent.');
+});
