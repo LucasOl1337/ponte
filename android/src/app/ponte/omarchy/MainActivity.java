@@ -300,7 +300,10 @@ public final class MainActivity extends Activity {
         String mime;
         try { mime = resolver.getType(uri); } catch (RuntimeException error) { return null; }
         if (!"image/png".equals(mime) && !"image/jpeg".equals(mime) && !"image/webp".equals(mime)) return null;
-        String name = uri.getLastPathSegment();
+        String name = null;
+        try (android.database.Cursor cursor = resolver.query(uri, new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) name = cursor.getString(0);
+        } catch (RuntimeException ignored) { }
         if (name == null || !name.matches("[A-Za-z0-9 ._()-]{1,80}")) name = "image";
         try (InputStream input = resolver.openInputStream(uri)) {
             if (input == null) return null;
