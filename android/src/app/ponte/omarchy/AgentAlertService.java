@@ -79,7 +79,12 @@ public final class AgentAlertService extends Service {
             shutdown();
             return START_NOT_STICKY;
         }
-        if (!running) begin();
+        // The service shares the app's process: a failure here must stop the
+        // alerts, never take the open page down with it.
+        if (!running) {
+            try { begin(); }
+            catch (RuntimeException failed) { running = false; shutdown(); return START_NOT_STICKY; }
+        }
         return START_STICKY;
     }
 
@@ -119,7 +124,10 @@ public final class AgentAlertService extends Service {
         catch (Exception unusable) { shutdown(); return; }
         running = true;
         connectivity = getSystemService(ConnectivityManager.class);
-        online = connectivity != null && connectivity.getActiveNetwork() != null;
+        // ConnectivityManager needs ACCESS_NETWORK_STATE; without it (or on a
+        // ROM that refuses it) assume a network and let the request find out.
+        try { online = connectivity == null || connectivity.getActiveNetwork() != null; }
+        catch (RuntimeException refused) { connectivity = null; online = true; }
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
                 boolean switched;

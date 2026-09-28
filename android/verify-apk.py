@@ -21,6 +21,7 @@ required = {
     'android.permission.FOREGROUND_SERVICE',
     'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
     'android.permission.POST_NOTIFICATIONS',
+    'android.permission.ACCESS_NETWORK_STATE',
 }
 if permissions != required:
     raise SystemExit('APK permissions mismatch: missing=' + repr(sorted(required - permissions))
