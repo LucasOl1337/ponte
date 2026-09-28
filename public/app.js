@@ -2930,13 +2930,13 @@ function devGrow() {
   box.style.height = `${Math.min(box.scrollHeight || 0, 5 * 22 + 20)}px`;
 }
 async function devSend(withEnter) {
-  const box = $('#dev-input'), text = box.value.replace(/\r\n?/g,'\n');
+  const box = $('#dev-input'), typed = box.value, text = typed.replace(/\r\n?/g,'\n').replace(/\n+$/,'');
   if (!devId || devBusy || !text.trim()) return;
   if (text.length > DEV_TEXT_LIMIT) { devStatus(t('Texto longo demais: até {max} caracteres.',{max:DEV_TEXT_LIMIT}), true); return; }
   devBusy = true;
   const sent = await devInput(withEnter ? {text, enter:true} : {text});
   devBusy = false;
-  if (sent && box.value === text) { box.value = ''; devGrow(); }
+  if (sent && box.value === typed) { box.value = ''; devGrow(); }
 }
 async function devCreate(agent, project) {
   if (devBusy || !connected || !token) return;

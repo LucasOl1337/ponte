@@ -118,9 +118,9 @@ test('the composer sends several lines with Enter, pastes without it, and explai
   h.run("navigate('dev')"); await flush();
   const box = h.el('#dev-input');
   box.value = 'line one\nline two\r\nline three'; h.el('#dev-send').click(); await flush();
-  box.value = 'just paste'; h.el('#dev-paste').click(); await flush();
+  box.value = 'just paste\n\n'; h.el('#dev-paste').click(); await flush();
   const sent = h.writes().filter(call => call.path.endsWith('/input')).map(call => JSON.parse(call.body));
-  assert.deepEqual(sent, [{ text: 'line one\nline two\nline three', enter: true }, { text: 'just paste' }]);
+  assert.deepEqual(sent, [{ text: 'line one\nline two\nline three', enter: true }, { text: 'just paste' }], 'a trailing Enter from the keyboard does not turn one line into several');
   assert.equal(box.value, '');
   refuse = true; box.value = 'a\nb'; h.el('#dev-send').click(); await flush();
   assert.match(h.el('#dev-status').textContent, /does not take several lines at once/);
