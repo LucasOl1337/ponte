@@ -22,8 +22,8 @@ import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/confi
 import { message, publicErrorParameters, requestLocale } from './backend/i18n.mjs';
 import { readNativeTls } from './backend/tls.mjs';
 import { createMesh, peerFailure } from './backend/mesh.mjs';
-import { acceptUpgrade, rejectUpgrade, connect as connectWs, pipe as pipeWs } from './backend/ws.mjs';
-import { createRemoteDesktop, RD_VERSION } from './backend/rd.mjs';
+import { acceptUpgrade, rejectUpgrade } from './backend/ws.mjs';
+import { createRemoteDesktop } from './backend/rd.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -261,55 +261,22 @@ export async function createApp(options = {}) {
     runCommand('notify-send', ['-a', 'Ponte', '-u', 'normal', 'Ponte', text], { env, timeout: 3000 }).catch(() => {});
   }
 
-  // /api/rd?node=<id>: the owner's browser talks to this node, which checks
-  // the hello, opens its own WebSocket to the paired node with the peer token
-  // (its CA pinned) and, once that node answers, joins the two byte for byte.
-  // A peer's token never gets relayed further (no chains).
-  function relayRd(ws, req, peerId, search) {
-    let state = 'hello', far = null;
-    const early = [];
-    const refuse = (code, closeCode = 1011) => {
-      far?.terminate();
-      if (ws.readyState !== 'open') return;
-      ws.send(JSON.stringify({ t: 'error', code }));
-      ws.close(closeCode, code);
+  // Where a remote-desktop session goes: null is this node. The mesh answers
+  // { url, ca, token } for /api/rd?node=<paired peer>, and rd.mjs splices.
+  const routeRd = options.routeRd || (async (hello, req, principal) => {
+    const query = new URL(req.url, 'http://localhost').searchParams;
+    const node = query.get('node');
+    if (!node || node === mesh.id) return null;
+    if (principal.kind !== 'owner') throw new ApiError(403, 'MESH_CHAIN_DENIED');
+    const peer = mesh.connection(node);
+    query.delete('node');
+    const rest = query.toString();
+    return {
+      url: `wss://${peer.host}:${peer.port}/api/rd${rest ? `?${rest}` : ''}`, ca: peer.ca, token: peer.token,
+      failure: error => peerFailure(error, peer.name).code,
+      revoked: () => mesh.forget(node),
     };
-    const timer = setTimeout(() => refuse('INVALID_HELLO', 1008), 10000);
-    ws.once('close', () => { clearTimeout(timer); if (state !== 'piped') far?.terminate(); });
-    ws.on('message', (data, binary) => {
-      if (state === 'hello') { state = 'connecting'; open(data, binary); return; }
-      if (state === 'connecting' && !binary && early.length < 256) early.push(data);
-    });
-    async function open(data, binary) {
-      clearTimeout(timer);
-      let hello = null;
-      if (!binary) { try { hello = JSON.parse(data); } catch {} }
-      if (!hello || hello.t !== 'hello' || hello.v !== RD_VERSION) { refuse('INVALID_HELLO', 1002); return; }
-      let caller = null;
-      try { caller = authenticate(hello.token, req); } catch {}
-      if (!caller) { refuse('PAIRING_REQUIRED', 1008); return; }
-      if (caller.kind !== 'owner') { refuse('MESH_CHAIN_DENIED', 1008); return; }
-      let target;
-      try { target = mesh.connection(peerId); } catch (error) { refuse(error.code || 'MESH_PEER_NOT_FOUND'); return; }
-      try {
-        far = await connectWs(`wss://${target.host}:${target.port}/api/rd${search}`, { ca: target.ca, maxMessage: 8 * 1024 * 1024, timeout: 5000 });
-      } catch (error) { refuse(peerFailure(error, target.name).code); return; }
-      if (ws.readyState !== 'open') { far.terminate(); return; }
-      far.once('close', () => { if (state !== 'piped') refuse('PEER_OFFLINE'); });
-      far.once('message', (reply, farBinary) => {
-        let answer = null;
-        if (!farBinary) { try { answer = JSON.parse(reply); } catch {} }
-        // The far node no longer knows our token: the link is dead.
-        if (answer?.t === 'error' && answer.code === 'PAIRING_REQUIRED') { mesh.forget(peerId); refuse('PEER_REVOKED', 1008); return; }
-        if (ws.readyState !== 'open' || far.readyState !== 'open') { refuse('PEER_OFFLINE'); return; }
-        ws.send(reply);
-        for (const text of early.splice(0)) far.send(text);
-        state = 'piped';
-        pipeWs(ws, far);
-      });
-      far.send(JSON.stringify({ ...hello, token: target.token }));
-    }
-  }
+  });
 
   async function serveFile(res, file, mime) {
     const metadata = await lstat(file);
@@ -602,7 +569,7 @@ export async function createApp(options = {}) {
   // /api/rd is the only WebSocket: same Host/Origin guard and rate limit as
   // the rest of the API; the token comes in the first message (see rd.mjs).
   const handleUpgrade = (req, socket, head) => {
-    let pathname, query;
+    let pathname;
     try {
       if (shuttingDown) throw new ApiError(503, 'SERVER_RESTARTING');
       guard(req); limits.request();
@@ -610,23 +577,14 @@ export async function createApp(options = {}) {
       pathname = req.url.split('?', 1)[0];
       if (req.headers['sec-fetch-site'] === 'cross-site') throw new ApiError(403, 'CROSS_SITE_NOT_ALLOWED');
       if (pathname !== '/api/rd') throw new ApiError(404, 'ROUTE_NOT_FOUND');
-      query = new URL(req.url, 'http://localhost').searchParams;
-      if (query.getAll('node').length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
+      if (new URL(req.url, 'http://localhost').searchParams.getAll('node').length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
     } catch (error) {
       const status = error instanceof ApiError ? error.status : 400;
       rejectUpgrade(socket, status, status === 403 ? 'Forbidden' : status === 404 ? 'Not Found' : status === 429 ? 'Too Many Requests' : status === 503 ? 'Service Unavailable' : 'Bad Request');
       return;
     }
     const ws = acceptUpgrade(req, socket, head);
-    if (!ws) return;
-    const node = query.get('node');
-    if (node && node !== mesh.id) {
-      query.delete('node');
-      const rest = query.toString();
-      relayRd(ws, req, node, rest ? `?${rest}` : '');
-      return;
-    }
-    rd.accept(ws, req, { authorize: authorizeRd });
+    if (ws) rd.accept(ws, req, { authorize: authorizeRd, route: routeRd });
   };
   const server = http.createServer(handleRequest);
   server.on('upgrade', handleUpgrade);
