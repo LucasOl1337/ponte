@@ -641,17 +641,52 @@ test('live frame backpressure waits for drain and times out a stalled receiver w
 test('aggregate live capture concurrency is capped and shutdown aborts active capture signals', async () => {
   const signals = [];
   let active = 0, peak = 0, completed = 0;
-  const desktop = { prepareLive: async () => ({ capture: signal => new Promise((resolve, reject) => {
+  const desktop = { prepareLive: async ({ monitor }) => ({ monitor, capture: signal => new Promise((resolve, reject) => {
     signals.push(signal); active++; peak = Math.max(peak, active);
     signal.addEventListener('abort', () => { active--; completed++; reject(new Error('aborted')); }, { once: true });
   }) }) };
   const live = createLiveStreaming(desktop);
   const responses = [new FakeStreamResponse(), new FakeStreamResponse(), new FakeStreamResponse()];
-  const streams = responses.map(res => live.stream({}, res, new URLSearchParams('monitor=DP-1')));
+  // Three monitors: three capture loops (the same monitor would share one).
+  const streams = responses.map((res, index) => live.stream({}, res, new URLSearchParams(`monitor=DP-${index + 1}`)));
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(peak, 2); assert.equal(signals.length, 2);
   live.close(); await Promise.all(streams);
   assert.ok(signals.every(signal => signal.aborted)); assert.equal(completed, 2); assert.equal(active, 0);
+});
+
+test('viewers of the same monitor and profile share one capture loop; the last one leaving stops it', async () => {
+  const jpeg = n => Buffer.from([0xff, 0xd8, n & 0xff, 0xff, 0xd9]);
+  const captures = [], signals = [];
+  const desktop = { prepareLive: async ({ monitor }) => ({ monitor, region: null, capture: async signal => {
+    signals.push(signal); captures.push(monitor);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    if (signal.aborted) throw new Error('aborted');
+    return jpeg(captures.length);
+  } }) };
+  class FastResponse extends FakeStreamResponse { write(bytes) { this.writes.push(bytes); return true; } }
+  const live = createLiveStreaming(desktop, { maxStreams: 4, maxPerPeer: 4 });
+  const open = query => { const res = new FastResponse(); const done = live.stream({ socket: { remoteAddress: '100.1.1.1' } }, res, new URLSearchParams(query)); done.catch(() => {}); return { res, done }; };
+  const a = open('monitor=DP-1&fps=20&scale=1&q=40'), b = open('monitor=DP-1&fps=20&scale=1&q=40');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.equal(live.feeds, 1, 'one capture loop for two viewers');
+  const shared = captures.length;
+  assert.ok(a.res.writes.length >= 4 && b.res.writes.length >= 4, `both viewers get frames (${a.res.writes.length}, ${b.res.writes.length})`);
+  assert.ok(shared <= Math.max(a.res.writes.length, b.res.writes.length) + 1, `${shared} captures for ${a.res.writes.length}+${b.res.writes.length} frames`);
+  assert.ok(shared < a.res.writes.length + b.res.writes.length - 2, 'frames are fanned out, not captured twice');
+  // Another quality is another picture: its own loop.
+  const c = open('monitor=DP-1&fps=20&scale=1&q=65');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(live.feeds, 2);
+  // One viewer leaving keeps the shared loop running for the other.
+  a.res.destroy(); await a.done;
+  const before = b.res.writes.length;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.ok(b.res.writes.length > before, 'the remaining viewer keeps streaming');
+  assert.equal(signals.filter(signal => signal.aborted).length, 0);
+  b.res.destroy(); c.res.destroy(); await Promise.all([b.done, c.done]);
+  assert.equal(live.feeds, 0);
+  assert.ok(signals.at(-1).aborted, 'the capture is aborted once nobody watches');
 });
 
 test('live slots: a device replaces only its own stream, a PC-local preview yields to a remote device, and remote devices never evict each other', async () => {

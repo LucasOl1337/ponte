@@ -75,6 +75,58 @@ function createCaptureSlots(max) {
   };
 }
 
+function abortable(promise, signal) {
+  if (signal.aborted) return Promise.reject(aborted());
+  return new Promise((resolve, reject) => {
+    const cancel = () => reject(aborted());
+    signal.addEventListener('abort', cancel, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', cancel));
+  });
+}
+
+// Viewers of the same monitor, region, scale and quality share one capture
+// loop. A frame is taken when a viewer is ready for its next one and the last
+// frame is older than that viewer's frame interval; everyone waiting gets it.
+// The capture is aborted only when the last viewer leaves.
+function createFeeds(capture) {
+  const feeds = new Map();
+  function join(key, source, fps) {
+    let feed = feeds.get(key);
+    if (!feed) {
+      feed = { source, controller: new AbortController(), members: 0, latest: null, pending: null, seq: 0 };
+      feeds.set(key, feed);
+    }
+    feed.members++;
+    const interval = 1000 / fps;
+    let seen = 0, left = false;
+    return {
+      async next(signal) {
+        const latest = feed.latest;
+        if (latest && latest.seq > seen && performance.now() - latest.at < interval) { seen = latest.seq; return latest.bytes; }
+        if (!feed.pending) {
+          const at = performance.now();
+          const pending = capture(feed.source.capture, feed.controller.signal)
+            .then(bytes => (feed.latest = { bytes, at, seq: ++feed.seq }))
+            .finally(() => { if (feed.pending === pending) feed.pending = null; });
+          pending.catch(() => {});
+          feed.pending = pending;
+        }
+        const frame = await abortable(feed.pending, signal);
+        seen = frame.seq;
+        return frame.bytes;
+      },
+      leave() {
+        if (left) return;
+        left = true;
+        if (--feed.members > 0) return;
+        if (feeds.get(key) === feed) feeds.delete(key);
+        feed.controller.abort();
+      },
+    };
+  }
+  return { join, get size() { return feeds.size; } };
+}
+
 function validateFrame(bytes) {
   if (!Buffer.isBuffer(bytes) || bytes.length < 4 || bytes.length > MAX_LIVE_FRAME_BYTES || bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new ApiError(503, 'INVALID_JPEG_FRAME');
 }
@@ -103,7 +155,7 @@ function peerCount(sessions, peer) { let n = 0; for (const s of sessions) if (s.
 
 export function createLiveStreaming(desktop, { maxStreams = 4, maxPerPeer = 2, maxCaptures = 2, slowClientTimeout = 15000 } = {}) {
   const sessions = new Set();
-  const capture = createCaptureSlots(maxCaptures);
+  const feeds = createFeeds(createCaptureSlots(maxCaptures));
   let closing = false;
 
   async function stream(req, res, query) {
@@ -134,11 +186,13 @@ export function createLiveStreaming(desktop, { maxStreams = 4, maxPerPeer = 2, m
     sessions.add(controller);
     const disconnect = () => controller.abort();
     res.once('close', disconnect);
+    let feed;
     try {
       const source = await desktop.prepareLive({ ...options, signal });
       if (signal.aborted) throw aborted();
+      feed = feeds.join(JSON.stringify([source.monitor, source.region, options.scale, options.quality]), source, options.fps);
       let started = performance.now();
-      let frame = await capture(source.capture, signal);
+      let frame = await feed.next(signal);
       if (signal.aborted) throw aborted();
       validateFrame(frame);
       res.writeHead(200, {
@@ -152,18 +206,19 @@ export function createLiveStreaming(desktop, { maxStreams = 4, maxPerPeer = 2, m
         frame = null;
         await wait(Math.max(0, 1000 / options.fps - (performance.now() - started)), signal);
         started = performance.now();
-        frame = await capture(source.capture, signal);
+        frame = await feed.next(signal);
       }
     } catch (error) {
       if (!res.headersSent && !signal.aborted) throw error;
       if (!res.destroyed) res.destroy();
     } finally {
       controller.abort();
+      feed?.leave();
       res.off('close', disconnect);
       sessions.delete(controller);
     }
   }
 
   function close() { closing = true; for (const controller of sessions) controller.abort(); }
-  return { stream, close };
+  return { stream, close, get feeds() { return feeds.size; } };
 }
