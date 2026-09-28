@@ -282,6 +282,7 @@ function renderVisiblePage() {
   if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
   else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
   else if (currentPage === 'tela') renderScreenWorkspaces();
+  if (currentPage === 'inicio') loadStartProjects();
 }
 // Omarchy lives on numbered workspaces (Super+1…0). The screen gets the same
 // row: the workspace the streamed monitor shows is lit, a dot marks the ones
@@ -2161,6 +2162,20 @@ $('#terminal-dictate').addEventListener('click', () => {
 // typed or dictated into the field first, so it can be reviewed before starting.
 let startAgent = ['claude','codex','shell'].indexOf(savedPreference('ponte-start-agent')) >= 0 ? savedPreference('ponte-start-agent') : 'claude';
 let startBusy = false;
+let startProjectsToken = '';
+// Recent ~/Projects folders are fetched once per pairing, when Home shows.
+async function loadStartProjects() {
+  if (!token || startProjectsToken === token) return;
+  const requestToken = startProjectsToken = token;
+  try {
+    const { projects } = await (await api('/terminals?projects=1',{timeout:8000})).json();
+    if (requestToken !== token || !Array.isArray(projects)) return;
+    const select = $('#start-project'), wanted = select.value || savedPreference('ponte-start-project');
+    select.innerHTML = `<option value="" data-i18n="Pasta pessoal (~)">${escaped(t('Pasta pessoal (~)'))}</option>${projects.map(name => `<option value="${escaped(name)}">${escaped(name)}</option>`).join('')}`;
+    select.value = projects.indexOf(wanted) >= 0 ? wanted : '';
+  } catch { if (requestToken === token) startProjectsToken = ''; }
+}
+$('#start-project').addEventListener('change',event => savePreference('ponte-start-project',event.target.value));
 function renderStartAgents() {
   $$('[data-start-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.startAgent === startAgent)));
   $('#start-go').disabled = startBusy;
@@ -2182,6 +2197,7 @@ $('#start-go').addEventListener('click',async () => {
   const prompt = (startAgent === 'shell' ? raw.replace(/\s*\n\s*/g,' ') : raw).trim();
   const body = {cols:40,rows:24,agent:startAgent};
   if (prompt) body.prompt = prompt;
+  if ($('#start-project').value) body.project = $('#start-project').value;
   startBusy = true; renderStartAgents();
   dictationStatus($('#start-dictate-status'),'');
   const requestToken = token;

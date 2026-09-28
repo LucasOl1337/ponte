@@ -487,3 +487,33 @@ test('real isolated tmux runs a fake agent with the literal request in its proje
   await access(done);
   await terminals.remove(session.id);
 });
+
+test('projects lists recent ~/Projects folders by name only, without tmux, and HTTP serves them on request', async t => {
+  const root = await temporary(t), mock = mockedTmux();
+  const projects = path.join(root, 'Projects');
+  await mkdir(projects);
+  const { utimes } = await import('node:fs/promises');
+  for (const [index, name] of ['old', 'ponte', 'new-one', '.hidden', 'com espaço'].entries()) {
+    await mkdir(path.join(projects, name));
+    await utimes(path.join(projects, name), 1000 + index, 1000 + index);
+  }
+  await writeFile(path.join(projects, 'notes.txt'), '');
+  await mkdir(path.join(root, 'outside'));
+  await symlink(path.join(root, 'outside'), path.join(projects, 'link'));
+  const terminals = createTerminals(root, { ...mock, projectsDir: projects });
+  t.after(() => terminals.close());
+  assert.deepEqual(await terminals.projects(), { projects: ['new-one', 'ponte', 'old'] });
+  assert.equal(mock.calls.length, 0);
+  const missing = createTerminals(root, { ...mock, projectsDir: path.join(root, 'none') });
+  assert.deepEqual(await missing.projects(), { projects: [] });
+  await mkdir(path.join(root, 'public'));
+  await writeFile(path.join(root, 'public', 'index.html'), '<title>Test</title>');
+  const token = 'synthetic_terminal_token_abcdefghijklmnopqrstuvwxyz';
+  const app = await createApp({ rootDir: root, dataDir: path.join(root, 'state'), token, terminals, desktop: { close() {} }, audio: { close() {} } });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => app.close());
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  assert.equal((await fetch(`${base}/api/terminals?projects=1`)).status, 401);
+  assert.deepEqual(await (await fetch(`${base}/api/terminals?projects=1`, { headers: { Authorization: `Bearer ${token}` } })).json(), { projects: ['new-one', 'ponte', 'old'] });
+  assert.deepEqual(await (await fetch(`${base}/api/terminals`, { headers: { Authorization: `Bearer ${token}` } })).json(), { available: true, sessions: [], limit: 4 });
+});

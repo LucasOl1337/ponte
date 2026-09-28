@@ -3,11 +3,12 @@ import net from 'node:net';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, lstat, open, rename, realpath, stat } from 'node:fs/promises';
+import { mkdir, lstat, open, readdir, rename, realpath, stat } from 'node:fs/promises';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 
 export const TERMINAL_LIMIT = 4;
 export const TERMINAL_TEXT_LIMIT = 64 * 1024;
+export const PROJECT_LIMIT = 8;
 const idPattern = /^[a-f0-9]{24}$/;
 const panePattern = /^%\d+$/;
 const windowPattern = /^@\d+$/;
@@ -217,6 +218,16 @@ export function createTerminals(dataDir, options = {}) {
     catch (error) { await command(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
   }
   return {
+    // The most recently changed project folders, by name only, for the phone
+    // to offer as the new session's folder. It never needs tmux.
+    async projects() {
+      let parent, entries;
+      try { parent = await realpath(projectsDirectory); entries = await readdir(parent, { withFileTypes: true }); } catch { return { projects: [] }; }
+      const dated = await Promise.all(entries.filter(entry => entry.isDirectory() && projectPattern.test(entry.name)).map(async entry => {
+        try { return { name: entry.name, changed: (await stat(path.join(parent, entry.name))).mtimeMs }; } catch { return null; }
+      }));
+      return { projects: dated.filter(Boolean).sort((a, b) => b.changed - a.changed || a.name.localeCompare(b.name)).slice(0, PROJECT_LIMIT).map(item => item.name) };
+    },
     list() {
       return run(async available => ({ available, sessions: available ? (await sessions()).filter(item => item.valid).map(summary) : [], limit: TERMINAL_LIMIT }));
     },

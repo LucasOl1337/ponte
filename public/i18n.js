@@ -514,7 +514,9 @@
   "Falar o pedido": "Speak the request",
   "Começar": "Start",
   "Abre uma sessão de texto no PC, sem mexer no foco, e leva você direto pra ela.": "Opens a text session on the PC without changing focus and takes you straight to it.",
-  "Abrindo {title}…": "Opening {title}…"
+  "Abrindo {title}…": "Opening {title}…",
+  "PASTA": "FOLDER",
+  "Pasta pessoal (~)": "Home folder (~)"
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {

@@ -287,6 +287,7 @@ test('Home start-work opens an agent session with the reviewed request and lands
  const created=[];let refuse=false;
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path,options)=>{
   if(path==='/api/terminals'&&options.method==='POST'){created.push(JSON.parse(options.body));if(refuse)return{ok:false,status:503,json:async()=>({errorCode:'AGENT_UNAVAILABLE',errorParameters:{agent:'Claude'},error:'Claude is not installed on the PC.'})};return{ok:true,json:async()=>session};}
+  if(path==='/api/terminals?projects=1')return{ok:true,json:async()=>({projects:['ponte','dailywork']})};
   if(path==='/api/terminals')return{ok:true,json:async()=>({available:true,sessions:created.length?[session]:[],limit:4})};
   if(path.startsWith('/api/terminals/'))return{ok:true,json:async()=>({...session,text:'codex> '})};
   return{ok:true,json:async()=>fixture};
@@ -296,14 +297,17 @@ test('Home start-work opens an agent session with the reviewed request and lands
  h.el('[data-start-agent="codex"]').click();
  assert.equal(h.el('[data-start-agent="codex"]').getAttribute('aria-checked'),'true');
  assert.equal(h.saved.get('ponte-start-agent'),'codex');
+ assert.deepEqual(h.el('#start-project').querySelectorAll('option').map(option=>option.getAttribute('value')),['','ponte','dailywork']);
+ assert.equal(h.calls.filter(call=>call.path==='/api/terminals?projects=1').length,1,'projects are fetched once');
+ h.el('#start-project').value='ponte';
  const box=h.el('#start-prompt');box.value='  corrige o teste\nque falha  ';
  h.el('#start-go').click();await flush();await flush();
- assert.deepEqual(created.at(-1),{cols:40,rows:24,agent:'codex',prompt:'corrige o teste\nque falha'});
+ assert.deepEqual(created.at(-1),{cols:40,rows:24,agent:'codex',prompt:'corrige o teste\nque falha',project:'ponte'});
  assert.equal(h.run('currentPage'),'terminais');
  assert.equal(h.run('terminalId'),session.id);
  assert.equal(box.value,'','the request is cleared once the session exists');
  // A shell gets one line; an empty request is simply omitted.
- h.run("navigate('inicio')");h.el('[data-start-agent="shell"]').click();
+ h.run("navigate('inicio')");h.el('#start-project').value='';h.el('[data-start-agent="shell"]').click();
  box.value='git status\n  && ls';h.el('#start-go').click();await flush();await flush();
  assert.deepEqual(created.at(-1),{cols:40,rows:24,agent:'shell',prompt:'git status && ls'});
  h.run("navigate('inicio')");h.el('[data-start-agent="claude"]').click();box.value='   ';

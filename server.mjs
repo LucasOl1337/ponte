@@ -269,7 +269,7 @@ export async function createApp(options = {}) {
           json(res, 200, await limits.action(() => desktop.action(value)));
         }); return;
       }
-      if (pathname === '/api/terminals' && req.method === 'GET') { json(res, 200, await terminals.list()); return; }
+      if (pathname === '/api/terminals' && req.method === 'GET') { json(res, 200, query.has('projects') ? await terminals.projects() : await terminals.list()); return; }
       const terminalRoute = pathname.match(/^\/api\/terminals\/([^/]+)(?:\/(input|resize))?$/);
       if (req.method === 'POST' && (pathname === '/api/terminals' || terminalRoute?.[2])) {
         if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
