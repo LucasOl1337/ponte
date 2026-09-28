@@ -106,6 +106,12 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         boolean paired = consumePairingIntent(intent);
         consumeShareIntent(intent);
+        // `ponte phone app` on an instance that is already running arrives
+        // here, not in onCreate: without this it stays behind the keyguard.
+        if (intent != null && intent.getBooleanExtra("ponte.agent", false) && !agentSession) {
+            agentSession = true;
+            if (android.os.Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true); }
+        }
         setIntent(intent);
         if (paired && browser != null) loadHome();
     }
@@ -158,11 +164,18 @@ public final class MainActivity extends Activity {
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, android.net.http.SslError error) { handler.cancel(); }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame() && !paused && !destroyed) { loadFailed = true; showUnavailable(); }
+                if (!request.isForMainFrame() || destroyed) return;
+                // Pausing cancels the proxy's open exchanges, so a load still in
+                // flight when the phone locks or the keyguard covers us ends in
+                // ERR_CONNECTION_RESET. Remember it and load again on resume;
+                // otherwise Chromium's error page would stay until a restart.
+                loadFailed = true;
+                if (paused) reloadOnResume = true; else showUnavailable();
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse error) {
-                if (!request.isForMainFrame() || error.getStatusCode() < 400 || paused || destroyed) return;
+                if (!request.isForMainFrame() || error.getStatusCode() < 400 || destroyed) return;
                 loadFailed = true;
+                if (paused) { reloadOnResume = true; return; }
                 if ("proxy_certificate".equals(error.getReasonPhrase())) showCertificateChanged(); else showUnavailable();
             }
         });
@@ -399,19 +412,46 @@ public final class MainActivity extends Activity {
             nativeText("This app was built for a previous certificate. On the PC, run ./android/build.sh and install the new Ponte.apk over this one.",
                        "Este app foi gerado para um certificado anterior. No PC, rode ./android/build.sh e instale o novo Ponte.apk por cima deste."), true));
     }
+    // Retries never stop while Ponte is in front: 1.5, 3, 6, 12 s, then every
+    // 15 s until the PC answers. After three quiet tries the message offers
+    // "Try again" and Wake-on-LAN, and the retries go on underneath it.
+    static long retryDelay(int attempt) { return Math.min(15000L, 1500L << Math.max(0, Math.min(attempt - 1, 4))); }
     private void showUnavailable() {
-        if (++loadAttempts <= 3) {
-            long delay = 1500L * loadAttempts;
-            runOnUiThread(() -> {
-                showMessage(nativeText("Connecting to your PC…", "Conectando ao seu PC…"), nativeText("Waiting for Tailscale.", "Aguardando o Tailscale."), false);
-                // The WebView is detached while a message shows, so its own
-                // postDelayed would only run once re-attached; use the Activity's.
-                handler.postDelayed(() -> { if (!paused && !destroyed && loadFailed) loadHome(); }, delay);
+        final int attempt = ++loadAttempts;
+        final long delay = retryDelay(attempt);
+        runOnUiThread(() -> {
+            if (attempt <= 3) showMessage(nativeText("Connecting to your PC…", "Conectando ao seu PC…"), nativeText("Waiting for Tailscale.", "Aguardando o Tailscale."), false);
+            else if (attempt == 4 || !messageShown) showMessage(nativeText("Your PC has not responded", "Seu PC ainda não respondeu"), nativeText("Connect Tailscale on your phone and keep your PC awake. Ponte keeps trying.", "Conecte o Tailscale no celular e mantenha o PC ligado. O Ponte continua tentando."), true);
+            // The WebView is detached while a message shows, so its own
+            // postDelayed would only run once re-attached; use the Activity's.
+            // A later tap on "Try again" or a resume may load first; the
+            // attempt number keeps a stale timer from loading twice.
+            handler.postDelayed(() -> { if (!paused && !destroyed && loadFailed && loadAttempts == attempt) retryLoad(); }, delay);
+        });
+    }
+    // While a message is up the page is not reloaded blindly (that would flash
+    // a blank page every few seconds): the PC's health route is asked through
+    // the proxy first, off the main thread, and the page loads once it answers.
+    private void retryLoad() {
+        if (browser == null || destroyed) return;
+        if (!messageShown) { loadHome(); return; }
+        final int attempt = loadAttempts;
+        final String health = origin + "/api/health";
+        new Thread(() -> {
+            boolean up = false;
+            java.net.HttpURLConnection connection = null;
+            try {
+                connection = (java.net.HttpURLConnection) new java.net.URL(health).openConnection();
+                connection.setConnectTimeout(3000); connection.setReadTimeout(8000); connection.setUseCaches(false);
+                up = connection.getResponseCode() == 200;
+            } catch (Exception unreachable) { up = false; }
+            finally { if (connection != null) connection.disconnect(); }
+            final boolean answered = up;
+            handler.post(() -> {
+                if (paused || destroyed || !loadFailed || loadAttempts != attempt) return;
+                if (answered) loadHome(); else showUnavailable();
             });
-            return;
-        }
-        loadAttempts = 0;
-        runOnUiThread(() -> showMessage(nativeText("Your PC has not responded", "Seu PC ainda não respondeu"), nativeText("Connect Tailscale on your phone and keep your PC awake. Then try again.", "Conecte o Tailscale no celular e mantenha o PC ligado. Depois, tente novamente."), true));
+        }, "ponte-retry").start();
     }
     private String nativeText(String english, String portuguese) {
         return "pt".equals(preferences.getString("language", "en")) ? portuguese : english;
