@@ -505,7 +505,16 @@
   "Você disse: {text}": "You said: {text}",
   "ativo na placa de rede": "enabled on the network card",
   "desativado na placa de rede": "disabled on the network card",
-  "estado desconhecido": "unknown state"
+  "estado desconhecido": "unknown state",
+  "COMEÇAR TRABALHO": "START WORKING",
+  "Chame um agente": "Call an agent",
+  "Onde começar": "Where to start",
+  "Pedido": "Request",
+  "O que é pra fazer? Digite ou fale (opcional)": "What should it do? Type or speak (optional)",
+  "Falar o pedido": "Speak the request",
+  "Começar": "Start",
+  "Abre uma sessão de texto no PC, sem mexer no foco, e leva você direto pra ela.": "Opens a text session on the PC without changing focus and takes you straight to it.",
+  "Abrindo {title}…": "Opening {title}…"
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
