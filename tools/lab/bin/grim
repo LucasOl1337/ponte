@@ -35,12 +35,18 @@ for i, click in enumerate(s['clicks']):
     r = 10 + 2 * age
     d.ellipse([click['x'] - r, click['y'] - r, click['x'] + r, click['y'] + r], outline=col, width=2)
     d.text((click['x'] + r + 2, click['y'] - 12), f"{click['x']},{click['y']}", fill=col, font=font)
+for i, sc in enumerate(s.get('scrolls', [])):
+    col = (255, 190, 80)
+    up = sc['dy'] > 0
+    x, y = sc['x'], sc['y']
+    d.polygon([(x - 16, y + (10 if up else -10)), (x + 16, y + (10 if up else -10)), (x, y + (-18 if up else 18))], outline=col, width=3)
+    d.text((x + 22, y + 8), f"wheel {sc['dy']:+d} ×{sc['n']}", fill=col, font=font)
 d.line([(c['x'] - 30, c['y']), (c['x'] + 30, c['y'])], fill=(255, 255, 255), width=3)
 d.line([(c['x'], c['y'] - 30), (c['x'], c['y'] + 30)], fill=(255, 255, 255), width=3)
 d.text((c['x'] + 14, c['y'] + 14), f"cursor {c['x']},{c['y']}" + (' HELD' if s['held'] else ''), fill=(255, 255, 255), font=big)
 d.rectangle([20, H - 120, W - 20, H - 20], fill=(30, 34, 28), outline=(110, 120, 96))
 d.text((30, H - 110), 'typed: ' + s['typed'][-90:], fill=(213, 248, 136), font=big)
-d.text((30, H - 60), f"profile {s['profile']} · accel {s['accel']} · text focus {'on' if s.get('textFocus') else 'off'}", fill=(150, 160, 130), font=font)
+d.text((30, H - 60), f"profile {s['profile']} · accel {s['accel']} · text focus {'on' if s.get('textFocus') else 'off'} · wheel {s.get('wheel', 0):+d}", fill=(150, 160, 130), font=font)
 if scale != 1: im = im.resize((max(1, round(W * scale)), max(1, round(H * scale))), Image.BILINEAR)
 out = io.BytesIO()
 if kind == 'jpeg': im.save(out, 'JPEG', quality=quality)

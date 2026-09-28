@@ -7,7 +7,17 @@ m = _lab.monitor()
 with _lab.locked():
     s = _lab.load()
     extra = {}
-    if args[:1] == ['mousemove']:
+    if args[:1] == ['mousemove'] and ('--wheel' in args or '-w' in args):
+        # The wheel never moves the pointer: it scrolls what is under it.
+        rest = [a for a in args[1:] if a not in ('--', '--wheel', '-w')]
+        dy = int(rest[-1])
+        last = s['scrolls'][-1] if s['scrolls'] else None
+        if last and last['x'] == s['cursor']['x'] and last['y'] == s['cursor']['y']: last['dy'] += dy; last['n'] += 1
+        else: s['scrolls'] = (s['scrolls'] + [{**s['cursor'], 'dy': dy, 'n': 1}])[-8:]
+        s['wheel'] += dy
+        name, _ = _lab.target_at(s['cursor']['x'], s['cursor']['y'])
+        extra.update({'wheel': dy, 'cursor': s['cursor'], 'target': name})
+    elif args[:1] == ['mousemove']:
         rest = [a for a in args[1:] if a not in ('--', '--absolute', '-a')]
         dx, dy = int(rest[-2]), int(rest[-1])
         # A relative "absolute" move is scaled by the compositor's pointer
