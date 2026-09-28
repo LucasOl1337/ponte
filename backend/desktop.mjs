@@ -190,7 +190,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
   const lightsController = env.MAGMA_LIGHTS_CONTROLLER || path.join(env.HOME || os.homedir(), '.local/share/magma-lights/controller.py');
   const lightsCommand = (...args) => run(pythonBin, [lightsController, ...args], { timeout: 45000 });
   // Sleep and restore make one OpenRGB call per device group (~5 s of detection
-  // each), so they get most of the server's 75 s request budget.
+  // each); the controller gets 70 s, the phone's answer is bounded below.
   const LIGHT_LABELS = { 'ENE DRAM': 'RAM ENE', 'Corsair Vengeance RGB DDR5': 'RAM Corsair', 'ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC': 'GPU', 'MSI B650M': 'MSI (fans)', 'G515 LS TKL': 'G515', telinha: 'LCD' };
   const lightLabel = device => LIGHT_LABELS[device] || String(device).slice(0, 40);
   const lightsReport = stdout => {
@@ -224,13 +224,19 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
   // The Android shell's proxy drops a response after 15 s, and a sleep takes
   // ~20 s. Past lightsAnswerMs the phone gets { pending, job } and the outcome
   // arrives later as state.lights.last with the same job number.
+  // One job at a time: the controller's own lock would refuse a second one with
+  // no device list, which would read as every light failing.
   let lightsJobs = 0;
   let lightsLast = null;
+  let lightsRunning = false;
   async function lightsInTime(label, ...args) {
+    if (lightsRunning) throw new ApiError(429, 'OPERATION_BUSY');
+    lightsRunning = true;
     const job = ++lightsJobs;
     const work = lightsAction(label, ...args).then(
       report => { lightsLast = { job, action: label, ok: true, devices: report ? report.devices : [] }; return report; },
-      error => { lightsLast = { job, action: label, ok: false, devices: error.devices || [] }; throw error; });
+      error => { lightsLast = { job, action: label, ok: false, devices: error.devices || [] }; throw error; })
+      .finally(() => { lightsRunning = false; });
     work.catch(() => {});
     let timer;
     const late = new Promise(resolve => { timer = setTimeout(() => resolve({ pending: true, job }), lightsAnswerMs); });
@@ -529,7 +535,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         lightsCache.at = 0;
         let lights;
         try { lights = await lightsInTime(value.type, sleeping ? 'sleep' : 'restore'); }
-        catch (error) { if (!monitorError && sleeping) throw new ApiError(503, 'SLEEP_LIGHTS_FAILED', error.parameters); throw monitorError || error; }
+        catch (error) { if (!monitorError && sleeping && error.code === 'LIGHTS_FAILED') throw new ApiError(503, 'SLEEP_LIGHTS_FAILED', error.parameters); throw monitorError || error; }
         if (monitorError) throw monitorError;
         return { ok: true, lights };
       }

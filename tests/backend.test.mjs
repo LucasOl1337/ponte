@@ -1039,6 +1039,7 @@ test('a sleep longer than the phone proxy allows answers pending, then reports t
     : new Promise((resolve, reject) => { finish = () => reject(commandFailure({ stdout: magmaReport(false, { 'ENE DRAM': 'ok', 'ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC': 'failed', 'G515 LS TKL': 'absent', 'MSI B650M': 'ok' }) })); }) });
   assert.deepEqual(await desktop.action({ type: 'power.sleep' }), { ok: true, lights: { pending: true, job: 1 } });
   assert.equal((await desktop.getState()).lights.last, null, 'nothing reported while the controller runs');
+  await assert.rejects(desktop.action({ type: 'power.wake' }), error => error.code === 'OPERATION_BUSY', 'a second lights job waits for the first');
   finish();
   await new Promise(resolve => setImmediate(resolve));
   const { lights } = await desktop.getState();
