@@ -4,16 +4,23 @@ import os from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, lstat, open, readdir, rename, realpath, stat } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 
 export const TERMINAL_LIMIT = 4;
 export const TERMINAL_TEXT_LIMIT = 64 * 1024;
+// A coloured capture (format=ansi) keeps its SGR codes, so it gets more room.
+export const TERMINAL_ANSI_LIMIT = 192 * 1024;
 export const PROJECT_LIMIT = 8;
+export const TERMINAL_INPUT_LIMIT = 16000;
 const idPattern = /^[a-f0-9]{24}$/;
 const panePattern = /^%\d+$/;
 const windowPattern = /^@\d+$/;
 const hashPattern = /^[A-Za-z0-9_-]{1,64}$/;
 const format = '#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_in_mode}';
+// The coloured read also asks where the cursor is, relative to the visible
+// pane, and whether a full-screen app switched to the alternate screen.
+const cursorFormat = `${format}\t#{cursor_x}\t#{cursor_y}\t#{cursor_flag}\t#{alternate_on}`;
 // A session can start an agent CLI instead of a bare shell. Only these fixed
 // program names run; the phone chooses a key, never a command.
 const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' } });
@@ -23,7 +30,15 @@ const projectPattern = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 // program and the prompt are "$@", never parsed as shell text. When the agent
 // exits, the pane falls back to the user's login shell instead of vanishing.
 const agentLauncher = ['/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent'];
-const keys = Object.freeze({ Enter: 'Enter', Tab: 'Tab', Escape: 'Escape', BackSpace: 'BSpace', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Interrupt: 'C-c' });
+// Stable key names for the phone, mapped to tmux key names. The keys Claude
+// Code and a shell use: Shift+Tab cycles Claude's mode, Ctrl+O/R/T its views.
+const keys = Object.freeze({
+  Enter: 'Enter', Tab: 'Tab', ShiftTab: 'BTab', Escape: 'Escape', BackSpace: 'BSpace', Delete: 'DC',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Home: 'Home', End: 'End', PageUp: 'PPage', PageDown: 'NPage', Interrupt: 'C-c',
+  'Ctrl+A': 'C-a', 'Ctrl+D': 'C-d', 'Ctrl+E': 'C-e', 'Ctrl+L': 'C-l', 'Ctrl+O': 'C-o',
+  'Ctrl+R': 'C-r', 'Ctrl+T': 'C-t', 'Ctrl+U': 'C-u', 'Ctrl+W': 'C-w', 'Ctrl+Z': 'C-z',
+});
 
 function fields(value, names, code) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !names.includes(key))) throw new ApiError(400, code);
@@ -37,6 +52,12 @@ function dimensions(value, extra = []) {
 
 function validText(text) {
   return typeof text === 'string' && text.length >= 1 && text.length <= 4000 && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(text) && text.isWellFormed();
+}
+
+// Typed input may hold line breaks (a request of several lines for an
+// agent); every other control character is still refused.
+function validInput(text) {
+  return typeof text === 'string' && text.length >= 1 && text.length <= TERMINAL_INPUT_LIMIT && !/[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]/u.test(text) && text.isWellFormed();
 }
 
 // What a new session starts: which agent, an optional first request, and an
@@ -57,8 +78,23 @@ function sessionStart(value) {
   return { agent, prompt, project: value.project };
 }
 
+// A capture taken with -e carries tmux's own SGR codes and, since tmux 3.4,
+// OSC 8 hyperlinks. Only SGR (colours and attributes) reaches the phone; every
+// other escape sequence, string command or control is removed whole, so the
+// phone's renderer never sees cursor movement, titles, clipboard or links.
+const ansiToken = /\x1b\[([0-9;:]{0,64})m|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]?|\x1b[\]PX^_][^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?|\x9b[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]?|[\x90\x98\x9d\x9e\x9f][^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?|\x1b[\x20-\x2f]*[\x30-\x7e]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+export function sanitizeAnsi(text) {
+  return text.replace(ansiToken, (match, sgr) => sgr === undefined ? '' : match);
+}
+
 function validateId(id) {
   if (typeof id !== 'string' || !idPattern.test(id)) throw new ApiError(404, 'TERMINAL_NOT_FOUND');
+}
+
+function parseCursor(fields) {
+  const [x, y, visible, alternate, extra] = fields;
+  if (extra !== undefined || !/^\d+$/.test(x || '') || !/^\d+$/.test(y || '') || !/^[01]$/.test(visible || '') || !/^[01]$/.test(alternate || '')) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+  return { cursor: { x: Number(x), y: Number(y), visible: visible === '1' }, alternate: alternate === '1' };
 }
 
 function parsePanes(text) {
@@ -90,6 +126,7 @@ export function createTerminals(dataDir, options = {}) {
   const runner = options.runner || runCommand;
   const exists = options.exists || commandExists;
   const probe = options.probe || socketAlive;
+  const launch = options.launch || launchDetached;
   const env = { ...(options.env || process.env) };
   delete env.TMUX; delete env.TMUX_PANE;
   for (const name of Object.keys(env)) if (name.startsWith('OMARCHY_REMOTE_')) delete env[name];
@@ -130,10 +167,10 @@ export function createTerminals(dataDir, options = {}) {
     await rename(temporary, registryPath);
   }
 
-  async function command(args, input) {
+  async function command(args, input, maxBuffer = 512 * 1024) {
     if (stopping) throw new ApiError(503, 'SERVER_RESTARTING');
     try {
-      return await runner('tmux', ['-u', '-S', socketPath, '-f', '/dev/null', ...args], { env, input, timeout: 2500, maxBuffer: 512 * 1024, signal: controller.signal });
+      return await runner('tmux', ['-u', '-S', socketPath, '-f', '/dev/null', ...args], { env, input, timeout: 2500, maxBuffer, signal: controller.signal });
     } catch { throw new ApiError(503, stopping ? 'SERVER_RESTARTING' : 'TERMINAL_UNAVAILABLE'); }
   }
 
@@ -210,20 +247,72 @@ export function createTerminals(dataDir, options = {}) {
     // contain only fixed words and verified pane IDs, never input text.
     const output = await command(['if-shell', '-F', '-t', item.paneId, '#{pane_in_mode}', 'display-message -p PONTE_INPUT_BLOCKED', args.join(' ')]);
     if (output.trim() === 'PONTE_INPUT_BLOCKED') throw new ApiError(409, 'TERMINAL_IN_COPY_MODE');
+    if (output.trim() === 'PONTE_NO_BRACKETED_PASTE') throw new ApiError(409, 'MULTILINE_NOT_SUPPORTED');
     if (output.trim()) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
   }
 
   async function pasteText(item, text, enter) {
+    // One character is typed as a key, not pasted: a TUI in bracketed-paste
+    // mode takes a pasted "1" as text, never as the answer to its 1/2/3 menu.
+    // Its UTF-8 bytes go as hex words, so no input text reaches tmux parsing.
+    if ([...text].length === 1 && text !== '\n') {
+      await sendToPane(item, ['send-keys', '-H', '-t', item.paneId, ...[...Buffer.from(text)].map(byte => byte.toString(16).padStart(2, '0'))]);
+      if (enter) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
+      return;
+    }
     // Serialized operations reuse one private buffer, so an interrupted
     // client cannot accumulate unbounded named tmux buffers.
     const buffer = 'ponte_input';
     try {
       await command(['load-buffer', '-b', buffer, '-'], text);
-      await sendToPane(item, ['paste-buffer', '-d', '-p', '-r', '-b', buffer, '-t', item.paneId]);
+      const paste = ['paste-buffer', '-d', '-p', '-r', '-b', buffer, '-t', item.paneId];
+      // Several lines go only to a program that asked for bracketed paste right
+      // now (a prompt reading input): it receives them as one paste. Without
+      // it a shell would run each line as it arrives. The flag is tested in
+      // the same tmux command as the paste, so it cannot change in between.
+      // (Quoted: in a tmux command string an unquoted # starts a comment.)
+      if (text.includes('\n')) await sendToPane(item, ['if-shell', '-F', '-t', item.paneId, "'#{bracket_paste_flag}'", '{', ...paste, '}', '{', 'display-message', '-p', 'PONTE_NO_BRACKETED_PASTE', '}']);
+      else await sendToPane(item, paste);
       if (enter) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
     }
     catch (error) { await command(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
   }
+  // The coloured read: one tmux call checks the pane, reads the cursor and
+  // captures with -e. The ansi text is cut at a line boundary; tmux closes
+  // every line's attributes itself, so no line depends on an earlier one.
+  function readAnsi(id, since) {
+    return run(async available => {
+      if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+      let item = registry.find(entry => entry.id === id), result;
+      const capture = async paneId => {
+        const output = await command(['display-message', '-p', '-t', paneId, cursorFormat, ';', 'capture-pane', '-p', '-e', '-t', paneId, '-S', '-1000'], undefined, 4 * 1024 * 1024);
+        const newline = output.indexOf('\n');
+        if (newline < 0) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+        const fields = output.slice(0, newline).split('\t');
+        const [pane, extra] = parsePanes(fields.slice(0, 6).join('\t'));
+        return { pane, extra, ...parseCursor(fields.slice(6)), capture: output.slice(newline + 1) };
+      };
+      const matches = (read, entry) => !read.extra && read.pane.name === `ponte_${id}` && read.pane.paneId === entry.paneId && read.pane.windowId === entry.windowId;
+      if (item) {
+        try { const read = await capture(item.paneId); if (matches(read, item)) result = read; } catch {}
+      }
+      if (!result) {
+        item = await target(id, available, false);
+        result = await capture(item.paneId);
+        if (!matches(result, item)) throw new ApiError(409, 'TERMINAL_CHANGED');
+      }
+      item = { ...item, cols: result.pane.cols, rows: result.pane.rows, inMode: result.pane.inMode };
+      const bytes = Buffer.from(sanitizeAnsi(result.capture));
+      const offset = bytes.length > TERMINAL_ANSI_LIMIT ? bytes.indexOf(0x0a, bytes.length - TERMINAL_ANSI_LIMIT - 1) + 1 : 0;
+      const text = offset > 0 ? bytes.subarray(offset).toString('utf8') : offset === 0 && bytes.length <= TERMINAL_ANSI_LIMIT ? bytes.toString('utf8') : '';
+      const { cursor, alternate } = result;
+      // The hash covers the cursor too: a cursor that moved is a change.
+      const hash = createHash('sha256').update(`${text}\u0000${cursor.x},${cursor.y},${cursor.visible ? 1 : 0},${alternate ? 1 : 0}`).digest('base64url').slice(0, 22);
+      const answer = { ...summary(item), cursor, alternate, hash };
+      return since === hash ? { ...answer, unchanged: true } : { ...answer, text };
+    }, 'read');
+  }
+
   return {
     // The most recently changed project folders, by name only, for the phone
     // to offer as the new session's folder. It never needs tmux.
@@ -278,9 +367,12 @@ export function createTerminals(dataDir, options = {}) {
     },
     // `since` is the hash of the text the phone already shows: when nothing
     // changed only the hash comes back, not up to 64 KiB of the same text.
+    // format=ansi keeps the colours (SGR only) and adds the cursor and the
+    // alternate-screen flag; without it the answer is the plain text as always.
     read(id, options = {}) {
       validateId(id);
       const since = typeof options.since === 'string' && hashPattern.test(options.since) ? options.since : null;
+      if (options.format === 'ansi') return readAnsi(id, since);
       return run(async available => {
         if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
         let item = registry.find(entry => entry.id === id), capture;
@@ -321,7 +413,7 @@ export function createTerminals(dataDir, options = {}) {
       if (textInput === keyInput) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
       if (keyInput && Object.hasOwn(value, 'enter')) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
       if (Object.hasOwn(value, 'enter') && typeof value.enter !== 'boolean') throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
-      if (textInput && !validText(value.text)) throw new ApiError(400, 'INVALID_TEXT');
+      if (textInput && !validInput(value.text)) throw new ApiError(400, 'TERMINAL_TEXT_INVALID');
       if (keyInput && (typeof value.key !== 'string' || !Object.hasOwn(keys, value.key))) throw new ApiError(400, 'KEY_NOT_ALLOWED');
       return run(async available => {
         const item = await target(id, available);
@@ -340,6 +432,22 @@ export function createTerminals(dataDir, options = {}) {
         return { ok: true };
       });
     },
+    // "Continue on the PC": a terminal window on the owner's desktop attached
+    // to this same session. Omarchy's own launch path (uwsm-app puts it in its
+    // own scope, so it outlives a restart of this service); the attach command
+    // is argv, never shell text. The window then follows the PC terminal's
+    // size (window-size latest) until the phone resizes it again.
+    open(id) {
+      validateId(id);
+      return run(async available => {
+        const item = await target(id, available);
+        const locked = await runner('omarchy-shell', ['lock', 'isLocked'], { env, timeout: 2500 }).then(out => String(out).trim() === 'true', () => false);
+        if (locked) throw new ApiError(423, 'TERMINAL_PC_LOCKED');
+        await command(['set-option', '-w', '-t', item.windowId, 'window-size', 'latest']);
+        await launch('uwsm-app', ['--', 'xdg-terminal-exec', 'env', '-u', 'TMUX', '-u', 'TMUX_PANE', 'tmux', '-u', '-S', socketPath, '-f', '/dev/null', 'attach-session', '-t', `=ponte_${id}`], env);
+        return { ok: true };
+      });
+    },
     remove(id) {
       validateId(id);
       return run(async available => {
@@ -351,4 +459,18 @@ export function createTerminals(dataDir, options = {}) {
     },
     close() { stopping = true; controller.abort(); return Promise.all([tail, readTail]); },
   };
+}
+
+// Starts a desktop program that keeps running on its own. A launcher that
+// fails at once (missing, no session bus) is reported; one still running
+// after a short wait is left alone.
+function launchDetached(command, args, env) {
+  return new Promise((resolve, reject) => {
+    const fail = () => reject(new ApiError(503, 'TERMINAL_OPEN_FAILED'));
+    let child;
+    try { child = spawn(command, args, { env, detached: true, stdio: 'ignore', shell: false }); } catch { fail(); return; }
+    const timer = setTimeout(() => { child.removeAllListeners(); child.unref(); resolve(); }, 1500);
+    child.once('error', () => { clearTimeout(timer); fail(); });
+    child.once('exit', code => { clearTimeout(timer); if (code === 0) resolve(); else fail(); });
+  });
 }

@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Fake omarchy-shell: the lab's lock screen lives in state.json ('locked'),
+so a lab session never reads or changes the real PC's lock."""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _lab
+args = sys.argv[1:]
+_lab.log('omarchy-shell', args)
+with _lab.locked():
+    state = _lab.load()
+    if args[:2] == ['lock', 'isLocked']: print('true' if state.get('locked') else 'false')
+    elif args[:1] == ['lock']: state['locked'] = False; _lab.save(state)
+    else: sys.exit(1)

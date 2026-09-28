@@ -114,6 +114,16 @@ function json(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
+// A coloured terminal read can be 100+ KiB of repeated escapes polled every
+// few hundred ms; gzip (fast level) brings it to a few KiB over Tailscale.
+async function compressedJson(req, res, status, value) {
+  const body = Buffer.from(JSON.stringify(value));
+  if (body.length < 8192 || !/(^|,)\s*gzip\s*(;|,|$)/i.test(String(req.headers['accept-encoding'] || ''))) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', Vary: 'Accept-Encoding' }); res.end(body); return; }
+  const gzipped = await gzipAsync(body, { level: 1 });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+  res.end(gzipped);
+}
+
 function readBody(req, maxBytes, timeout = 15000) {
   if (req.headers['content-length'] && (!/^\d+$/.test(req.headers['content-length']) || Number(req.headers['content-length']) > maxBytes)) {
     const error = new ApiError(413, 'PAYLOAD_TOO_LARGE'); error.close = true; throw error;
@@ -328,17 +338,18 @@ export async function createApp(options = {}) {
         }); return;
       }
       if (pathname === '/api/terminals' && req.method === 'GET') { json(res, 200, query.has('projects') ? await terminals.projects() : await terminals.list()); return; }
-      const terminalRoute = pathname.match(/^\/api\/terminals\/([^/]+)(?:\/(input|resize))?$/);
+      const terminalRoute = pathname.match(/^\/api\/terminals\/([^/]+)(?:\/(input|resize|open))?$/);
       if (req.method === 'POST' && (pathname === '/api/terminals' || terminalRoute?.[2])) {
         if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
         await limits.only('body', 8, async () => {
-          const body = await readBody(req, 24 * 1024);
+          // Typed input may carry up to 16000 characters of several lines.
+          const body = await readBody(req, terminalRoute?.[2] === 'input' ? 72 * 1024 : 24 * 1024);
           let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
-          const result = terminalRoute ? await terminals[terminalRoute[2]](terminalRoute[1], value) : await terminals.create(value);
+          const result = !terminalRoute ? await terminals.create(value) : terminalRoute[2] === 'open' ? await terminals.open(terminalRoute[1], value) : await terminals[terminalRoute[2]](terminalRoute[1], value);
           json(res, terminalRoute ? 200 : 201, result);
         }); return;
       }
-      if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { json(res, 200, await terminals.read(terminalRoute[1], { since: query.get('since') || undefined })); return; }
+      if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { await compressedJson(req, res, 200, await terminals.read(terminalRoute[1], { since: query.get('since') || undefined, format: query.get('format') || undefined })); return; }
       if (terminalRoute && !terminalRoute[2] && req.method === 'DELETE') { json(res, 200, await terminals.remove(terminalRoute[1])); return; }
       // Agents and terminals running on the PC: read-only listing and
       // transcript; a reply types into that agent's own session or window.
