@@ -1460,11 +1460,25 @@ let agentTranscriptTimer;
 let agentReplyBusy = false;
 let agentListHtml = '';
 let agentTranscriptHtml = '';
+// Automated agents (codex exec, claude -p) are hidden unless asked for, and a
+// working agent that starts waiting or finishes raises a small notice. Outside
+// Terminals the list is read every AGENT_WATCH_MS only while the app is in
+// front and notices are on; Terminals keeps its own faster read.
+const AGENT_WATCH_MS = 10000;
+let agentShowAuto = savedPreference('ponte-agents-auto') === 'show';
+let agentNoticesOn = savedPreference('ponte-agent-notices') !== 'off';
+let agentWatchTimer;
+let agentLastStates = null;
+let agentLastStatesAt = 0;
+const agentRepliedAt = {};
+let agentNoticeId = '';
+let agentNoticeTimer;
 const agentKinds = {claude:'Claude',codex:'Codex',grok:'Grok',opencode:'OpenCode',gemini:'Gemini',pi:'Pi',aider:'Aider',crush:'Crush',goose:'Goose',amp:'Amp',qwen:'Qwen','cursor-agent':'Cursor'};
 function agentKindLabel(kind) { return agentKinds[kind] || t('Terminal'); }
 function agentStateLabel(item) {
   if (item.state === 'working') return t('Trabalhando');
   if (item.state === 'waiting') return t('Esperando você');
+  if (item.state === 'ready') return t('Pronto');
   if (item.state === 'idle') return t('Parado');
   return t('Aberto');
 }
@@ -1493,8 +1507,10 @@ function renderDesktopTerminals() {
   if (!list) return;
   const cards = [];
   const linked = {};
+  const automated = (agentItems || []).filter(item => item.headless).length;
+  const shown = agentVisibleItems();
   if (agentItems) {
-    agentItems.forEach(item => {
+    shown.forEach(item => {
       if (item.where && item.where.type === 'ponte') linked[item.where.session] = true;
       if (item.kind === 'terminal') cards.push(agentCard(`data-preview-window="${escaped(item.where.address)}"`, t('Terminal'), item.title, 'terminal', t('Aberto'), `${agentWhere(item)} · ${t('Focar e ver no monitor')}`));
       else cards.push(agentCard(`data-agent-id="${escaped(item.id)}"`, agentKindLabel(item.kind), item.title, item.state, agentStateLabel(item), agentSummary(item)));
@@ -1506,8 +1522,13 @@ function renderDesktopTerminals() {
   terminalSessions.forEach(session => {
     if (!linked[session.id]) cards.push(agentCard(`data-ponte-session="${escaped(session.id)}"`, t('Terminal'), session.title || t('Terminal'), 'terminal', t('Aberto'), t('Sessão do Ponte')));
   });
-  const working = (agentItems || []).filter(item => item.state === 'working' || item.state === 'waiting').length;
+  const working = shown.filter(item => item.state === 'working' || item.state === 'waiting').length;
   $('#agent-count').textContent = agentItems ? t('{count} ATIVOS',{count:working}) : '';
+  const autoButton = $('#agent-show-auto');
+  autoButton.hidden = !agentItems;
+  autoButton.textContent = t('Mostrar automáticos ({count})',{count:automated});
+  autoButton.setAttribute('aria-pressed',String(agentShowAuto));
+  agentNoticesRender();
   const html = cards.length ? cards.join('') : `<p class="hint">${h('Nenhum agente ou terminal aberto.')}</p>`;
   if (agentListHtml !== html) { list.innerHTML = html; agentListHtml = html; }
   if (agentOpenId) renderAgentHeader();
@@ -1519,6 +1540,7 @@ async function readAgents(generation) {
     const listing = await (await api('/agents',{timeout:8000})).json();
     if (generation !== terminalGeneration) return;
     agentItems = Array.isArray(listing.items) ? listing.items : [];
+    agentNoticeCheck(agentItems);
   } catch (error) {
     if (generation !== terminalGeneration) return;
     agentItems = null;
@@ -1526,6 +1548,76 @@ async function readAgents(generation) {
   renderDesktopTerminals();
   if (generation === terminalGeneration && terminalVisible()) agentTimer = setTimeout(() => readAgents(generation), 3000);
 }
+function agentVisibleItems() { return (agentItems || []).filter(item => agentShowAuto || !item.headless); }
+function agentNoticesRender() { $('#agent-notices').setAttribute('aria-pressed',String(agentNoticesOn)); }
+// Compares with the previous read. The first read, or one after a long gap
+// (app paused, reads failing), only sets the baseline, so a change that
+// happened while nobody was looking never pops up late.
+function agentNoticeCheck(items) {
+  const now = Date.now();
+  const previous = agentLastStates && now - agentLastStatesAt < 60000 ? agentLastStates : null;
+  const next = {};
+  let notice = null;
+  items.forEach(item => {
+    next[item.id] = item.state;
+    if (notice || !previous || item.headless || previous[item.id] !== 'working') return;
+    if (item.state !== 'waiting' && item.state !== 'ready') return;
+    if (now - (agentRepliedAt[item.id] || 0) < 5000) return;
+    notice = item;
+  });
+  agentLastStates = next; agentLastStatesAt = now;
+  if (notice && agentNoticesOn) agentNotify(notice);
+}
+function agentNotify(item) {
+  // Already reading that agent: the open conversation shows the change.
+  if (agentOpenId === item.id && $('#agent-dialog').open) return;
+  agentNoticeId = item.id;
+  $('#agent-notice-title').textContent = item.state === 'waiting' ? t('{title} precisa de você',{title:item.title}) : t('{title} terminou',{title:item.title});
+  $('#agent-notice-detail').textContent = item.state === 'waiting' && item.waitingFor ? item.waitingFor : '';
+  $('#agent-notice').hidden = false;
+  clearTimeout(agentNoticeTimer);
+  agentNoticeTimer = setTimeout(agentNoticeHide, 12000);
+  try { if (navigator.vibrate) navigator.vibrate(60); } catch (error) {}
+  if (currentPage !== 'terminais') $('#nav-agent-dot').hidden = false;
+}
+function agentNoticeHide() { clearTimeout(agentNoticeTimer); $('#agent-notice').hidden = true; }
+function agentWatchVisible() { return !!token && !document.hidden && !nativePaused && agentNoticesOn && !terminalVisible(); }
+function agentWatchSchedule(generation) {
+  clearTimeout(agentWatchTimer);
+  if (!agentWatchVisible() || generation !== terminalGeneration) return;
+  agentWatchTimer = setTimeout(() => agentWatch(generation), Math.max(0, AGENT_WATCH_MS - (Date.now() - agentLastStatesAt)));
+}
+async function agentWatch(generation) {
+  clearTimeout(agentWatchTimer);
+  if (!agentWatchVisible() || generation !== terminalGeneration) return;
+  let failed = false;
+  try {
+    const listing = await (await api('/agents',{timeout:8000})).json();
+    if (generation !== terminalGeneration) return;
+    agentItems = Array.isArray(listing.items) ? listing.items : [];
+    agentNoticeCheck(agentItems);
+    if (agentOpenId) renderAgentHeader();
+  } catch (error) { failed = true; }
+  // An older native shell blocks this route: ask again rarely.
+  if (generation === terminalGeneration && agentWatchVisible()) agentWatchTimer = setTimeout(() => agentWatch(generation), failed ? 60000 : AGENT_WATCH_MS);
+}
+$('#agent-notice').addEventListener('click', () => {
+  const id = agentNoticeId;
+  agentNoticeHide();
+  if (id && (agentItems || []).some(item => item.id === id)) openAgent(id);
+});
+$('#agent-show-auto').addEventListener('click', () => {
+  agentShowAuto = !agentShowAuto;
+  savePreference('ponte-agents-auto',agentShowAuto ? 'show' : 'hide');
+  renderDesktopTerminals();
+});
+$('#agent-notices').addEventListener('click', () => {
+  agentNoticesOn = !agentNoticesOn;
+  savePreference('ponte-agent-notices',agentNoticesOn ? 'on' : 'off');
+  agentNoticesRender();
+  if (!agentNoticesOn) agentNoticeHide();
+});
+agentNoticesRender();
 function agentOpenItem() { return (agentItems || []).filter(item => item.id === agentOpenId)[0] || null; }
 function renderAgentHeader() {
   const item = agentOpenItem();
@@ -1538,7 +1630,7 @@ function renderAgentHeader() {
   $('#agent-open-session').hidden = where.type !== 'ponte';
   $('#agent-reply-form').hidden = !item.canReply;
   $('#agent-readonly').hidden = !!item.canReply;
-  $('#agent-readonly').textContent = where.type === 'maestri' ? t('Só leitura aqui: responda pelo canvas do Maestri.') : t('Só leitura: este agente não tem janela de terminal nem sessão do Ponte para digitar.');
+  $('#agent-readonly').textContent = where.type === 'maestri' ? t('Só leitura aqui: responda pelo canvas do Maestri. O Maestri não aceita mensagem de fora dele.') : t('Só leitura: este agente não tem janela de terminal nem sessão do Ponte para digitar.');
   $('#agent-reply-send').textContent = where.type === 'ponte' ? t('Enviar para a sessão') : t('Responder no PC');
   $('#agent-reply-hint').textContent = where.type === 'ponte' ? t('Digita na sessão do Ponte e aperta Enter, sem mudar o foco do PC.') : t('Atenção: traz esta janela para a frente no PC e digita o texto + Enter nela.');
   $('#agent-reply-send').disabled = agentReplyBusy;
@@ -1606,8 +1698,10 @@ $('#agent-reply-form').addEventListener('submit', async event => {
   const text = box.value.replace(/[\r\n\t]+/g, ' ').trim();
   if (!id || !text || agentReplyBusy || !connected) return;
   agentReplyBusy = true; renderAgentHeader();
+  agentRepliedAt[id] = Date.now();
   try {
     await api(`/agents/${encodeURIComponent(id)}/reply`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    agentRepliedAt[id] = Date.now();
     if (box.value.replace(/[\r\n\t]+/g, ' ').trim() === text) box.value = '';
     $('#agent-reply-status').textContent = t('Enviado para o agente.');
     setTimeout(() => readAgentTranscript(id), 1200);
@@ -1723,7 +1817,8 @@ function updateTerminalNavigation() {
   clearTimeout(terminalTimer);
   const generation = ++terminalGeneration;
   terminalControls();
-  if (terminalVisible()) { renderDesktopTerminals(); readTerminals(generation); readAgents(generation); }
+  if (terminalVisible()) { $('#nav-agent-dot').hidden = true; renderDesktopTerminals(); readTerminals(generation); readAgents(generation); }
+  agentWatchSchedule(generation);
 }
 async function terminalMutation(path,body,method = 'POST') {
   if (terminalBusy || !connected || !token) return null;
