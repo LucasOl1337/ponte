@@ -2,6 +2,36 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.22 (2026-09-28)
+
+A Dev tab for developing from the phone: an agent terminal on the PC that reads and types like the real thing. Needs the new APK (versionCode 19) only for "Open on the PC"; the rest reloads with the page.
+
+- **Dev tab.** A sixth button opens one Ponte tmux session full screen, running Claude,
+  Codex or a shell in a `~/Projects` folder. It shows colours and the cursor (SGR
+  16/256/truecolor). The session is sized to the phone's character grid instead of
+  40×24; A−/A+ changes the font and the badge shows columns×rows. A key row carries
+  what Claude Code needs: Esc, ⇧Tab, arrows, Enter, ^C, 1/2/3, /, @, !, PgUp/PgDn,
+  ^O/^R/^D/^L, with a single character sent as a key so permission menus answer.
+  The composer grows to five lines and has Send, Paste, dictation and image attach.
+  A request of several lines goes as one bracketed paste only when the pane is
+  waiting for pasted text; a busy shell refuses it and nothing is typed. Reads poll
+  every 350 ms right after input, slow down to 3 s when nothing changes, and stop
+  outside the tab. Large reads are gzipped (1000 coloured lines ≈ 100 KiB → 3.5 KiB).
+- **Open on the PC.** It attaches a terminal window on the desktop to the same session
+  through Omarchy's own launcher (`uwsm-app` + `xdg-terminal-exec`). It is refused
+  while the PC is locked. The PC window then sets the size; the phone takes it back
+  on its own layout changes or a tap on "PC 120×40 · fit", never on a read.
+- New sessions from Home and Terminals also start at the measured size.
+- **Lab.** A fake Claude Code TUI (colours, a 1/2/3 permission menu, ⇧Tab modes,
+  bracketed paste). Fake `uwsm-app`, `omarchy-shell` and `omarchy-system-lock` mean a
+  lab session never opens windows on, reads or changes the real PC's lock.
+
+Verified with `npm test` (256 pass, 1 skip), `android/test.sh` (proxy 193 checks) and
+a mobile-viewport browser against the lab's fake Claude in portrait, landscape and
+with the keyboard open. That run answered the permission menu from the key row,
+cycled modes with ⇧Tab, sent a three-line request as one paste and showed a busy
+shell refusing one. The real phone was checked after install.
+
 ## 0.1.0-alpha.21 (2026-09-28)
 
 A round built from the owner's six-point mission: see and answer every agent from the phone, start agent work from Home, scroll with the phone, a reliable Smart sleep, and screenshots from the phone to the PC. Plus a lighter app. Needs the new APK (versionCode 18) for agents, images and compression; everything else reloads with the page.
