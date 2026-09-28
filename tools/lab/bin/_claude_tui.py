@@ -60,8 +60,8 @@ class Tui:
         self.interrupts = 0
         self.pasted = 0
         self.say(ORANGE + '╭' + '─' * (self.width() - 2) + '╮' + RESET)
-        self.say(ORANGE + '│' + RESET + BOLD + ' ✻ Welcome to Claude Code' + RESET + GREY + ' (lab, no model)' + RESET)
-        self.say(ORANGE + '│' + RESET + GREY + '   cwd: ' + os.getcwd() + RESET)
+        self.say(self.boxed(ORANGE, BOLD + ' ✻ Welcome to Claude Code' + RESET + GREY + ' (lab, no model)' + RESET))
+        self.say(self.boxed(ORANGE, GREY + '   cwd: ' + os.getcwd() + RESET))
         self.say(ORANGE + '╰' + '─' * (self.width() - 2) + '╯' + RESET)
         if request: self.submit(request)
         self.draw()
@@ -69,6 +69,11 @@ class Tui:
     def width(self):
         try: return max(20, os.get_terminal_size(1).columns)
         except OSError: return 80
+
+    def boxed(self, colour, content):
+        # A box row with both sides, like Claude Code: the right side sits in the last column.
+        room = self.width() - 2 - len(re.sub(r'\x1b\[[0-9;:]*m', '', content))
+        return colour + '│' + RESET + content + RESET + (' ' * room + colour + '│' + RESET if room >= 0 else '')
 
     def fit(self, line):
         # Wrap by characters without counting SGR codes, so the footer height stays exact.
@@ -113,7 +118,7 @@ class Tui:
                 cell = row[at] if at < len(row) else ' '
                 shown = row[:at] + INVERSE + cell + RESET + row[at + 1:]
             else: shown = row
-            lines.append(GREY + '│' + RESET + ' ' + prefix + shown)
+            lines.append(self.boxed(GREY, ' ' + prefix + shown))
             offset = end + 1
         lines.append(GREY + '╰' + '─' * (width - 2) + '╯' + RESET)
         lines.append('  ' + MODES[self.mode][1] + (GREY + '  · detail on' + RESET if self.detail else ''))

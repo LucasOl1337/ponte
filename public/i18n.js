@@ -590,7 +590,32 @@
   "Abre uma sessão de texto no PC, sem mexer no foco, e leva você direto pra ela.": "Opens a text session on the PC without changing focus and takes you straight to it.",
   "Abrindo {title}…": "Opening {title}…",
   "PASTA": "FOLDER",
-  "Pasta pessoal (~)": "Home folder (~)"
+  "Pasta pessoal (~)": "Home folder (~)",
+  "Sessão de desenvolvimento": "Development session",
+  "Nenhuma sessão": "No session",
+  "Abrir no PC": "Open on the PC",
+  "Texto menor": "Smaller text",
+  "Texto maior": "Larger text",
+  "Criar": "Create",
+  "Saída da sessão": "Session output",
+  "Roda no PC, na pasta do projeto, como se você tivesse aberto lá.": "Runs on the PC, in the project folder, as if you had opened it there.",
+  "PC {size} · ajustar": "PC {size} · fit",
+  "{size} · ajustar": "{size} · fit",
+  "Ajustar a sessão ao celular": "Fit the session to the phone",
+  "Atual · {cols} colunas": "Current · {cols} columns",
+  "↓ ao vivo": "↓ live",
+  "Teclas do agente": "Agent keys",
+  "Mensagem para a sessão": "Message to the session",
+  "Fale com o agente…": "Talk to the agent…",
+  "Ditar": "Dictate",
+  "Anexar imagem": "Attach image",
+  "Desenvolvimento": "Development",
+  "Abrir esta sessão no PC?": "Open this session on the PC?",
+  "Abre uma janela de terminal na tela do PC, ligada a esta mesma sessão. O celular continua conectado.": "Opens a terminal window on the PC screen, attached to this same session. The phone stays connected.",
+  "Novo Claude em {project}": "New Claude in {project}",
+  "Texto longo demais: até {max} caracteres.": "Text too long: up to {max} characters.",
+  "Imagem anexada: o caminho foi colado na sessão.": "Image attached: its path was pasted into the session.",
+  "Aberta numa janela do PC.": "Opened in a PC window."
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
