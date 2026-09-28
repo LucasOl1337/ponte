@@ -168,6 +168,7 @@ let queuedChunks = [];
 let waitingKey = true;
 let hardware = '';
 let decoderFailures = 0;
+let hardwareFailed = false;   // for the rest of the page's life
 const inflight = new Map();    // seq → { sendTime, recvAt }
 let canvasContext = null;
 let sampler = null;
@@ -345,7 +346,7 @@ function closeDecoder() {
 async function configureDecoder(codec) {
   closeDecoder();
   const base = { codec, optimizeForLatency: true };
-  let config = { ...base, hardwareAcceleration: 'prefer-hardware' };
+  let config = { ...base, hardwareAcceleration: hardwareFailed ? 'prefer-software' : 'prefer-hardware' };
   const attempt = configuring = (async () => {
     try { if (!(await VideoDecoder.isConfigSupported(config)).supported) config = { ...base, hardwareAcceleration: 'prefer-software' }; }
     catch { config = { ...base, hardwareAcceleration: 'prefer-software' }; }
@@ -372,7 +373,7 @@ function startDecoder(config) {
       if (decoder !== current) return;
       decoder = null;
       decoderFailures++;
-      if (decoderConfig.hardwareAcceleration === 'prefer-hardware') startDecoder({ ...decoderConfig, hardwareAcceleration: 'prefer-software' });
+      if (decoderConfig.hardwareAcceleration === 'prefer-hardware') { hardwareFailed = true; startDecoder({ ...decoderConfig, hardwareAcceleration: 'prefer-software' }); }
       else if (decoderFailures <= 3) startDecoder(decoderConfig);
       else status(t('O decodificador de vídeo falhou: {error}', { error: error?.message || error }));
     },

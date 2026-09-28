@@ -322,17 +322,18 @@ test('the decoder: annex B without description, hardware preferred with fallback
   h.decoder.error(new Error('Decoding error.'));
   assert.equal(h.decoder.config.hardwareAcceleration, 'prefer-software');
   assert.equal(h.run('hardware'), 'sw');
+  h.run("configureDecoder('avc1.640034')"); await flush();
+  assert.equal(h.decoder.config.hardwareAcceleration, 'prefer-software', 'a new stream does not retry the broken hardware');
   h.socket.message(unit(false, 7));
   assert.equal(h.decoder.chunks.length, 0, 'waits for a keyframe');
   h.socket.message(unit(true, 8));
   assert.equal(h.decoder.chunks.length, 1);
   // Software errors restart the decoder a few times before giving up.
-  h.decoder.error(new Error('Decoding error.'));
-  h.decoder.error(new Error('Decoding error.'));
-  assert.equal(FakeDecoder.all.length, 4, 'restarted twice more (four failures without a frame in all)');
+  for (let i = 0; i < 3; i++) h.decoder.error(new Error('Decoding error.'));
+  assert.equal(FakeDecoder.all.length, 6, 'three restarts without a decoded frame');
   assert.equal(h.el('#rd-status').textContent, '');
   h.decoder.error(new Error('Decoding error.'));
-  assert.equal(FakeDecoder.all.length, 4);
+  assert.equal(FakeDecoder.all.length, 6);
   assert.match(h.el('#rd-status').textContent, /video decoder failed: Decoding error/);
 });
 
