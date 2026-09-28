@@ -45,7 +45,7 @@ A round built from the owner's six-point mission: see and answer every agent fro
   JPEG quality 40. An idle terminal costs 29 tmux spawns and 29 KB a minute instead of
   219 spawns and 4.4 MB; typed input no longer waits behind output polling. The page
   stops polling while the Android app is paused.
-- Verified: NODE_TESTS Node tests, the native checks in `android/test.sh`, CDP
+- Verified: 233 Node tests (1 optional systemd test skipped), 188 native proxy checks and the rest of `android/test.sh`, CDP
   multi-touch and emulator runs against the lab for each feature, and on this PC a real
   Smart sleep and restore through the new controller (every light reported ok, 18 s and
   8 s). Physical confirmation of the lights and a human pick inside Android's file
