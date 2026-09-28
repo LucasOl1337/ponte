@@ -28,7 +28,15 @@ const projectPattern = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 // program and the prompt are "$@", never parsed as shell text. When the agent
 // exits, the pane falls back to the user's login shell instead of vanishing.
 const agentLauncher = ['/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent'];
-const keys = Object.freeze({ Enter: 'Enter', Tab: 'Tab', Escape: 'Escape', BackSpace: 'BSpace', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Interrupt: 'C-c' });
+// Stable key names for the phone, mapped to tmux key names. The keys Claude
+// Code and a shell use: Shift+Tab cycles Claude's mode, Ctrl+O/R/T its views.
+const keys = Object.freeze({
+  Enter: 'Enter', Tab: 'Tab', ShiftTab: 'BTab', Escape: 'Escape', BackSpace: 'BSpace', Delete: 'DC',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Home: 'Home', End: 'End', PageUp: 'PPage', PageDown: 'NPage', Interrupt: 'C-c',
+  'Ctrl+A': 'C-a', 'Ctrl+D': 'C-d', 'Ctrl+E': 'C-e', 'Ctrl+L': 'C-l', 'Ctrl+O': 'C-o',
+  'Ctrl+R': 'C-r', 'Ctrl+T': 'C-t', 'Ctrl+U': 'C-u', 'Ctrl+W': 'C-w', 'Ctrl+Z': 'C-z',
+});
 
 function fields(value, names, code) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !names.includes(key))) throw new ApiError(400, code);
@@ -234,6 +242,14 @@ export function createTerminals(dataDir, options = {}) {
   }
 
   async function pasteText(item, text, enter) {
+    // One character is typed as a key, not pasted: a TUI in bracketed-paste
+    // mode takes a pasted "1" as text, never as the answer to its 1/2/3 menu.
+    // Its UTF-8 bytes go as hex words, so no input text reaches tmux parsing.
+    if ([...text].length === 1) {
+      await sendToPane(item, ['send-keys', '-H', '-t', item.paneId, ...[...Buffer.from(text)].map(byte => byte.toString(16).padStart(2, '0'))]);
+      if (enter) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
+      return;
+    }
     // Serialized operations reuse one private buffer, so an interrupted
     // client cannot accumulate unbounded named tmux buffers.
     const buffer = 'ponte_input';

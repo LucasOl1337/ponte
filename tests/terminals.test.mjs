@@ -334,6 +334,41 @@ test('format=ansi is bounded at a line boundary and a replaced pane is never rea
   assert.equal(mock.calls.slice(before).some(call => call.args.includes('capture-pane') && call.args.includes('%999')), false);
 });
 
+test('phone key names map to fixed tmux keys, and one typed character is sent as a key, never pasted', async t => {
+  const { mock, terminals } = await fixture(t);
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  const expected = {
+    Enter: 'Enter', Tab: 'Tab', ShiftTab: 'BTab', Escape: 'Escape', BackSpace: 'BSpace', Delete: 'DC',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End',
+    PageUp: 'PPage', PageDown: 'NPage', Interrupt: 'C-c', 'Ctrl+A': 'C-a', 'Ctrl+D': 'C-d', 'Ctrl+E': 'C-e',
+    'Ctrl+L': 'C-l', 'Ctrl+O': 'C-o', 'Ctrl+R': 'C-r', 'Ctrl+T': 'C-t', 'Ctrl+U': 'C-u', 'Ctrl+W': 'C-w', 'Ctrl+Z': 'C-z',
+  };
+  for (const [key, tmuxKey] of Object.entries(expected)) {
+    await terminals.input(session.id, { key });
+    const call = mock.calls.at(-1);
+    assert.deepEqual(call.args, ['send-keys', '-t', mock.panes[0].paneId, tmuxKey], key);
+    assert.equal(mock.calls.at(-2).args[0], 'if-shell', `${key} goes through the copy-mode guard`);
+  }
+  const before = mock.calls.length;
+  for (const key of ['Ctrl+C', 'Ctrl+B', 'C-a', 'BTab', 'F1', 'Ctrl+a', 'ctrl+a', 'Ctrl+A ', 'Shift+Tab']) assert.throws(() => terminals.input(session.id, { key }), { code: 'KEY_NOT_ALLOWED' }, key);
+  assert.equal(mock.calls.length, before);
+  // One character: its UTF-8 bytes as hex words, then Enter when asked; no buffer is loaded.
+  for (const [text, hex] of [['1', ['31']], ['/', ['2f']], [';', ['3b']], ['ç', ['c3', 'a7']], ['😀', ['f0', '9f', '98', '80']]]) {
+    const start = mock.calls.length;
+    await terminals.input(session.id, { text });
+    const sent = mock.calls.slice(start);
+    assert.equal(sent.some(call => call.args[0] === 'load-buffer' || call.args.includes('paste-buffer')), false, text);
+    assert.deepEqual(sent.at(-1).args, ['send-keys', '-H', '-t', mock.panes[0].paneId, ...hex], text);
+    assert.ok(/^[0-9a-f ]+$/.test(sent.at(-2).args.at(-1).split(' ').slice(4).join(' ')), 'the tmux command string holds only hex words');
+  }
+  let start = mock.calls.length;
+  await terminals.input(session.id, { text: '2', enter: true });
+  assert.deepEqual(mock.calls.slice(start).filter(call => call.args[0] === 'send-keys').map(call => call.args.slice(-1)[0]), ['32', 'Enter']);
+  start = mock.calls.length;
+  await terminals.input(session.id, { text: 'ok' });
+  assert.equal(mock.calls.slice(start).find(call => call.args[0] === 'load-buffer').options.input, 'ok', 'two characters are still pasted');
+});
+
 test('typed input never waits behind an output read that is still running', async t => {
   const { root, mock } = await fixture(t);
   let release, started;
