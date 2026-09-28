@@ -53,3 +53,38 @@ test('the lab fake Claude TUI draws in colour with a hidden cursor, asks for bra
   const request = (await lab.events()).find(event => event.event === 'request');
   assert.deepEqual([request.text, request.mode], ['corrige o bug', 'default']);
 });
+
+test('keys and one-character answers reach the fake Claude TUI as the keys Claude Code expects', async t => {
+  const lab = await labTui(t);
+  if (!lab) return;
+  const { terminals, session, until, events } = lab;
+  await until(read => plain(read.text).includes('Do you want to proceed?'), 'the permission menu');
+  // "1" typed through the text path answers the menu (a pasted "1" would not).
+  await terminals.input(session.id, { text: '1' });
+  await until(read => plain(read.text).includes('Bash(npm test)') && plain(read.text).includes('? for shortcuts'), 'the menu answered');
+  assert.deepEqual((await events()).filter(event => event.event === 'permission').map(event => event.choice), [1]);
+  await terminals.input(session.id, { key: 'ShiftTab' });
+  await until(read => plain(read.text).includes('accept edits on'), 'accept edits mode');
+  await terminals.input(session.id, { key: 'ShiftTab' });
+  await until(read => plain(read.text).includes('plan mode on'), 'plan mode');
+  // Every contract key arrives as the key the program recognises.
+  const keys = ['Tab', 'Escape', 'BackSpace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Ctrl+A', 'Ctrl+E', 'Ctrl+L', 'Ctrl+O', 'Ctrl+R', 'Ctrl+T', 'Ctrl+U', 'Ctrl+W'];
+  // One at a time, like a thumb: an Escape followed within milliseconds by
+  // another key reads as Alt+key in any terminal program.
+  const seen = async () => (await events()).filter(event => event.key).map(event => event.key);
+  for (const key of keys) {
+    const count = (await seen()).length;
+    await terminals.input(session.id, { key });
+    for (let i = 0; i < 80 && (await seen()).length === count; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(await seen(), ['1', 'ShiftTab', 'ShiftTab', ...keys]);
+  // In a second menu, the arrows and Enter choose too; Escape answers No.
+  await terminals.input(session.id, { key: 'ShiftTab' });
+  await terminals.input(session.id, { text: 'roda de novo', enter: true });
+  await until(read => plain(read.text).includes('Do you want to proceed?'), 'a second menu');
+  await terminals.input(session.id, { key: 'ArrowDown' });
+  await terminals.input(session.id, { key: 'ArrowDown' });
+  await terminals.input(session.id, { key: 'Enter' });
+  await until(read => plain(read.text).includes('recusado'), 'No chosen with the arrows');
+  assert.deepEqual((await events()).filter(event => event.event === 'permission').map(event => event.choice), [1, 3]);
+});
