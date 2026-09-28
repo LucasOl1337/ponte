@@ -27,6 +27,11 @@ function mockedTmux() {
       return runner(command, [...argv.slice(0, 5), ...args.at(-1).split(' ')], options);
     }
     if (args.includes('list-panes')) return panes.map(line).join('\n');
+    if (args[0] === 'display-message') {
+      const pane = panes.find(pane => pane.paneId === args[3]);
+      if (!pane) throw new Error("can't find pane");
+      return `${line(pane)}\n${args[5] === ';' && args[6] === 'capture-pane' ? capture : ''}`;
+    }
     if (args.includes('new-session')) {
       const pane = { name: args[args.indexOf('-s') + 1], windowId: `@${next}`, paneId: `%${next++}`, cols: +args[args.indexOf('-x') + 1], rows: +args[args.indexOf('-y') + 1] };
       panes.push(pane); return line(pane);
@@ -202,7 +207,7 @@ test('capture is plain and bounded; resize and deletion only target the verified
   const session = await terminals.create({ cols: 80, rows: 24 });
   mock.setCapture('x'.repeat(100000) + '\x00\x1b\x7f\x85END\n');
   const capture = await terminals.read(session.id);
-  assert.deepEqual(mock.calls.filter(call => call.args[0] === 'capture-pane').at(-1).args.slice(-2), ['-S', '-1000'], 'the reader gets the whole tmux history');
+  assert.deepEqual(mock.calls.filter(call => call.args.includes('capture-pane')).at(-1).args.slice(-2), ['-S', '-1000'], 'the reader gets the whole tmux history');
   assert.equal(Buffer.byteLength(capture.text), TERMINAL_TEXT_LIMIT);
   assert.ok(capture.text.endsWith('END\n'));
   assert.equal(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(capture.text), false);
@@ -217,10 +222,66 @@ test('capture is plain and bounded; resize and deletion only target the verified
   await assert.rejects(terminals.input(session.id, { key: 'Enter' }), { code: 'TERMINAL_CHANGED' });
   await assert.rejects(terminals.remove(session.id), { code: 'TERMINAL_CHANGED' });
   assert.ok(mock.calls.slice(before).every(call => call.args.includes('list-panes')));
+  const readBefore = mock.calls.length;
+  await assert.rejects(terminals.read(session.id), { code: 'TERMINAL_CHANGED' }, 'a replaced pane is never read');
+  assert.equal(mock.calls.slice(readBefore).some(call => call.args[0] === 'capture-pane'), false);
   mock.panes[0].paneId = '%0';
   await terminals.remove(session.id);
   assert.deepEqual((await terminals.list()).sessions, []);
   await assert.rejects(terminals.read(session.id), { code: 'TERMINAL_NOT_FOUND' });
+});
+
+test('a read is one tmux call, and given the hash of what the phone shows it answers unchanged without the text', async t => {
+  const { mock, terminals } = await fixture(t);
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  mock.setCapture('prompt $ ls\nfile.txt\n');
+  let before = mock.calls.length;
+  const first = await terminals.read(session.id);
+  assert.equal(mock.calls.length - before, 1, 'pane check and capture share one spawn');
+  assert.deepEqual(mock.calls.at(-1).args.slice(0, 4), ['display-message', '-p', '-t', session.paneId || mock.panes[0].paneId]);
+  assert.equal(first.text, 'prompt $ ls\nfile.txt\n');
+  assert.match(first.hash, /^[A-Za-z0-9_-]{22}$/);
+  const same = await terminals.read(session.id, { since: first.hash });
+  assert.deepEqual({ unchanged: same.unchanged, hash: same.hash, text: same.text, inMode: same.inMode }, { unchanged: true, hash: first.hash, text: undefined, inMode: false });
+  mock.setCapture('prompt $ ls\nfile.txt\nprompt $ \n');
+  const changed = await terminals.read(session.id, { since: first.hash });
+  assert.equal(changed.unchanged, undefined);
+  assert.equal(changed.text, 'prompt $ ls\nfile.txt\nprompt $ \n');
+  assert.notEqual(changed.hash, first.hash);
+  // A malformed hash is ignored, never echoed as unchanged.
+  for (const since of ['', 'x'.repeat(65), 'a/b', 42]) assert.equal(typeof (await terminals.read(session.id, { since })).text, 'string');
+  // The listing and the read never rewrite the registry, even when a session vanished.
+  before = mock.calls.length;
+  mock.panes.length = 0;
+  assert.deepEqual((await terminals.list()).sessions, []);
+  await assert.rejects(terminals.read(session.id), { code: 'TERMINAL_NOT_FOUND' });
+});
+
+test('typed input never waits behind an output read that is still running', async t => {
+  const { root, mock } = await fixture(t);
+  let release, started;
+  const entered = new Promise(resolve => { started = resolve; });
+  const order = [];
+  const terminals = createTerminals(root, { ...mock, runner: async (...args) => {
+    if (args[1].includes('capture-pane')) {
+      started(); order.push('read started');
+      await new Promise(resolve => { release = resolve; });
+      order.push('read finished');
+    }
+    return mock.runner(...args);
+  } });
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  const reading = terminals.read(session.id);
+  await entered;
+  await terminals.input(session.id, { text: 'ls', enter: true });
+  order.push('input done');
+  await terminals.input(session.id, { key: 'Interrupt' });
+  order.push('key done');
+  release();
+  assert.equal(typeof (await reading).text, 'string');
+  assert.deepEqual(order, ['read started', 'input done', 'key done', 'read finished']);
+  assert.ok(mock.calls.some(call => call.args[0] === 'paste-buffer'), 'the text was pasted while the read was blocked');
+  await terminals.close();
 });
 
 test('a symlinked socket is rejected without connecting or running tmux', async t => {
@@ -386,7 +447,10 @@ test('terminal HTTP endpoints inherit authentication, origin, content bounds and
   const created = await request('/api/terminals', 'POST', { cols: 80, rows: 24 });
   assert.equal(created.status, 201);
   const session = await created.json();
-  assert.equal((await request(`/api/terminals/${session.id}`)).status, 200);
+  const full = await (await request(`/api/terminals/${session.id}`)).json();
+  assert.equal(typeof full.text, 'string');
+  const same = await (await request(`/api/terminals/${session.id}?since=${full.hash}`)).json();
+  assert.deepEqual([same.unchanged, same.text, same.hash], [true, undefined, full.hash], 'HTTP passes the shown hash through');
   mock.panes[0].inMode = true;
   const inMode = await request(`/api/terminals/${session.id}/input`, 'POST', { key: 'Enter' }, { 'Accept-Language': 'pt' });
   assert.equal(inMode.status, 409);
