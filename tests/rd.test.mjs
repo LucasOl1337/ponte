@@ -24,7 +24,7 @@ function fakeClipboard() {
   return clip;
 }
 
-async function rdApp(t, rdOverrides = {}) {
+async function rdApp(t, rdOverrides = {}, { token = TOKEN, monitors = MONITORS, routeRd } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-rd-'));
   const publicDir = path.join(root, 'public');
   await mkdir(publicDir);
@@ -34,8 +34,8 @@ async function rdApp(t, rdOverrides = {}) {
   const runner = async (command, args) => command === 'hyprctl' && args[1] === 'monitors' ? JSON.stringify(MONITORS) : '[]';
   const desktop = createDesktop({ runner, exists: async () => true });
   const app = await createApp({
-    rootDir: root, dataDir: path.join(root, 'private'), token: TOKEN, desktop, trustedHosts: ['pc.tailnet.test'],
-    rdOptions: { captureMode: 'lab', inputMode: 'dry-run', inputLog, readMonitors: async () => MONITORS, clipboard, kbps: 600, log: { info() {}, error() {} }, ...rdOverrides },
+    rootDir: root, dataDir: path.join(root, 'private'), token, desktop, trustedHosts: ['pc.tailnet.test'], routeRd,
+    rdOptions: { captureMode: 'lab', inputMode: 'dry-run', inputLog, readMonitors: async () => monitors, clipboard, kbps: 600, log: { info() {}, error() {} }, ...rdOverrides },
   });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const port = app.server.address().port;
@@ -209,6 +209,54 @@ test('over the tailnet TLS listener: wss with the pinned CA reaches a session; a
   assert.deepEqual(texts.find(m => m.t === 'ready').input, { abs: false, rel: false, keys: false, clipboard: true }); // input off: view only
   assert.deepEqual(seen, [true]);
   ws.close();
+});
+
+test('a session for another node is spliced there: its ready, its video, and input lands on that node only', { skip: !canRun }, async t => {
+  const notebookToken = 'notebook_peer_token_with_32_characters_or_more';
+  const notebook = await rdApp(t, {}, { token: notebookToken, monitors: [{ name: 'eDP-1', x: 0, y: 0, width: 800, height: 500, scale: 1, transform: 0, focused: true }] });
+  const routes = [];
+  const pc = await rdApp(t, {}, {
+    routeRd: async (hello, req, principal) => {
+      const node = new URL(req.url, 'http://x').searchParams.get('node');
+      routes.push({ node, principal: principal.kind, hello: hello.token === TOKEN });
+      return node === 'notebook-teste' ? { url: notebook.url, token: notebookToken } : null;
+    },
+  });
+  const c = await client(`${pc.url}?node=notebook-teste`);
+  c.send({ t: 'key', code: 'KeyB', down: true }); // sent before ready: waits, then goes through the splice
+  const ready = await c.until(() => c.texts.find(m => m.t === 'ready'), 'ready from the notebook');
+  assert.equal(ready.monitor, 'eDP-1');
+  assert.deepEqual(routes, [{ node: 'notebook-teste', principal: 'owner', hello: true }]);
+  await c.until(() => c.frames.length > 3 && c.frames[0].keyframe, 'relayed frames');
+  c.send({ t: 'ping', c: 1 });
+  await c.until(() => c.texts.find(m => m.t === 'pong'), 'pong through the splice');
+  let seen = [];
+  for (let i = 0; i < 100 && !seen.includes('ponte-rd-keys:KEY_B=1'); i++) { seen = await logEvents(notebook.inputLog); await new Promise(r => setTimeout(r, 30)); }
+  assert.ok(seen.includes('ponte-rd-keys:KEY_B=1'));
+  assert.deepEqual(await logEvents(pc.inputLog), [], 'nothing typed on the home node');
+  assert.equal(pc.app.rd.sessions.length, 0);
+  // Closing the browser side ends the far session (and releases the key there).
+  c.ws.close();
+  for (let i = 0; i < 100 && !seen.includes('ponte-rd-keys:KEY_B=0'); i++) { seen = await logEvents(notebook.inputLog); await new Promise(r => setTimeout(r, 30)); }
+  assert.ok(seen.includes('ponte-rd-keys:KEY_B=0'));
+  // An unreachable node is an error, not a hang.
+  const dead = await rdApp(t, {}, { routeRd: async () => ({ url: 'ws://127.0.0.1:9/api/rd', token: notebookToken }) });
+  const lost = await client(dead.url);
+  await lost.until(() => lost.closed, 'close');
+  assert.deepEqual(lost.texts, [{ t: 'error', code: 'MESH_PEER_UNREACHABLE' }]);
+});
+
+test('a peer (not the owner) cannot be relayed onwards: no A → B → C', async () => {
+  const ws = new EventEmitter();
+  const sent = [];
+  ws.readyState = 'open';
+  ws.send = text => sent.push(JSON.parse(text));
+  ws.close = code => { ws.readyState = 'closed'; sent.push({ closed: code }); };
+  const rd = createRemoteDesktop({ readMonitors: async () => MONITORS, inputMode: 'off', clipboard: fakeClipboard(), exists: async () => true, log: { info() {}, error() {} } });
+  rd.accept(ws, {}, { authorize: async () => ({ kind: 'peer' }), route: async () => ({ url: 'ws://127.0.0.1:9/api/rd', token: 'x' }) });
+  ws.emit('message', JSON.stringify({ t: 'hello', v: 1, token: 'peer' }), false);
+  for (let i = 0; i < 50 && !sent.length; i++) await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(sent, [{ t: 'error', code: 'MESH_OWNER_ONLY' }, { closed: 1008 }]);
 });
 
 test('health and state report the rd capability', { skip: !canRun }, async t => {

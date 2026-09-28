@@ -214,6 +214,9 @@ export async function createApp(options = {}) {
     if (candidate.length === tokenBytes.length && timingSafeEqual(candidate, tokenBytes)) return { kind: 'owner' };
     return null;
   }
+  // Where a remote-desktop session goes: null is this node. The mesh answers
+  // { url, ca, token } for /api/rd?node=<paired peer>, and rd.mjs splices.
+  const routeRd = options.routeRd || (async () => null);
 
   async function serveFile(res, file, mime) {
     const metadata = await lstat(file);
@@ -481,7 +484,7 @@ export async function createApp(options = {}) {
       return;
     }
     const ws = acceptUpgrade(req, socket, head);
-    if (ws) rd.accept(ws, req, { authorize: authorizeRd });
+    if (ws) rd.accept(ws, req, { authorize: authorizeRd, route: routeRd });
   };
   const server = http.createServer(handleRequest);
   server.on('upgrade', handleUpgrade);

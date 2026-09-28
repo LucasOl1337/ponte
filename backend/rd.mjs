@@ -8,6 +8,7 @@ import { spawn as spawnChild } from 'node:child_process';
 import { createCapture } from './rd-capture.mjs';
 import { createRdInput } from './rd-input.mjs';
 import { copyToClipboard } from './images.mjs';
+import { connect, pipe } from './ws.mjs';
 import { commandExists, runCommand } from './process.mjs';
 
 export const RD_VERSION = 1;
@@ -140,8 +141,10 @@ export function createRemoteDesktop({
 
   // The first message must be the hello, with the token (a browser cannot set
   // Authorization on a WebSocket). Anything the client sends while the hello
-  // is being checked waits in order.
-  function accept(ws, req, { authorize }) {
+  // is being checked waits in order. `route(hello, req, principal)` may name
+  // another node ({ url, ca, token }): the hello goes there with that node's
+  // token and the two connections are spliced, owner sessions only.
+  function accept(ws, req, { authorize, route }) {
     if (closed) { ws.close(1001, 'restarting'); return; }
     let state = 'hello', session = null;
     const early = [];
@@ -160,6 +163,10 @@ export function createRemoteDesktop({
       let principal = null;
       try { principal = await authorize(message.token, req); } catch {}
       if (!principal) { refuse(ws, 'PAIRING_REQUIRED', 1008); return; }
+      let target = null;
+      try { target = route ? await route(message, req, principal) : null; }
+      catch (error) { refuse(ws, error.code || 'MESH_PEER_NOT_FOUND', 1008); return; }
+      if (target) { await relay(target, message, principal); return; }
       const caps = await capabilities();
       if (ws.readyState !== 'open') return;
       if (!caps.video) { refuse(ws, 'RD_UNAVAILABLE', 1011); return; }
@@ -171,6 +178,17 @@ export function createRemoteDesktop({
       if (ws.readyState !== 'open') { session.end('closed'); sessions.delete(session); return; }
       state = 'open';
       for (const text of early.splice(0)) session.message(text);
+    }
+    async function relay(target, message, principal) {
+      if (principal.kind !== 'owner') { refuse(ws, 'MESH_OWNER_ONLY', 1008); return; } // no A → B → C
+      let upstream;
+      try { upstream = await connect(target.url, { ca: target.ca, checkServerIdentity: target.checkServerIdentity, timeout: 5000 }); }
+      catch { refuse(ws, 'MESH_PEER_UNREACHABLE', 1011); return; }
+      if (ws.readyState !== 'open') { upstream.terminate(); return; }
+      upstream.send(JSON.stringify({ ...message, token: target.token }));
+      for (const text of early.splice(0)) upstream.send(text);
+      state = 'relayed';
+      pipe(ws, upstream);
     }
   }
 
