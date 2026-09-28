@@ -30,6 +30,9 @@ fi
 export YDOTOOL_SOCKET="$sock"
 export PONTE_CONFIG="$config"
 export PATH="$root/tools/lab/bin:$PATH"
+# The fake wl-copy is first on PATH; a display name that does not exist also
+# keeps any real clipboard tool away from the owner's session.
+export WAYLAND_DISPLAY=ponte-lab-none
 export PONTE_SUSSURRO_SOCKET='' PONTE_STT_URL=''
 # Never the owner's Magma controller: it drives the real RGB. PONTE_LAB_MAGMA
 # (a folder with a controller.py copy) runs that copy with a lab HOME and the

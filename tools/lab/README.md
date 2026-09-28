@@ -8,7 +8,7 @@ adb -s SERIAL reverse tcp:8799 tcp:8799           # phone's localhost:8799 → t
 adb -s SERIAL shell am start -a android.intent.action.VIEW -d 'http://127.0.0.1:8799/#pair=TOKEN'
 ```
 
-`PONTE_LAB_DIR` (default `.work/lab`) holds `events.jsonl` (every fake call) and `state.json` (cursor, held button, typed text, fcitx focus). `PONTE_LAB_MONITOR=3440x1440` changes the synthetic monitor; `PONTE_LAB_ACCEL=2` is the pointer acceleration the fake compositor applies until the server sets the device profile flat, which reproduces the real bug.
+`PONTE_LAB_DIR` (default `.work/lab`) holds `events.jsonl` (every fake call), `clipboard.bin` (the last image the fake `wl-copy` received) and `state.json` (cursor, held button, typed text, fcitx focus). `PONTE_LAB_MONITOR=3440x1440` changes the synthetic monitor; `PONTE_LAB_ACCEL=2` is the pointer acceleration the fake compositor applies until the server sets the device profile flat, which reproduces the real bug.
 
 The synthetic monitor shows a coordinate grid, targets A/B (text fields: a left click turns the fcitx focus flag on) and C (a button: off), the cursor with its coordinates, the last clicks and whatever was typed.
 

@@ -267,6 +267,34 @@ export const messages = {
     "en": "Each recording must not exceed 30 minutes.",
     "pt": "Cada áudio deve durar no máximo 30 minutos."
   },
+  "IMAGE_NOT_FOUND": {
+    "en": "Image not found.",
+    "pt": "Imagem não encontrada."
+  },
+  "UNSUPPORTED_IMAGE_FORMAT": {
+    "en": "Use a PNG, JPEG or WebP image.",
+    "pt": "Use uma imagem PNG, JPEG ou WebP."
+  },
+  "EMPTY_IMAGE": {
+    "en": "The image is empty or incomplete.",
+    "pt": "A imagem está vazia ou incompleta."
+  },
+  "IMAGE_TOO_LARGE": {
+    "en": "Images must not exceed 20 MiB.",
+    "pt": "A imagem deve ter no máximo 20 MiB."
+  },
+  "IMAGE_FORMAT_MISMATCH": {
+    "en": "The content does not match its image format.",
+    "pt": "O conteúdo não corresponde ao formato da imagem."
+  },
+  "INVALID_IMAGE_TARGET": {
+    "en": "Choose one Ponte terminal to paste into.",
+    "pt": "Escolha um terminal do Ponte para colar."
+  },
+  "CLIPBOARD_UNAVAILABLE": {
+    "en": "The PC clipboard is unavailable. Check that wl-copy is installed and the desktop session is running.",
+    "pt": "A área de transferência do PC está indisponível. Verifique se o wl-copy está instalado e a sessão gráfica está ativa."
+  },
   "INVALID_RECORDING": {
     "en": "This audio recording could not be validated.",
     "pt": "Não foi possível validar esta gravação de áudio."

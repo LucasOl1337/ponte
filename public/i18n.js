@@ -63,6 +63,35 @@
   "Reproduzir ou pausar mídia": "Play or pause media",
   "Próxima faixa": "Next track",
   "Leve sua voz até lá.": "Send your voice over.",
+  "Mande um print pro PC.": "Send a screenshot over.",
+  "Copie no PC ou cole o caminho num terminal.": "Copy it on the PC or paste its path into a terminal.",
+  "PRINT PRO PC": "IMAGE TO PC",
+  "Mandar imagem pro PC": "Send an image to the PC",
+  "Tire um print e compartilhe com o Ponte, ou escolha uma imagem aqui.": "Take a screenshot and share it with Ponte, or pick an image here.",
+  "Escolher imagem": "Choose image",
+  "Imagem a enviar": "Image to send",
+  "Imagem anterior": "Previous image",
+  "Próxima imagem": "Next image",
+  "DESTINO": "DESTINATION",
+  "Copiar pro PC": "Copy to the PC",
+  "Terminal de destino": "Target terminal",
+  "Nenhum terminal do Ponte aberto": "No Ponte terminal open",
+  "Colar caminho": "Paste path",
+  "Só salvar no PC": "Just save on the PC",
+  "Escolher outra imagem": "Choose another image",
+  "Últimos envios": "Recent images",
+  "Atualizar envios": "Refresh recent images",
+  "Nenhuma imagem enviada ainda.": "No images sent yet.",
+  "Não foi possível carregar os envios.": "Could not load recent images.",
+  "Usar": "Use",
+  "Apagar": "Delete",
+  "Imagem apagada do PC.": "Image deleted from the PC.",
+  "Enviando imagem…": "Sending image…",
+  "Copiada no PC. Cole com Ctrl+V onde quiser.": "Copied on the PC. Paste it with Ctrl+V wherever you like.",
+  "Caminho colado em {terminal}. Confira e aperte Enter lá.": "Path pasted into {terminal}. Check it and press Enter there.",
+  "Salva no PC: {path}": "Saved on the PC: {path}",
+  "Abra um terminal na aba Terminais para colar o caminho.": "Open a terminal in the Terminals tab to paste the path.",
+  "{current} de {total}": "{current} of {total}",
   "Grave no celular. Ouça no PC.": "Record on your phone. Listen on your PC.",
   "p.": "p.",
   "O computador é seu. O controle também.": "Your computer. Your control.",
@@ -750,6 +779,34 @@
   "AUDIO_TOO_LONG": {
     "en": "Each recording must not exceed 30 minutes.",
     "pt": "Cada áudio deve durar no máximo 30 minutos."
+  },
+  "IMAGE_NOT_FOUND": {
+    "en": "Image not found.",
+    "pt": "Imagem não encontrada."
+  },
+  "UNSUPPORTED_IMAGE_FORMAT": {
+    "en": "Use a PNG, JPEG or WebP image.",
+    "pt": "Use uma imagem PNG, JPEG ou WebP."
+  },
+  "EMPTY_IMAGE": {
+    "en": "The image is empty or incomplete.",
+    "pt": "A imagem está vazia ou incompleta."
+  },
+  "IMAGE_TOO_LARGE": {
+    "en": "Images must not exceed 20 MiB.",
+    "pt": "A imagem deve ter no máximo 20 MiB."
+  },
+  "IMAGE_FORMAT_MISMATCH": {
+    "en": "The content does not match its image format.",
+    "pt": "O conteúdo não corresponde ao formato da imagem."
+  },
+  "INVALID_IMAGE_TARGET": {
+    "en": "Choose one Ponte terminal to paste into.",
+    "pt": "Escolha um terminal do Ponte para colar."
+  },
+  "CLIPBOARD_UNAVAILABLE": {
+    "en": "The PC clipboard is unavailable. Check that wl-copy is installed and the desktop session is running.",
+    "pt": "A área de transferência do PC está indisponível. Verifique se o wl-copy está instalado e a sessão gráfica está ativa."
   },
   "INVALID_RECORDING": {
     "en": "This audio recording could not be validated.",
