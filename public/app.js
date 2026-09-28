@@ -2975,6 +2975,7 @@ async function devCreate(agent, project) {
 function devRenderAgents() { $$('[data-dev-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.devAgent === devAgent))); }
 $('#dev-session').addEventListener('change', event => { devSelect(event.target.value); updateDevNavigation(); });
 $('#dev-size').addEventListener('click', () => devRefit(true));
+$('#dev-status').addEventListener('click', () => devStatus(''));
 $('#dev-new').addEventListener('click', () => { const panel = $('#dev-new-panel'); panel.hidden = !panel.hidden; $('#dev-new').setAttribute('aria-expanded',String(!panel.hidden)); devLoadProjects(); });
 $$('[data-dev-agent]').forEach(button => button.addEventListener('click', () => { devAgent = button.dataset.devAgent; devRenderAgents(); }));
 $('#dev-create').addEventListener('click', () => devCreate(devAgent, $('#dev-project').value));
