@@ -165,7 +165,7 @@ function renderMesh() {
   }
   const badge = $('#node-badge');
   badge.hidden = !targetNode;
-  if (targetNode) { badge.textContent = t('Controlando {name}',{name:targetName()}); badge.setAttribute('aria-label',t('Controlando {name}. Trocar de aparelho',{name:targetName()})); }
+  if (targetNode) { badge.textContent = targetName(); badge.setAttribute('aria-label',t('Controlando {name}. Trocar de aparelho',{name:targetName()})); badge.setAttribute('title',t('Controlando {name}',{name:targetName()})); }
   $('#mesh-card').hidden = !self;
   if (!self) return;
   $('#mesh-requests').innerHTML = requests.map(item => `<div class="mesh-row mesh-request"><div><strong>${escaped(t('{name} pede para controlar este aparelho',{name:item.name}))}</strong><span>${escaped(t('Código {code}',{code:item.code}))}</span></div><div class="mesh-buttons"><button type="button" class="button small primary" data-mesh-approve="${escaped(item.code)}">${h('Aprovar')}</button><button type="button" class="button small" data-mesh-deny="${escaped(item.code)}">${h('Negar')}</button></div></div>`).join('');

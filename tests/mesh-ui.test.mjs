@@ -71,7 +71,8 @@ test('choosing a device routes every API call through node= while mesh actions s
   assert.equal(h.calls.at(-1).path, `/api/state?node=${NOTEBOOK}`);
   assert.equal(h.el('#hostname').textContent, 'notebook-teste');
   assert.equal(h.el('#node-badge').hidden, false);
-  assert.equal(h.el('#node-badge').textContent, 'Controlling notebook-teste');
+  assert.equal(h.el('#node-badge').textContent, 'notebook-teste');
+  assert.equal(h.el('#node-badge').getAttribute('aria-label'), 'Controlling notebook-teste. Switch device');
   // Every transport: the fetch wrapper and the screen stream.
   await h.run("api('/terminals')");
   assert.equal(h.calls.at(-1).path, `/api/terminals?node=${NOTEBOOK}`);
