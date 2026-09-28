@@ -91,6 +91,22 @@ async function action(type, payload = {}, feedback = '') {
   } catch (error) { toast(error, true); return false; }
 }
 
+// Sleep, wake and light changes run one OpenRGB call per device group on the PC
+// (~20 s), and the answer says which lights were not found or did not respond.
+async function lightsAction(type, payload = {}, feedback = '') {
+  if (!connected) { toast(t("Reconecte ao PC para usar este controle."), true); return false; }
+  try {
+    const response = await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}), timeout: 80000 });
+    let result = null;
+    try { result = await response.json(); } catch {}
+    const devices = result && result.lights && Array.isArray(result.lights.devices) ? result.lights.devices : [];
+    const absent = devices.filter(item => item.status === 'absent').map(item => item.device);
+    toast(absent.length ? `${feedback} ${t('Não encontrado (desligado?): {devices}.',{devices:absent.join(', ')})}` : feedback);
+    setTimeout(pollState, 180);
+    return true;
+  } catch (error) { toast(error, true); setTimeout(pollState, 180); return false; }
+}
+
 function showPairing(error = '') {
   leaveScreen(); clearScreenImage(); cancelPendingRecording();
   clearTimeout(terminalTimer); terminalGeneration++; terminalDrafts.clear(); terminalId = ''; terminalSessions = []; terminalText = null;
@@ -401,7 +417,8 @@ document.addEventListener('click', event => {
     else if (type === 'lights.restore') feedback = t("Luzes restauradas.");
     else if (type === 'lights.screen') { payload.enabled = generic.dataset.enabled === 'true'; feedback = payload.enabled ? t("Telinha do cooler ligada.") : t("Telinha do cooler apagada."); }
     else if (type === 'session.lock') feedback = t("PC bloqueado.");
-    runBusy(generic, () => action(type, payload, feedback));
+    const lightsType = /^(power\.(sleep|wake)|lights\.(preset|sleep|restore))$/.test(type);
+    runBusy(generic, () => (lightsType ? lightsAction : action)(type, payload, feedback));
   }
   const key = event.target.closest('[data-key]');
   if (key && key.closest('#screen-key-row')) sendKeys(async () => { if (!(await quietAction('keyboard.key',{key:key.dataset.key}))) toast(t("A tecla não chegou ao PC."), true); });
@@ -2025,11 +2042,11 @@ function renderLights() {
   if (!caps.lights) return;
   const presets = lights?.presets || ['lava','brasa','oceano','aurora','floresta','lua'];
   const names = {lava:t('Lava'),brasa:t('Brasa'),oceano:t('Oceano'),aurora:t('Aurora'),floresta:t('Floresta'),lua:t('Lua')};
-  const signature = JSON.stringify([presets,lights?.preset,lights?.sleeping,connected,i18n.language]);
+  const signature = JSON.stringify([presets,lights?.preset,lights?.sleeping,lights?.incomplete,connected,i18n.language]);
   if (section.dataset.signature === signature) return;
   section.setAttribute('data-signature',signature);
   $('#lights-presets').innerHTML = presets.map(preset => `<button class="workspace lights-preset ${lights && !lights.sleeping && lights.preset === preset ? 'active' : ''}" data-action="lights.preset" data-preset="${escaped(preset)}" aria-pressed="${String(!!lights && !lights.sleeping && lights.preset === preset)}"${connected ? '' : ' disabled'}><span class="lights-swatch" data-preset="${escaped(preset)}"></span>${escaped(names[preset] || preset)}</button>`).join('');
-  $('#lights-status').textContent = !lights ? t("Estado das luzes indisponível.") : lights.sleeping ? t("Luzes apagadas. Toque em um preset ou em Restaurar.") : t('Luzes acesas no preset {preset}.',{preset:names[lights.preset] || lights.preset});
+  $('#lights-status').textContent = !lights ? t("Estado das luzes indisponível.") : lights.sleeping ? (lights.incomplete && lights.incomplete.length ? t('Luzes apagadas, menos: {devices}. Toque em Apagar luzes de novo ou em Restaurar luzes.',{devices:lights.incomplete.join(', ')}) : t("Luzes apagadas. Toque em um preset ou em Restaurar.")) : t('Luzes acesas no preset {preset}.',{preset:names[lights.preset] || lights.preset});
 }
 
 function renderSession() {
