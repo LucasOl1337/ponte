@@ -96,6 +96,18 @@ test('Screen is the first destination and native pause prevents polling from res
  assert.ok(h.calls.filter(call=>call.path.startsWith('/api/stream')).length>before);
 });
 
+test('Native pause stops state polling until resume instead of reporting the PC offline',async()=>{
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
+ const polls=()=>h.calls.filter(call=>call.path==='/api/state').length;
+ h.window.dispatchEvent({type:'ponte-native-pause'});await flush();
+ const paused=polls();
+ await h.run('pollState()');await flush();
+ assert.equal(polls(),paused,'no /api/state while the native proxy is paused');
+ assert.equal(h.run('connected'),true);
+ h.window.dispatchEvent({type:'ponte-native-resume'});await flush();
+ assert.equal(polls(),paused+1,'resume polls at once');
+});
+
 test('The screen is one direct-touch mode with mouse-style tap, drag, hold, zoom and scroll gestures',async()=>{
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true});await flush();
  assert.equal(h.run('currentPage'),'tela');

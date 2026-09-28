@@ -24,11 +24,11 @@ public final class LoopbackProxy implements Closeable {
         "/", "/index.html", "/app.js", "/i18n.js", "/styles.css", "/sw.js", "/manifest.webmanifest",
         "/icon.svg", "/icon-192.png", "/icon-512.png", "/progress.html", "/progress.js", "/progress.json"));
     private static final Set<String> FORWARD_HEADERS = new HashSet<>(Arrays.asList(
-        "authorization", "content-type", "accept", "accept-language", "range"));
+        "authorization", "content-type", "accept", "accept-language", "range", "accept-encoding", "if-none-match"));
     private static final Set<String> RESPONSE_HEADERS = new HashSet<>(Arrays.asList(
         "content-type", "cache-control", "content-security-policy", "x-content-type-options",
         "referrer-policy", "permissions-policy", "service-worker-allowed", "x-live-max-fps",
-        "content-range", "accept-ranges"));
+        "content-range", "accept-ranges", "etag", "content-encoding", "vary"));
 
     private final URI upstream;
     private final SSLSocketFactory tls;
@@ -136,6 +136,8 @@ public final class LoopbackProxy implements Closeable {
             remote.setReadTimeout(15000);
             remote.setUseCaches(false);
             remote.setRequestMethod(request.method);
+            // Only the WebView's own Accept-Encoding (forwarded below) may replace
+            // identity: it decodes what it asked for, the proxy copies bytes as-is.
             remote.setRequestProperty("Accept-Encoding", "identity");
             remote.setRequestProperty("Connection", "close");
             for (Map.Entry<String, String> header : request.headers.entrySet()) {

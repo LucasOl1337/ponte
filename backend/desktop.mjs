@@ -301,10 +301,28 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     return { mouse, keyboard, screenshot, audio, live: screenshot, lights, lock };
   }
 
+  // /api/state is polled every few seconds and these two rarely change. The
+  // cached lock flag is only for display: an unlock asks omarchy-shell itself,
+  // and a lock/unlock from the phone reads it fresh until the lock settles.
+  let capabilitiesCache = { at: 0, value: null };
+  let lockCache = { at: 0, value: null }, lockSettlesAt = 0;
+  async function cachedCapabilities() {
+    if (capabilitiesCache.value && Date.now() - capabilitiesCache.at < 60000) return capabilitiesCache.value;
+    const value = await capabilities();
+    capabilitiesCache = { at: Date.now(), value };
+    return value;
+  }
+  async function cachedSessionLocked() {
+    if (Date.now() >= lockSettlesAt && Date.now() - lockCache.at < 5000) return lockCache.value;
+    const value = await sessionLocked();
+    lockCache = { at: Date.now(), value };
+    return value;
+  }
+
   async function getState({ locale = 'en' } = {}) {
     const names = ['activewindow', 'monitors', 'workspaces', 'clients'];
     const values = await Promise.allSettled([
-      ...names.map(readHypr), run('wpctl', ['get-volume', '@DEFAULT_AUDIO_SINK@']), capabilities(), sessionLocked(), lightsStatus(), textInputFocused(),
+      ...names.map(readHypr), run('wpctl', ['get-volume', '@DEFAULT_AUDIO_SINK@']), cachedCapabilities(), cachedSessionLocked(), lightsStatus(), textInputFocused(),
     ]);
     const warnings = [];
     const get = (index, fallback, warning) => {
@@ -563,6 +581,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       }
       case 'session.lock': {
         if (!await exists('omarchy-system-lock', env)) throw new ApiError(503, 'LOCK_UNAVAILABLE');
+        lockSettlesAt = Date.now() + 10000;
         await run('omarchy-system-lock', [], { timeout: 8000 }); break;
       }
       case 'session.unlock': {
@@ -573,6 +592,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         if (!await exists('omarchy-shell', env)) throw new ApiError(503, 'LOCK_UNAVAILABLE');
         if (await sessionLocked() !== true) throw new ApiError(409, 'SESSION_NOT_LOCKED');
         try { const monitors = await readHypr('monitors'); for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, true, monitors); } catch {}
+        lockSettlesAt = Date.now() + 10000;
         await run('ydotool', ['type', '--file', '-', '--key-delay', '12'], { input: value.password, timeout: 15000 });
         await pressKeys([28]); break;
       }

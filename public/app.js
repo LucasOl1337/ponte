@@ -280,7 +280,9 @@ function renderPowerMonitors() {
 }
 
 async function pollState() {
-  if (!token || polling || document.hidden) return;
+  // While the Android app is paused its proxy refuses requests; a poll then
+  // would only mark the PC offline. Resume polls again.
+  if (!token || polling || document.hidden || nativePaused) return;
   const requestToken = token;
   polling = true;
   try {
@@ -1008,9 +1010,10 @@ $('#monitor-select').addEventListener('change',() => {
 });
 // grim scales on the CPU, so the sharp profile streams native pixels at a
 // lower JPEG quality and is both faster and crisper than a downscaled frame.
+// q40 is ~10% smaller than q50 on a desktop with the same look (PSNR -1 dB).
 const LIVE_PROFILES = {
   auto:{auto:true,label:'Automático'},
-  sharp:{fps:15,scale:1,quality:50,label:'Nítido · até 15 quadros/s'},
+  sharp:{fps:15,scale:1,quality:40,label:'Nítido · até 15 quadros/s'},
   balanced:{fps:10,scale:0.5,quality:65,label:'Equilibrado · até 10 quadros/s'},
   light:{fps:8,scale:0.35,quality:55,label:'Leve · até 8 quadros/s'},
 };

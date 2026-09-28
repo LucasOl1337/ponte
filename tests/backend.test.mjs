@@ -5,6 +5,7 @@ import path from 'node:path';
 import { mkdtemp, mkdir, writeFile, readFile, stat, readdir, rm, symlink } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { createApp } from '../server.mjs';
 import { createDesktop, resolveLiveCapture } from '../backend/desktop.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from '../backend/audio.mjs';
@@ -121,11 +122,64 @@ test('static allowlist blocks traversal, dotfiles, source, tokens, and symlink e
   const page = await f.request('/');
   assert.equal(page.status, 200);
   assert.equal(page.headers.get('x-frame-options'), 'DENY');
-  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.equal(page.headers.get('cache-control'), 'no-cache');
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal((await f.request('/progress.json')).status, 200);
   assert.equal((await f.request('/app.js', { method: 'POST' })).status, 405);
   const head = await f.request('/', { method: 'HEAD' }); assert.equal(head.status, 200); assert.equal(await head.text(), '');
+});
+
+test('static files revalidate by ETag and are compressed only when accepted', async t => {
+  const f = await fixture(t);
+  const source = `${'const ponte = "compressible";\n'.repeat(200)}`;
+  await writeFile(path.join(f.publicDir, 'app.js'), source);
+  const raw = (url, headers = {}) => new Promise((resolve, reject) => {
+    // fetch always asks for and silently decodes gzip/br; raw HTTP shows the wire.
+    const req = http.request(`${f.base}${url}`, { method: headers.method || 'GET', headers: { 'Accept-Encoding': 'identity', ...headers } }, res => {
+      const chunks = []; res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject); req.end();
+  });
+  const plain = await raw('/app.js');
+  assert.equal(plain.status, 200);
+  assert.equal(plain.headers['content-encoding'], undefined);
+  assert.equal(plain.body.toString(), source);
+  assert.equal(plain.headers['cache-control'], 'no-cache');
+  assert.match(plain.headers.vary, /Accept-Encoding/);
+  assert.match(plain.headers['content-security-policy'], /script-src 'self'/);
+  assert.equal(plain.headers['x-content-type-options'], 'nosniff');
+  const etag = plain.headers.etag;
+  assert.match(etag, /^W\/"[A-Za-z0-9_-]+"$/);
+  const gz = await raw('/app.js', { 'Accept-Encoding': 'gzip, deflate' });
+  assert.equal(gz.headers['content-encoding'], 'gzip');
+  assert.equal(Number(gz.headers['content-length']), gz.body.length);
+  assert.ok(gz.body.length < source.length / 4);
+  assert.equal(gunzipSync(gz.body).toString(), source);
+  assert.equal(gz.headers.etag, etag);
+  const br = await raw('/app.js', { 'Accept-Encoding': 'gzip, deflate, br' });
+  assert.equal(br.headers['content-encoding'], 'br');
+  assert.equal(brotliDecompressSync(br.body).toString(), source);
+  assert.equal((await raw('/app.js', { 'Accept-Encoding': 'br;q=0, gzip' })).headers['content-encoding'], 'gzip');
+  assert.equal((await raw('/app.js', { 'Accept-Encoding': 'gzip;q=0' })).headers['content-encoding'], undefined);
+  const head = await raw('/app.js', { method: 'HEAD', 'Accept-Encoding': 'gzip' });
+  assert.equal(head.status, 200); assert.equal(head.body.length, 0);
+  assert.equal(Number(head.headers['content-length']), gz.body.length);
+  for (const validator of [etag, etag.slice(2), `"other", ${etag}`, '*']) {
+    const cached = await raw('/app.js', { 'If-None-Match': validator });
+    assert.equal(cached.status, 304, validator); assert.equal(cached.body.length, 0);
+    assert.equal(cached.headers.etag, etag); assert.equal(cached.headers['cache-control'], 'no-cache');
+  }
+  assert.equal((await raw('/app.js', { 'If-None-Match': 'W/"other"' })).status, 200);
+  // A deploy (new content) must reach a phone that reloads for a new version.
+  await writeFile(path.join(f.publicDir, 'app.js'), `${source}// next version\n`);
+  const next = await raw('/app.js', { 'If-None-Match': etag });
+  assert.equal(next.status, 200);
+  assert.notEqual(next.headers.etag, etag);
+  assert.match(next.body.toString(), /next version/);
+  // Tiny files are not worth compressing; API responses keep no-store.
+  assert.equal((await raw('/progress.json', { 'Accept-Encoding': 'gzip' })).headers['content-encoding'], undefined);
+  assert.equal((await f.request('/api/state')).headers.get('cache-control'), 'no-store');
 });
 
 test('state normalizes live desktop output and marks degraded integrations', async t => {
@@ -612,17 +666,52 @@ test('live frame backpressure waits for drain and times out a stalled receiver w
 test('aggregate live capture concurrency is capped and shutdown aborts active capture signals', async () => {
   const signals = [];
   let active = 0, peak = 0, completed = 0;
-  const desktop = { prepareLive: async () => ({ capture: signal => new Promise((resolve, reject) => {
+  const desktop = { prepareLive: async ({ monitor }) => ({ monitor, capture: signal => new Promise((resolve, reject) => {
     signals.push(signal); active++; peak = Math.max(peak, active);
     signal.addEventListener('abort', () => { active--; completed++; reject(new Error('aborted')); }, { once: true });
   }) }) };
   const live = createLiveStreaming(desktop);
   const responses = [new FakeStreamResponse(), new FakeStreamResponse(), new FakeStreamResponse()];
-  const streams = responses.map(res => live.stream({}, res, new URLSearchParams('monitor=DP-1')));
+  // Three monitors: three capture loops (the same monitor would share one).
+  const streams = responses.map((res, index) => live.stream({}, res, new URLSearchParams(`monitor=DP-${index + 1}`)));
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(peak, 2); assert.equal(signals.length, 2);
   live.close(); await Promise.all(streams);
   assert.ok(signals.every(signal => signal.aborted)); assert.equal(completed, 2); assert.equal(active, 0);
+});
+
+test('viewers of the same monitor and profile share one capture loop; the last one leaving stops it', async () => {
+  const jpeg = n => Buffer.from([0xff, 0xd8, n & 0xff, 0xff, 0xd9]);
+  const captures = [], signals = [];
+  const desktop = { prepareLive: async ({ monitor }) => ({ monitor, region: null, capture: async signal => {
+    signals.push(signal); captures.push(monitor);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    if (signal.aborted) throw new Error('aborted');
+    return jpeg(captures.length);
+  } }) };
+  class FastResponse extends FakeStreamResponse { write(bytes) { this.writes.push(bytes); return true; } }
+  const live = createLiveStreaming(desktop, { maxStreams: 4, maxPerPeer: 4 });
+  const open = query => { const res = new FastResponse(); const done = live.stream({ socket: { remoteAddress: '100.1.1.1' } }, res, new URLSearchParams(query)); done.catch(() => {}); return { res, done }; };
+  const a = open('monitor=DP-1&fps=20&scale=1&q=40'), b = open('monitor=DP-1&fps=20&scale=1&q=40');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.equal(live.feeds, 1, 'one capture loop for two viewers');
+  const shared = captures.length;
+  assert.ok(a.res.writes.length >= 4 && b.res.writes.length >= 4, `both viewers get frames (${a.res.writes.length}, ${b.res.writes.length})`);
+  assert.ok(shared <= Math.max(a.res.writes.length, b.res.writes.length) + 1, `${shared} captures for ${a.res.writes.length}+${b.res.writes.length} frames`);
+  assert.ok(shared < a.res.writes.length + b.res.writes.length - 2, 'frames are fanned out, not captured twice');
+  // Another quality is another picture: its own loop.
+  const c = open('monitor=DP-1&fps=20&scale=1&q=65');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(live.feeds, 2);
+  // One viewer leaving keeps the shared loop running for the other.
+  a.res.destroy(); await a.done;
+  const before = b.res.writes.length;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.ok(b.res.writes.length > before, 'the remaining viewer keeps streaming');
+  assert.equal(signals.filter(signal => signal.aborted).length, 0);
+  b.res.destroy(); c.res.destroy(); await Promise.all([b.done, c.done]);
+  assert.equal(live.feeds, 0);
+  assert.ok(signals.at(-1).aborted, 'the capture is aborted once nobody watches');
 });
 
 test('live slots: a device replaces only its own stream, a PC-local preview yields to a remote device, and remote devices never evict each other', async () => {
@@ -810,6 +899,28 @@ test('session lock runs the Omarchy locker and unlock types the password only wh
   assert.deepEqual(typed[1].args, ['key', '--key-delay', '1', '28:1', '28:0']);
   const state = await (await fetch(`http://127.0.0.1:${app.server.address().port}/api/state`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
   assert.deepEqual(state.session, { locked: true, lockAvailable: true });
+});
+
+test('state caches capabilities and the displayed lock flag, but unlock always asks the lock itself', async t => {
+  const f = await fixture(t);
+  let locked = 'true', existsCalls = 0;
+  const base = f.runner;
+  const desktop = createDesktop({ runner: async (command, args, options) => { if (command === 'omarchy-shell') { f.calls.push({ command, args, options }); return `${locked}\n`; } return base(command, args, options); }, exists: async () => { existsCalls++; return true; } });
+  const lockReads = () => f.calls.filter(call => call.command === 'omarchy-shell').length;
+  assert.equal((await desktop.getState()).session.locked, true);
+  const afterFirst = { lock: lockReads(), exists: existsCalls };
+  assert.equal(afterFirst.lock, 1);
+  locked = 'false';
+  assert.equal((await desktop.getState()).session.locked, true, 'a poll within 5 s reuses the lock flag');
+  assert.deepEqual({ lock: lockReads(), exists: existsCalls }, afterFirst, 'no lock spawn and no capability probe on a cached poll');
+  // The display may be stale; the password is still never typed into an unlocked session.
+  await assert.rejects(desktop.action({ type: 'session.unlock', password: 'segredo' }), { code: 'SESSION_NOT_LOCKED' });
+  assert.equal(f.calls.filter(call => call.command === 'ydotool').length, 0);
+  await desktop.action({ type: 'session.lock' });
+  locked = 'true';
+  assert.equal((await desktop.getState()).session.locked, true, 'a lock from the phone is read fresh');
+  locked = 'false';
+  assert.equal((await desktop.getState()).session.locked, false, 'and keeps being read fresh while it settles');
 });
 
 test('dictation transcribes on the PC, types into the chosen terminal, and presses Enter unless disabled', async t => {
