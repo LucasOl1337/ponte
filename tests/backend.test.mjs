@@ -5,6 +5,7 @@ import path from 'node:path';
 import { mkdtemp, mkdir, writeFile, readFile, stat, readdir, rm, symlink } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { createApp } from '../server.mjs';
 import { createDesktop, resolveLiveCapture } from '../backend/desktop.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from '../backend/audio.mjs';
@@ -121,11 +122,64 @@ test('static allowlist blocks traversal, dotfiles, source, tokens, and symlink e
   const page = await f.request('/');
   assert.equal(page.status, 200);
   assert.equal(page.headers.get('x-frame-options'), 'DENY');
-  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.equal(page.headers.get('cache-control'), 'no-cache');
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal((await f.request('/progress.json')).status, 200);
   assert.equal((await f.request('/app.js', { method: 'POST' })).status, 405);
   const head = await f.request('/', { method: 'HEAD' }); assert.equal(head.status, 200); assert.equal(await head.text(), '');
+});
+
+test('static files revalidate by ETag and are compressed only when accepted', async t => {
+  const f = await fixture(t);
+  const source = `${'const ponte = "compressible";\n'.repeat(200)}`;
+  await writeFile(path.join(f.publicDir, 'app.js'), source);
+  const raw = (url, headers = {}) => new Promise((resolve, reject) => {
+    // fetch always asks for and silently decodes gzip/br; raw HTTP shows the wire.
+    const req = http.request(`${f.base}${url}`, { method: headers.method || 'GET', headers: { 'Accept-Encoding': 'identity', ...headers } }, res => {
+      const chunks = []; res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject); req.end();
+  });
+  const plain = await raw('/app.js');
+  assert.equal(plain.status, 200);
+  assert.equal(plain.headers['content-encoding'], undefined);
+  assert.equal(plain.body.toString(), source);
+  assert.equal(plain.headers['cache-control'], 'no-cache');
+  assert.match(plain.headers.vary, /Accept-Encoding/);
+  assert.match(plain.headers['content-security-policy'], /script-src 'self'/);
+  assert.equal(plain.headers['x-content-type-options'], 'nosniff');
+  const etag = plain.headers.etag;
+  assert.match(etag, /^W\/"[A-Za-z0-9_-]+"$/);
+  const gz = await raw('/app.js', { 'Accept-Encoding': 'gzip, deflate' });
+  assert.equal(gz.headers['content-encoding'], 'gzip');
+  assert.equal(Number(gz.headers['content-length']), gz.body.length);
+  assert.ok(gz.body.length < source.length / 4);
+  assert.equal(gunzipSync(gz.body).toString(), source);
+  assert.equal(gz.headers.etag, etag);
+  const br = await raw('/app.js', { 'Accept-Encoding': 'gzip, deflate, br' });
+  assert.equal(br.headers['content-encoding'], 'br');
+  assert.equal(brotliDecompressSync(br.body).toString(), source);
+  assert.equal((await raw('/app.js', { 'Accept-Encoding': 'br;q=0, gzip' })).headers['content-encoding'], 'gzip');
+  assert.equal((await raw('/app.js', { 'Accept-Encoding': 'gzip;q=0' })).headers['content-encoding'], undefined);
+  const head = await raw('/app.js', { method: 'HEAD', 'Accept-Encoding': 'gzip' });
+  assert.equal(head.status, 200); assert.equal(head.body.length, 0);
+  assert.equal(Number(head.headers['content-length']), gz.body.length);
+  for (const validator of [etag, etag.slice(2), `"other", ${etag}`, '*']) {
+    const cached = await raw('/app.js', { 'If-None-Match': validator });
+    assert.equal(cached.status, 304, validator); assert.equal(cached.body.length, 0);
+    assert.equal(cached.headers.etag, etag); assert.equal(cached.headers['cache-control'], 'no-cache');
+  }
+  assert.equal((await raw('/app.js', { 'If-None-Match': 'W/"other"' })).status, 200);
+  // A deploy (new content) must reach a phone that reloads for a new version.
+  await writeFile(path.join(f.publicDir, 'app.js'), `${source}// next version\n`);
+  const next = await raw('/app.js', { 'If-None-Match': etag });
+  assert.equal(next.status, 200);
+  assert.notEqual(next.headers.etag, etag);
+  assert.match(next.body.toString(), /next version/);
+  // Tiny files are not worth compressing; API responses keep no-store.
+  assert.equal((await raw('/progress.json', { 'Accept-Encoding': 'gzip' })).headers['content-encoding'], undefined);
+  assert.equal((await f.request('/api/state')).headers.get('cache-control'), 'no-store');
 });
 
 test('state normalizes live desktop output and marks degraded integrations', async t => {

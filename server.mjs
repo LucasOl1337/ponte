@@ -2,10 +2,12 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
 import { mkdir, realpath, lstat, open, chmod, readFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
+import { promisify } from 'node:util';
+import { brotliCompress, constants as zlibConstants, gzip } from 'node:zlib';
 import { createDesktop } from './backend/desktop.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from './backend/audio.mjs';
 import { ApiError } from './backend/process.mjs';
@@ -27,6 +29,23 @@ const staticTypes = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
 };
 const inside = (root, child) => child === root || child.startsWith(`${root}${path.sep}`);
+// Static files are revalidated on every load (no-cache + ETag) instead of being
+// refetched whole (no-store), and text is sent compressed when the client
+// accepts it. A new deploy changes the ETag, so a version reload still gets it.
+const compressible = new Set(['.html', '.css', '.js', '.json', '.webmanifest', '.svg']);
+const gzipAsync = promisify(gzip), brotliAsync = promisify(brotliCompress);
+const MAX_CACHED_STATIC = 4 * 1024 * 1024;
+function acceptedEncoding(header) {
+  const offered = new Map();
+  for (const part of String(header || '').toLowerCase().split(',')) {
+    const [name, ...params] = part.split(';').map(item => item.trim());
+    const weight = params.find(item => item.startsWith('q='));
+    if (name) offered.set(name, weight ? Number(weight.slice(2)) : 1);
+  }
+  return ['br', 'gzip'].find(name => (offered.has(name) ? offered.get(name) : offered.get('*')) > 0) || null;
+}
+const etagMatches = (header, etag) => typeof header === 'string'
+  && header.split(',').some(item => item.trim() === '*' || item.trim().replace(/^W\//, '') === etag.replace(/^W\//, ''));
 
 async function initializeToken(dataDir, publicDir, suppliedToken) {
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -170,6 +189,33 @@ export async function createApp(options = {}) {
     await pipeline(createReadStream(file), res);
   }
 
+  const staticCache = new Map();
+  async function staticEntry(file, extension) {
+    const info = await lstat(file);
+    if (!info.isFile()) throw new ApiError(404, 'FILE_NOT_FOUND');
+    const cached = staticCache.get(file);
+    if (cached && cached.key === `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`) return cached;
+    if (info.size > MAX_CACHED_STATIC) return null;
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let entry;
+    try {
+      const opened = await handle.stat();
+      const body = await handle.readFile();
+      entry = { key: `${opened.ino}:${opened.size}:${opened.mtimeMs}:${opened.ctimeMs}`, body, encoded: {},
+        etag: `W/"${createHash('sha256').update(body).digest('base64url').slice(0, 27)}"` };
+    } finally { await handle.close(); }
+    if (compressible.has(extension) && entry.body.length >= 1024) {
+      const [gzipped, brotli] = await Promise.all([
+        gzipAsync(entry.body, { level: 9 }),
+        brotliAsync(entry.body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11, [zlibConstants.BROTLI_PARAM_SIZE_HINT]: entry.body.length } }),
+      ]);
+      if (gzipped.length < entry.body.length) entry.encoded.gzip = gzipped;
+      if (brotli.length < entry.body.length) entry.encoded.br = brotli;
+    }
+    staticCache.set(file, entry);
+    return entry;
+  }
+
   async function staticFile(req, res, pathname) {
     if (req.method !== 'GET' && req.method !== 'HEAD') throw new ApiError(405, 'METHOD_NOT_ALLOWED');
     const relative = pathname === '/' ? 'index.html' : pathname.slice(1);
@@ -178,12 +224,20 @@ export async function createApp(options = {}) {
     try { actual = await realpath(path.join(publicDir, relative)); } catch { throw new ApiError(404, 'FILE_NOT_FOUND'); }
     const publicActual = await realpath(publicDir);
     if (!inside(publicActual, actual)) throw new ApiError(404, 'FILE_NOT_FOUND');
-    if (req.method === 'HEAD') {
-      const info = await lstat(actual);
-      if (!info.isFile()) throw new ApiError(404, 'FILE_NOT_FOUND');
-      res.writeHead(200, { 'Content-Type': staticTypes[path.extname(relative)], 'Content-Length': info.size, 'Cache-Control': 'no-store' }); res.end(); return;
+    const extension = path.extname(relative);
+    const entry = await staticEntry(actual, extension);
+    if (!entry) {
+      if (req.method === 'HEAD') { res.writeHead(200, { 'Content-Type': staticTypes[extension], 'Content-Length': (await lstat(actual)).size, 'Cache-Control': 'no-store' }); res.end(); return; }
+      await serveFile(res, actual, staticTypes[extension]); return;
     }
-    await serveFile(res, actual, staticTypes[path.extname(relative)]);
+    const headers = { 'Content-Type': staticTypes[extension], 'Cache-Control': 'no-cache', ETag: entry.etag, Vary: 'Accept-Encoding, Accept-Language' };
+    if (etagMatches(req.headers['if-none-match'], entry.etag)) { res.writeHead(304, headers); res.end(); return; }
+    const encoding = acceptedEncoding(req.headers['accept-encoding']);
+    const body = (encoding && entry.encoded[encoding]) || entry.body;
+    if (body !== entry.body) headers['Content-Encoding'] = encoding;
+    headers['Content-Length'] = body.length;
+    res.writeHead(200, headers);
+    res.end(req.method === 'HEAD' ? undefined : body);
   }
 
   const handleRequest = async (req, res) => {
