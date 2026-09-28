@@ -13,7 +13,7 @@ clients = [window] + extra
 active = next((c for c in clients if c['address'] == _lab.load().get('active')), window)
 if args[:1] == ['-j']:
     kind = args[1]
-    if kind == 'monitors': print(json.dumps([m]))
+    if kind == 'monitors': print(json.dumps([m] + _lab.extra_monitors()))
     elif kind == 'devices': print(json.dumps({'mice': [{'name': 'ydotoold-virtual-device-1'}], 'keyboards': []}))
     elif kind == 'activewindow': print(json.dumps(active))
     elif kind == 'clients': print(json.dumps(clients))
