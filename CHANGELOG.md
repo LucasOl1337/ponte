@@ -2,7 +2,9 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
-## Unreleased
+## 0.1.0-alpha.28 (2026-09-28)
+
+The other computer is one click away: **Ponte Remoto** in the app menu opens its screen. The APK does not change (still versionCode 21).
 
 - **Ponte Remoto in the app menu.** `./ponte rd --install` adds a per-user menu entry
   (no autostart) that opens the remote-desktop window on the first paired device that
@@ -16,8 +18,13 @@ All notable changes to Ponte. The project is an experimental alpha; entries desc
   any other node gets an `[info]` line, which is not a problem.
 
 Verified on the real PC: the menu entry, launched in an agent bench, opened the
-notebook's screen live (eDP-1 1920x1200, 30 fps while idle, RTT 4.6 ms);
-`desktop-file-validate` accepts the entry; `npm test` and the desktop CLI tests pass.
+notebook's screen live (eDP-1 1920x1200, 30 fps while idle, RTT 4.6 ms), and the owner
+found it in the Omarchy launcher and used it. On the notebook, the same entry resolves to
+the PC's node. `desktop-file-validate` accepts the entry on both. `npm test` (356, 1 skip)
+and the desktop CLI tests (36) pass.
+
+Not yet verified: the notebook's entry opened on the notebook's own screen (only the URL
+it builds was checked), and a device list with more than one other computer.
 
 ## 0.1.0-alpha.27 (2026-09-28)
 
