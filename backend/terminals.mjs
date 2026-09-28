@@ -4,6 +4,7 @@ import os from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, lstat, open, readdir, rename, realpath, stat } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 
 export const TERMINAL_LIMIT = 4;
@@ -125,6 +126,7 @@ export function createTerminals(dataDir, options = {}) {
   const runner = options.runner || runCommand;
   const exists = options.exists || commandExists;
   const probe = options.probe || socketAlive;
+  const launch = options.launch || launchDetached;
   const env = { ...(options.env || process.env) };
   delete env.TMUX; delete env.TMUX_PANE;
   for (const name of Object.keys(env)) if (name.startsWith('OMARCHY_REMOTE_')) delete env[name];
@@ -430,6 +432,22 @@ export function createTerminals(dataDir, options = {}) {
         return { ok: true };
       });
     },
+    // "Continue on the PC": a terminal window on the owner's desktop attached
+    // to this same session. Omarchy's own launch path (uwsm-app puts it in its
+    // own scope, so it outlives a restart of this service); the attach command
+    // is argv, never shell text. The window then follows the PC terminal's
+    // size (window-size latest) until the phone resizes it again.
+    open(id) {
+      validateId(id);
+      return run(async available => {
+        const item = await target(id, available);
+        const locked = await runner('omarchy-shell', ['lock', 'isLocked'], { env, timeout: 2500 }).then(out => String(out).trim() === 'true', () => false);
+        if (locked) throw new ApiError(423, 'TERMINAL_PC_LOCKED');
+        await command(['set-option', '-w', '-t', item.windowId, 'window-size', 'latest']);
+        await launch('uwsm-app', ['--', 'xdg-terminal-exec', 'env', '-u', 'TMUX', '-u', 'TMUX_PANE', 'tmux', '-u', '-S', socketPath, '-f', '/dev/null', 'attach-session', '-t', `=ponte_${id}`], env);
+        return { ok: true };
+      });
+    },
     remove(id) {
       validateId(id);
       return run(async available => {
@@ -441,4 +459,18 @@ export function createTerminals(dataDir, options = {}) {
     },
     close() { stopping = true; controller.abort(); return Promise.all([tail, readTail]); },
   };
+}
+
+// Starts a desktop program that keeps running on its own. A launcher that
+// fails at once (missing, no session bus) is reported; one still running
+// after a short wait is left alone.
+function launchDetached(command, args, env) {
+  return new Promise((resolve, reject) => {
+    const fail = () => reject(new ApiError(503, 'TERMINAL_OPEN_FAILED'));
+    let child;
+    try { child = spawn(command, args, { env, detached: true, stdio: 'ignore', shell: false }); } catch { fail(); return; }
+    const timer = setTimeout(() => { child.removeAllListeners(); child.unref(); resolve(); }, 1500);
+    child.once('error', () => { clearTimeout(timer); fail(); });
+    child.once('exit', code => { clearTimeout(timer); if (code === 0) resolve(); else fail(); });
+  });
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { gunzipSync } from 'node:zlib';
 import { mkdtemp, mkdir, readFile, writeFile, stat, rm, access, symlink, realpath, chmod } from 'node:fs/promises';
 import { createTerminals, sanitizeAnsi, TERMINAL_ANSI_LIMIT, TERMINAL_TEXT_LIMIT } from '../backend/terminals.mjs';
 import { createApp } from '../server.mjs';
@@ -581,7 +582,7 @@ test('terminal HTTP endpoints inherit authentication, origin, content bounds and
     return fetch(`${base}${route}`, { method, headers, body });
   };
   const id = 'a'.repeat(24);
-  for (const [route, method, value] of [['/api/terminals', 'GET'], ['/api/terminals', 'POST', { cols: 80, rows: 24 }], [`/api/terminals/${id}`, 'GET'], [`/api/terminals/${id}`, 'DELETE'], [`/api/terminals/${id}/input`, 'POST', { key: 'Enter' }], [`/api/terminals/${id}/resize`, 'POST', { cols: 80, rows: 24 }]]) {
+  for (const [route, method, value] of [['/api/terminals', 'GET'], ['/api/terminals', 'POST', { cols: 80, rows: 24 }], [`/api/terminals/${id}`, 'GET'], [`/api/terminals/${id}`, 'DELETE'], [`/api/terminals/${id}/input`, 'POST', { key: 'Enter' }], [`/api/terminals/${id}/resize`, 'POST', { cols: 80, rows: 24 }], [`/api/terminals/${id}/open`, 'POST', {}]]) {
     assert.equal((await request(route, method, value, { Authorization: '' })).status, 401);
     assert.equal((await request(route, method, value, { Origin: 'https://attacker.test' })).status, 403);
     assert.equal((await request(route, method, value, { 'Sec-Fetch-Site': 'cross-site' })).status, 403);
@@ -607,6 +608,17 @@ test('terminal HTTP endpoints inherit authentication, origin, content bounds and
   assert.deepEqual([typeof ansi.text, ansi.cursor, ansi.alternate], ['string', { x: 0, y: 0, visible: true }, false], 'HTTP passes format=ansi through');
   const ansiSame = await (await request(`/api/terminals/${session.id}?format=ansi&since=${ansi.hash}`)).json();
   assert.deepEqual([ansiSame.unchanged, ansiSame.text], [true, undefined]);
+  mock.setCapture('\x1b[38;2;215;119;87mlinha colorida\x1b[39m\n'.repeat(2000));
+  const zipped = await new Promise((resolve, reject) => {
+    http.get(`${base}/api/terminals/${session.id}?format=ansi`, { headers: { Authorization: `Bearer ${token}`, 'Accept-Encoding': 'gzip, deflate, br' } }, res => {
+      const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('end', () => resolve({ headers: res.headers, body: Buffer.concat(chunks) }));
+    }).on('error', reject);
+  });
+  assert.equal(zipped.headers['content-encoding'], 'gzip', 'a large coloured read is gzipped when the client accepts it');
+  assert.ok(zipped.body.length < 8192);
+  assert.equal(JSON.parse(gunzipSync(zipped.body)).text.split('\n').length >= 1000, true);
+  const small = await request(`/api/terminals/${session.id}?format=ansi&since=x`, 'GET', undefined, { Host: `127.0.0.1:${app.server.address().port}` });
+  assert.equal(small.headers.get('content-encoding'), null, 'no Accept-Encoding, no gzip');
   mock.panes[0].inMode = true;
   const inMode = await request(`/api/terminals/${session.id}/input`, 'POST', { key: 'Enter' }, { 'Accept-Language': 'pt' });
   assert.equal(inMode.status, 409);
@@ -817,4 +829,25 @@ test('projects lists recent ~/Projects folders by name only, without tmux, and H
   assert.equal((await fetch(`${base}/api/terminals?projects=1`)).status, 401);
   assert.deepEqual(await (await fetch(`${base}/api/terminals?projects=1`, { headers: { Authorization: `Bearer ${token}` } })).json(), { projects: ['new-one', 'ponte', 'old'] });
   assert.deepEqual(await (await fetch(`${base}/api/terminals`, { headers: { Authorization: `Bearer ${token}` } })).json(), { available: true, sessions: [], limit: 4 });
+});
+
+test('open on the PC attaches a terminal window to the same session, never while the PC is locked', async t => {
+  const root = await temporary(t), mock = mockedTmux(), launches = [];
+  let locked = 'false';
+  const runner = (command, argv, options) => command === 'omarchy-shell' ? Promise.resolve(`${locked}\n`) : mock.runner(command, argv, options);
+  const terminals = createTerminals(root, { ...mock, runner, launch: async (command, args) => { launches.push([command, ...args]); } });
+  t.after(() => terminals.close());
+  const session = await terminals.create({ cols: 60, rows: 30 });
+  assert.throws(() => terminals.open('not-a-session'), { code: 'TERMINAL_NOT_FOUND' });
+  await assert.rejects(async () => terminals.open('0123456789abcdef01234567'), { code: 'TERMINAL_NOT_FOUND' });
+  locked = 'true';
+  await assert.rejects(terminals.open(session.id), { code: 'TERMINAL_PC_LOCKED' });
+  assert.equal(launches.length, 0, 'a locked PC gets no window');
+  locked = 'false';
+  assert.deepEqual(await terminals.open(session.id), { ok: true });
+  assert.deepEqual(launches, [['uwsm-app', '--', 'xdg-terminal-exec', 'env', '-u', 'TMUX', '-u', 'TMUX_PANE', 'tmux', '-u', '-S', path.join(root, 'terminals', 'tmux.sock'), '-f', '/dev/null', 'attach-session', '-t', `=ponte_${session.id}`]]);
+  assert.deepEqual(mock.calls.find(call => call.args[0] === 'set-option' && call.args.includes('window-size')).args, ['set-option', '-w', '-t', '@0', 'window-size', 'latest'], 'the PC window drives the size until the phone resizes again');
+  const failing = createTerminals(root, { ...mock, runner, launch: () => Promise.reject(Object.assign(new Error('x'), { code: 'TERMINAL_OPEN_FAILED' })) });
+  t.after(() => failing.close());
+  await assert.rejects(failing.open(session.id), { code: 'TERMINAL_OPEN_FAILED' });
 });

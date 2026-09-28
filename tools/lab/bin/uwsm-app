@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Fake uwsm-app: never opens a window on the real desktop. Logs the argv of
+the terminal the Dev tab asked for ("Abrir no PC") and stays alive a moment,
+like a launched terminal would."""
+import sys, os, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _lab
+_lab.log('uwsm-app', sys.argv[1:], {'attach': '=ponte_' in ' '.join(sys.argv)})
+time.sleep(3)
