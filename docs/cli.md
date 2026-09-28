@@ -52,6 +52,36 @@ HTTP só aceita `127.0.0.1`, `localhost` ou `[::1]`. HTTPS verifica CA e hostnam
 O cliente não segue redirects, não faz pareamento automático e não repete
 requisições. `PONTE_NODE` escolhe o executável Node se necessário.
 
+### Outro aparelho da malha (`--node`)
+
+Qualquer comando, exceto `health`, vai pra um aparelho pareado com
+`--node NOME|ID`. O servidor local (o nó de casa) repassa a requisição com o
+token de par e o CA fixado daquele aparelho, então o agente continua usando só
+o token local. Nada de SSH, segundo token ou certificado do outro lado.
+
+```sh
+./ponte mesh list                                  # nomes e ids pareados
+./ponte ctl state --node notebook                  # data.node diz quem respondeu
+./ponte ctl windows --node notebook
+./ponte ctl terminals create --node notebook
+./ponte ctl volume set --value 0.3 --node 3f2a9c0d1e4b5a67
+```
+
+O nome não diferencia maiúsculas e só vale pra aparelho pareado; um id de 16
+hex é usado direto, sem consultar `/api/mesh`. O nome do próprio nó de casa
+fica local. `--dry-run` mostra o caminho com `?node=` pra um id e deixa um nome
+sem resolver (resolver exige conexão). Erros próprios:
+
+| Código | Quando |
+| --- | --- |
+| `MESH_PEER_NOT_PAIRED` | O aparelho está no tailnet mas não foi pareado: `./ponte mesh pair NOME` e aprove lá |
+| `MESH_PEER_NOT_FOUND` | Nenhum pareado tem esse nome; a mensagem lista os pareados |
+| `MESH_PEER_AMBIGUOUS` | Dois pareados com o mesmo nome: use o id |
+| `PEER_OFFLINE` / `PEER_REVOKED` / `PEER_UNTRUSTED` | Do relay: aparelho fora, vínculo revogado lá (e esquecido aqui) ou certificado diferente do fixado |
+
+Um par nunca repassa adiante: `--node` só funciona a partir do nó de casa do
+dono. Veja [a malha](mesh.md).
+
 ## Contrato de automação
 
 Todos os comandos `ctl`, exceto a ajuda textual, escrevem **um documento JSON

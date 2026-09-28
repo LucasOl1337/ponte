@@ -18,9 +18,31 @@ It clones or updates `~/Projects/ponte`, checks the dependencies (printing the `
 2. On **B itself**, approve it: the Devices card on B (a browser on B or a phone whose home node is B), or `./ponte mesh approve <code>` on B. Nothing approves itself and A can never approve on B.
 3. A picks up the peer token on its own. B now appears in A's **Control which device** selector; picking it moves the whole app (screen, input, terminals, agents, actions) to B.
 
-`./ponte mesh list` shows this node, the Ponte nodes on the tailnet, requests waiting here and who controls this node. `./ponte mesh revoke <name>` cuts a link at once, in either direction. A request expires after 10 minutes; at most 5 wait at a time.
+`./ponte mesh list` shows this node, the Ponte nodes on the tailnet, requests waiting here and who controls this node. `./ponte mesh revoke <name>` cuts a link at once, in either direction. A request expires after 10 minutes; at most 5 wait at a time. With `--json` every `mesh` command prints one JSON document; `mesh --json pair` prints the pending request (with `--no-wait`) or, once approved, `{"status":"paired"}`, and writes the code to stderr while it waits.
 
-Only online, untagged tailnet devices of the same owner as this node can be found or can ask (the same `tailscale whois` rule as the phone's automatic pairing). The phone app keeps its key-free pairing, but since this release only an Android (or iOS) device gets the owner key that way: another computer of the owner is refused by `/api/pair` and has to be paired and approved like any node. Discovery asks each of them for `GET /api/mesh/hello` on port 8788 and caches the answer for 30 s.
+Only online, untagged tailnet devices of the same owner as this node can be found or can ask (the same `tailscale whois` rule as the phone's automatic pairing). The phone app keeps its key-free pairing, but since 0.1.0-alpha.25 only an Android (or iOS) device gets the owner key that way: another computer of the owner is refused by `/api/pair` and has to be paired and approved like any node (`./ponte doctor` expects that refusal and names the tailnet owner instead). Discovery asks each of them for `GET /api/mesh/hello` on port 8788 and caches the answer for 30 s.
+
+## Agents: `ponte ctl --node`
+
+An agent on A drives B with the same CLI and A's own key: `--node <name|id>` sends any `ctl` command except `health` through A, which relays it with the peer token and B's pinned CA.
+
+```sh
+./ponte ctl state --node notebook          # data.node names who answered
+./ponte ctl screenshot --node notebook --output shot.jpg
+./ponte ctl terminals create --node notebook
+```
+
+A name is matched without case among paired devices; a 16-hex id is used as is. See the [CLI guide](cli.md#outro-aparelho-da-malha---node) for the error codes.
+
+## SSH between the computers
+
+Tailscale SSH on port 22 asks for a browser check in the owner's session, which an agent cannot pass. Between the owner's own computers a plain OpenSSH on port 2222, key only and reachable only over the tailnet, avoids it:
+
+- `/etc/ssh/sshd_config.d/30-ponte-tailnet-2222.conf` adds `Port 2222` next to 22 and, under `Match LocalPort 2222`, allows only the owner's user, with password and keyboard-interactive login off. Port 22 on the tailnet stays with Tailscale SSH.
+- ufw does not open 2222 on the LAN; Tailscale accepts `tailscale0` traffic before ufw (its `ts-input` chain), so only tailnet peers reach it.
+- Each side has the other's `~/.ssh/id_ed25519.pub` in `authorized_keys` and a `Host` entry with `Port 2222` and `IdentitiesOnly yes`, plus a `*-ts` entry that keeps Tailscale SSH at hand.
+
+`ssh notebook` from the PC and `ssh pc` from the notebook then log in with no prompt. SSH is for files and shells; the mesh (`ctl --node`, `./ponte rd`) is what drives a desktop.
 
 ## What a peer token can do
 
