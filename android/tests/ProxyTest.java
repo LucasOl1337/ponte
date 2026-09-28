@@ -178,7 +178,7 @@ public final class ProxyTest {
             {"GET", "/api/terminals", ""}, {"GET", item + "?lang=pt", ""},
             {"POST", "/api/terminals", "{\"cols\":80,\"rows\":24}"},
             {"POST", item + "/input", "{\"text\":\"printf hello;\"}"},
-            {"POST", item + "/resize", "{\"cols\":40,\"rows\":16}"}, {"DELETE", item, ""}
+            {"POST", item + "/resize", "{\"cols\":40,\"rows\":16}"}, {"POST", item + "/open", "{}"}, {"DELETE", item, ""}
         };
         for (String[] route : allowed) {
             int before = remote.hits.get();
@@ -191,7 +191,7 @@ public final class ProxyTest {
         }
         int before = remote.hits.get();
         String[][] denied = {
-            {"HEAD", "/api/terminals"}, {"PUT", "/api/terminals"}, {"DELETE", "/api/terminals"},
+            {"HEAD", "/api/terminals"}, {"PUT", "/api/terminals"}, {"DELETE", "/api/terminals"}, {"GET", "/api/terminals/0123456789abcdef01234567/open"},
             {"POST", item}, {"PATCH", item}, {"HEAD", item}, {"OPTIONS", item},
             {"GET", item + "/input"}, {"GET", item + "/resize"}, {"DELETE", item + "/input"},
             {"POST", item + "/play"}, {"POST", item + "/input/"},

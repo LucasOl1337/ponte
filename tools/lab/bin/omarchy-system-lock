@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Fake omarchy-system-lock: locks only the lab (state.json 'locked')."""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _lab
+_lab.log('omarchy-system-lock', sys.argv[1:])
+with _lab.locked():
+    state = _lab.load(); state['locked'] = True; _lab.save(state)

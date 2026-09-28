@@ -795,6 +795,14 @@
     "en": "Send 1 to 16000 characters; line breaks are allowed, other control characters are not.",
     "pt": "Envie de 1 a 16000 caracteres; quebras de linha podem, outros controles não."
   },
+  "TERMINAL_PC_LOCKED": {
+    "en": "The PC is locked. Unlock it before opening this session there.",
+    "pt": "O PC está bloqueado. Desbloqueie antes de abrir esta sessão nele."
+  },
+  "TERMINAL_OPEN_FAILED": {
+    "en": "The PC could not open a terminal window for this session.",
+    "pt": "O PC não conseguiu abrir uma janela de terminal para esta sessão."
+  },
   "MULTILINE_NOT_SUPPORTED": {
     "en": "This terminal is not waiting for pasted text now, so several lines would run one by one. Send one line at a time.",
     "pt": "Este terminal não está esperando texto colado agora, então várias linhas rodariam uma a uma. Mande uma linha por vez."
