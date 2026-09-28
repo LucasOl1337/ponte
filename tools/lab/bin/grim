@@ -52,6 +52,12 @@ for i, sc in enumerate(s.get('scrolls', [])):
 d.line([(c['x'] - 30, c['y']), (c['x'] + 30, c['y'])], fill=(255, 255, 255), width=3)
 d.line([(c['x'], c['y'] - 30), (c['x'], c['y'] + 30)], fill=(255, 255, 255), width=3)
 d.text((c['x'] + 14, c['y'] + 14), f"cursor {c['x']},{c['y']}" + (' HELD' if s['held'] else ''), fill=(255, 255, 255), font=big)
+# PONTE_LAB_TITLE names the node in the two-node mesh lab, so a relayed frame
+# shows at a glance which machine it came from.
+title = os.environ.get('PONTE_LAB_TITLE')
+if title:
+    d.rectangle([W // 2 - 260, 60, W // 2 + 260, 140], fill=(51, 62, 36), outline=(213, 248, 136), width=3)
+    d.text((W // 2 - 240, 78), title[:22], fill=(213, 248, 136), font=big)
 d.rectangle([20, H - 120, W - 20, H - 20], fill=(30, 34, 28), outline=(110, 120, 96))
 d.text((30, H - 110), 'typed: ' + s['typed'][-90:], fill=(213, 248, 136), font=big)
 d.text((30, H - 60), f"profile {s['profile']} · accel {s['accel']} · text focus {'on' if s.get('textFocus') else 'off'} · wheel {s.get('wheel', 0):+d}", fill=(150, 160, 130), font=font)
