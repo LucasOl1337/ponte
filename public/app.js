@@ -372,7 +372,7 @@ let historyReady = false;
 
 function navigate(page) {
   if (page === 'controle') page = 'tela';
-  if (!['inicio','tela','terminais','janelas','voz'].includes(page)) return;
+  if (!['inicio','tela','terminais','dev','janelas','voz'].includes(page)) return;
   const wasScreen = isScreenPage(currentPage), nextScreen = isScreenPage(page);
   if (currentPage !== page) resetRemoteInput();
   if (wasScreen && !nextScreen) leaveScreen();
@@ -385,6 +385,7 @@ function navigate(page) {
   if (page === 'voz' && connected) loadAudio();
   reconcileLive();
   updateTerminalNavigation();
+  updateDevNavigation();
 }
 
 function syncRemoteViewport() {
@@ -1735,7 +1736,7 @@ async function terminalMutation(path,body,method = 'POST') {
   finally { terminalBusy = false; terminalControls(); }
 }
 $('#terminal-new').addEventListener('click',async () => {
-  const session = await terminalMutation('/terminals',{cols:40,rows:24});
+  const session = await terminalMutation('/terminals',devSessionSize());
   if (session) { terminalSessions.push(session); selectTerminal(session.id); terminalPaused = false; updateTerminalNavigation(); }
 });
 $('#terminal-select').addEventListener('change',event => { selectTerminal(event.target.value); terminalPaused = false; updateTerminalNavigation(); });
@@ -2661,7 +2662,7 @@ $('#start-go').addEventListener('click',async () => {
   // A shell runs its first line as typed, so it goes as one line.
   const raw = $('#start-prompt').value;
   const prompt = (startAgent === 'shell' ? raw.replace(/\s*\n\s*/g,' ') : raw).trim();
-  const body = {cols:40,rows:24,agent:startAgent};
+  const body = {...devSessionSize(),agent:startAgent};
   if (prompt) body.prompt = prompt;
   if ($('#start-project').value) body.project = $('#start-project').value;
   startBusy = true; renderStartAgents();
@@ -2677,6 +2678,341 @@ $('#start-go').addEventListener('click',async () => {
   finally { startBusy = false; renderStartAgents(); }
 });
 window.addEventListener('popstate', () => { const page = location.hash.slice(1); if (token && page) navigate(page); });
+
+// Dev: an agent terminal on the whole screen. It reads the same private tmux
+// session as Terminals, with colours (format=ansi), sized to the phone's own
+// character grid, and with the keys Claude Code uses a tap away.
+const DEV_FONT_MIN = 9, DEV_FONT_MAX = 22, DEV_FONT_DEFAULT = 12, DEV_LINE_HEIGHT = 1.25;
+const DEV_TEXT_LIMIT = 16000;
+const ANSI_16 = ['#20231e','#e8766b','#a6d189','#e5c07b','#7fb4f0','#c9a0f0','#6fcfd6','#d7dccd','#6b7563','#ff9187','#c3f09a','#ffd68a','#9fcbff','#e1bcff','#8ee6ee','#ffffff'];
+// xterm's 256 colours: 16 named, a 6×6×6 cube, then 24 greys.
+function ansiColor(index) {
+  if (index < 16) return ANSI_16[index];
+  const hex = value => (value < 16 ? '0' : '') + value.toString(16);
+  if (index < 232) { const n = index - 16, step = value => value ? value * 40 + 55 : 0; return `#${hex(step(Math.floor(n / 36)))}${hex(step(Math.floor(n / 6) % 6))}${hex(step(n % 6))}`; }
+  const grey = 8 + (index - 232) * 10; return `#${hex(grey)}${hex(grey)}${hex(grey)}`;
+}
+function sgrApply(style, source) {
+  const params = source === '' ? [0] : source.replace(/:/g,';').split(';').map(value => value === '' ? -1 : Number(value));
+  for (let i = 0; i < params.length; i++) {
+    const code = params[i] < 0 ? 0 : params[i];
+    if (code === 0) { style.fg = style.bg = null; style.bold = style.dim = style.italic = style.underline = style.inverse = style.strike = false; }
+    else if (code === 1) style.bold = true;
+    else if (code === 2) style.dim = true;
+    else if (code === 3) style.italic = true;
+    else if (code === 4) style.underline = true;
+    else if (code === 7) style.inverse = true;
+    else if (code === 9) style.strike = true;
+    else if (code === 22) style.bold = style.dim = false;
+    else if (code === 23) style.italic = false;
+    else if (code === 24) style.underline = false;
+    else if (code === 27) style.inverse = false;
+    else if (code === 29) style.strike = false;
+    else if (code >= 30 && code <= 37) style.fg = ANSI_16[code - 30];
+    else if (code === 39) style.fg = null;
+    else if (code >= 40 && code <= 47) style.bg = ANSI_16[code - 40];
+    else if (code === 49) style.bg = null;
+    else if (code >= 90 && code <= 97) style.fg = ANSI_16[code - 82];
+    else if (code >= 100 && code <= 107) style.bg = ANSI_16[code - 92];
+    else if (code === 38 || code === 48) {
+      let color = null;
+      if (params[i + 1] === 5 && params[i + 2] >= 0 && params[i + 2] < 256) { color = ansiColor(params[i + 2]); i += 2; }
+      else if (params[i + 1] === 2) {
+        // 38;2;r;g;b, or the colon form 38:2::r:g:b with an empty colour space.
+        let j = i + 2; if (params[j] === -1 && params.length - j > 3) j++;
+        const rgb = [params[j], params[j + 1], params[j + 2]];
+        if (rgb.every(value => value >= 0 && value < 256)) color = `rgb(${rgb.join(',')})`;
+        i = j + 2;
+      } else break;
+      if (color) { if (code === 38) style.fg = color; else style.bg = color; }
+    }
+  }
+}
+function devStyle(style) {
+  const fg = style.inverse ? (style.bg || 'var(--dev-bg)') : style.fg, bg = style.inverse ? (style.fg || 'var(--dev-fg)') : style.bg;
+  const css = [];
+  if (fg) css.push(`color:${fg}`);
+  if (bg) css.push(`background:${bg}`);
+  if (style.bold) css.push('font-weight:700');
+  if (style.dim) css.push('opacity:.6');
+  if (style.italic) css.push('font-style:italic');
+  if (style.underline || style.strike) css.push(`text-decoration:${[style.underline ? 'underline' : '', style.strike ? 'line-through' : ''].join(' ').trim()}`);
+  return css.join(';');
+}
+// Terminal cells: wide East Asian characters and emoji take two, combining
+// marks none. Enough to put the cursor where tmux says it is.
+function devCellWidth(code) {
+  if (code >= 0x300 && code <= 0x36f || code === 0x200d || code >= 0xfe00 && code <= 0xfe0f) return 0;
+  if (code >= 0x1100 && code <= 0x115f || code >= 0x2e80 && code <= 0xa4cf || code >= 0xac00 && code <= 0xd7a3 || code >= 0xf900 && code <= 0xfaff || code >= 0xfe30 && code <= 0xfe4f || code >= 0xff00 && code <= 0xff60 || code >= 0xffe0 && code <= 0xffe6 || code >= 0x1f300 && code <= 0x1faff || code >= 0x20000 && code <= 0x3fffd) return 2;
+  return 1;
+}
+// Only SGR survives from the server; anything else that slips through is
+// dropped, and every character is escaped before it becomes HTML.
+function ansiToHtml(text, cursor, rows) {
+  const lines = String(text || '').replace(/\n$/,'').split('\n');
+  const cursorLine = cursor && cursor.visible && rows > 0 ? lines.length - rows + cursor.y : -1;
+  return lines.map((line, index) => {
+    const style = {fg:null,bg:null,bold:false,dim:false,italic:false,underline:false,inverse:false,strike:false};
+    let html = '', column = 0, cursorDone = index !== cursorLine;
+    const flush = (chunk, css) => { if (chunk) html += css ? `<span style="${css}">${escaped(chunk)}</span>` : escaped(chunk); };
+    for (const part of line.split(/(\x1b\[[0-9;:]*m)/)) {
+      if (/^\x1b\[[0-9;:]*m$/.test(part)) { sgrApply(style, part.slice(2,-1)); continue; }
+      const clean = part.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[^[]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');
+      const css = devStyle(style);
+      if (cursorDone) { flush(clean, css); column += [...clean].reduce((sum, ch) => sum + devCellWidth(ch.codePointAt(0)), 0); continue; }
+      let chunk = '';
+      for (const ch of clean) {
+        if (!cursorDone && column >= cursor.x) { flush(chunk, css); chunk = ''; html += `<span class="dev-cursor">${escaped(ch)}</span>`; cursorDone = true; column += devCellWidth(ch.codePointAt(0)); continue; }
+        chunk += ch; column += devCellWidth(ch.codePointAt(0));
+      }
+      flush(chunk, css);
+    }
+    if (!cursorDone) html += `${' '.repeat(Math.max(0, cursor.x - column))}<span class="dev-cursor"> </span>`;
+    return html;
+  }).join('\n');
+}
+function devGrid(width, height, cellWidth, cellHeight) {
+  if (!(width > 0 && height > 0 && cellWidth > 0 && cellHeight > 0)) return null;
+  return { cols: Math.max(20, Math.min(240, Math.floor(width / cellWidth))), rows: Math.max(8, Math.min(100, Math.floor(height / cellHeight))) };
+}
+function devKeyPayload(button) {
+  if (button.dataset.devKey) return { key: button.dataset.devKey };
+  if (button.dataset.devText) return { text: button.dataset.devText };
+  return null;
+}
+let devFont = Number(savedPreference('ponte-dev-font', String(DEV_FONT_DEFAULT)));
+if (!(devFont >= DEV_FONT_MIN && devFont <= DEV_FONT_MAX)) devFont = DEV_FONT_DEFAULT;
+let devId = '', devSessions = [], devHash = '', devHashId = '', devTimer, devGeneration = 0, devBusy = false;
+let devLastInput = 0, devIdleDelay = 1000, devFollow = true, devGridNow = null, devResizeTimer, devAgent = 'claude', devProjects = [], devProjectsToken = '';
+function devVisible() { return currentPage === 'dev' && !!token && !document.hidden && !nativePaused; }
+function devStatus(message, error = false) { dictationStatus($('#dev-status'), message, error); }
+// The character grid the screen box holds at the current font, or an estimate
+// from the window when Dev was never shown (the Home and Terminals buttons).
+function devMeasure() {
+  const screen = $('#dev-screen'), probe = $('#dev-measure');
+  const box = probe && probe.getBoundingClientRect ? probe.getBoundingClientRect() : null;
+  const cellWidth = box && box.width ? box.width / 20 : devFont * 0.6, cellHeight = box && box.height ? box.height : devFont * DEV_LINE_HEIGHT;
+  if (screen && screen.clientWidth && screen.clientHeight) return devGrid(screen.clientWidth - 16, screen.clientHeight - 12, cellWidth, cellHeight);
+  const width = Number(window.innerWidth), height = Number(window.visualViewport && window.visualViewport.height || window.innerHeight);
+  return devGrid(Math.min(width, 1160) - 40, height - 300, cellWidth, cellHeight);
+}
+function devSessionSize() { return devGridNow || devMeasure() || {cols:40,rows:24}; }
+function devSortSessions(sessions) {
+  const rank = session => /^(Claude|Codex) /.test(session.title || '') ? 0 : 1;
+  return sessions.slice().sort((a, b) => rank(a) - rank(b) || String(a.title).localeCompare(String(b.title)));
+}
+function devRenderSessions() {
+  const select = $('#dev-session');
+  select.innerHTML = devSessions.length ? devSessions.map(session => `<option value="${escaped(session.id)}">${escaped(session.title)}</option>`).join('') : `<option value="" data-i18n="Nenhuma sessão">${escaped(t('Nenhuma sessão'))}</option>`;
+  select.value = devId;
+  const project = savedPreference('ponte-start-project') || devProjects[0] || '';
+  $('#dev-empty-label').textContent = t('Novo Claude em {project}',{project:project || '~'});
+  $('#dev-empty').hidden = !!devId;
+  $('#dev-screen').hidden = !devId;
+  ['#dev-open-pc','#dev-send','#dev-paste','#dev-dictate','#dev-attach'].forEach(selector => { $(selector).disabled = !devId; });
+  $$('[data-dev-key],[data-dev-text]').forEach(button => { button.disabled = !devId; });
+  $('#dev-font-down').disabled = devFont <= DEV_FONT_MIN; $('#dev-font-up').disabled = devFont >= DEV_FONT_MAX;
+}
+function devSelect(id) {
+  devId = id; devHash = ''; devHashId = ''; devFollow = true;
+  $('#dev-output').innerHTML = ''; $('#dev-size').textContent = ''; $('#dev-live').hidden = true;
+  if (id) savePreference('ponte-dev-session', id);
+  devRenderSessions();
+}
+async function devLoadSessions() {
+  try {
+    const listing = await (await api('/terminals',{timeout:8000})).json();
+    devSessions = devSortSessions(listing.sessions || []);
+  } catch (error) { devStatus(error, true); return; }
+  if (!devSessions.some(session => session.id === devId)) {
+    const saved = savedPreference('ponte-dev-session');
+    devSelect((devSessions.find(session => session.id === saved) || devSessions[0] || {}).id || '');
+  } else devRenderSessions();
+}
+async function devLoadProjects() {
+  if (!token || devProjectsToken === token) return;
+  const requestToken = devProjectsToken = token;
+  try {
+    const { projects } = await (await api('/terminals?projects=1',{timeout:8000})).json();
+    if (requestToken !== token || !Array.isArray(projects)) return;
+    devProjects = projects;
+    const select = $('#dev-project'), wanted = select.value || savedPreference('ponte-start-project');
+    select.innerHTML = `<option value="" data-i18n="Pasta pessoal (~)">${escaped(t('Pasta pessoal (~)'))}</option>${projects.map(name => `<option value="${escaped(name)}">${escaped(name)}</option>`).join('')}`;
+    select.value = projects.indexOf(wanted) >= 0 ? wanted : '';
+    devRenderSessions();
+  } catch { if (requestToken === token) devProjectsToken = ''; }
+}
+// Output is polled only while Dev is on screen: fast for a few seconds after
+// each input, then 1 s, backing off to 3 s while nothing changes.
+function devDelay() {
+  if (Date.now() - devLastInput < 8000) return 350;
+  return devIdleDelay;
+}
+function devSchedule(generation) {
+  clearTimeout(devTimer);
+  if (generation === devGeneration && devVisible()) devTimer = setTimeout(() => devRead(generation), devDelay());
+}
+async function devRead(generation) {
+  if (generation !== devGeneration || !devVisible()) return;
+  const id = devId, requestToken = token;
+  if (!id) { devSchedule(generation); return; }
+  try {
+    const since = devHash && devHashId === id ? `&since=${encodeURIComponent(devHash)}` : '';
+    const view = await (await api(`/terminals/${encodeURIComponent(id)}?format=ansi${since}`,{timeout:8000})).json();
+    if (generation !== devGeneration || id !== devId || requestToken !== token || !devVisible()) return;
+    $('#dev-size').textContent = view.cols && view.rows ? `${view.cols}×${view.rows}` : '';
+    if (view.unchanged === true || typeof view.text !== 'string') devIdleDelay = Math.min(3000, Math.round(devIdleDelay * 1.5));
+    else {
+      devIdleDelay = 1000;
+      const screen = $('#dev-screen');
+      $('#dev-output').innerHTML = ansiToHtml(view.text, view.cursor, view.rows);
+      if (devFollow) screen.scrollTop = screen.scrollHeight;
+    }
+    devHash = view.hash || ''; devHashId = id;
+    if (devGridNow && (view.cols !== devGridNow.cols || view.rows !== devGridNow.rows)) devQueueResize();
+  } catch (error) {
+    if (generation !== devGeneration || requestToken !== token) return;
+    if (error && (error.errorCode === 'TERMINAL_NOT_FOUND' || error.errorCode === 'TERMINAL_CHANGED')) { devSelect(''); devLoadSessions(); }
+    else devStatus(error, true);
+  }
+  devSchedule(generation);
+}
+function updateDevNavigation() {
+  clearTimeout(devTimer);
+  const generation = ++devGeneration;
+  if (!devVisible()) return;
+  devApplyFont(); devLoadProjects();
+  devLoadSessions().then(() => { devRefit(); devRead(generation); });
+}
+function devApplyFont() {
+  $('#page-dev').style.setProperty('--dev-font', `${devFont}px`);
+  $('#dev-font-down').disabled = devFont <= DEV_FONT_MIN; $('#dev-font-up').disabled = devFont >= DEV_FONT_MAX;
+}
+// Rotating the phone, opening the keyboard or changing the font changes the
+// grid; the pane follows once the box stops changing for 300 ms.
+function devRefit() {
+  const grid = devMeasure();
+  if (!grid) return;
+  devGridNow = grid;
+  devQueueResize();
+}
+function devQueueResize() {
+  clearTimeout(devResizeTimer);
+  devResizeTimer = setTimeout(async () => {
+    const id = devId, grid = devGridNow;
+    if (!id || !grid || !devVisible()) return;
+    const session = devSessions.find(item => item.id === id);
+    if (session && session.cols === grid.cols && session.rows === grid.rows) return;
+    try {
+      await api(`/terminals/${encodeURIComponent(id)}/resize`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(grid)});
+      if (session) { session.cols = grid.cols; session.rows = grid.rows; }
+      devHash = ''; devLastInput = Date.now();
+    } catch (error) { devStatus(error, true); }
+  }, 300);
+}
+async function devInput(body) {
+  const id = devId;
+  if (!id || !connected || !token) return false;
+  devLastInput = Date.now();
+  try {
+    await api(`/terminals/${encodeURIComponent(id)}/input`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    devStatus('');
+    devFollow = true; devSchedule(devGeneration);
+    return true;
+  } catch (error) {
+    if (error && error.errorCode === 'MULTILINE_NOT_SUPPORTED') devStatus(t('Esta sessão não aceita várias linhas de uma vez: o shell rodaria cada uma. Mande uma linha por vez.'), true);
+    else devStatus(error, true);
+    return false;
+  }
+}
+function devGrow() {
+  const box = $('#dev-input');
+  box.style.height = 'auto';
+  box.style.height = `${Math.min(box.scrollHeight || 0, 5 * 22 + 20)}px`;
+}
+async function devSend(withEnter) {
+  const box = $('#dev-input'), text = box.value.replace(/\r\n?/g,'\n');
+  if (!devId || devBusy || !text.trim()) return;
+  if (text.length > DEV_TEXT_LIMIT) { devStatus(t('Texto longo demais: até {max} caracteres.',{max:DEV_TEXT_LIMIT}), true); return; }
+  devBusy = true;
+  const sent = await devInput(withEnter ? {text, enter:true} : {text});
+  devBusy = false;
+  if (sent && box.value === text) { box.value = ''; devGrow(); }
+}
+async function devCreate(agent, project) {
+  if (devBusy || !connected || !token) return;
+  devBusy = true; devStatus('');
+  const body = {...devSessionSize(), agent};
+  if (project) body.project = project;
+  try {
+    const session = await (await api('/terminals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    devSessions = devSortSessions(devSessions.concat([session]));
+    $('#dev-new-panel').hidden = true; $('#dev-new').setAttribute('aria-expanded','false');
+    devSelect(session.id); devLastInput = Date.now(); devSchedule(devGeneration);
+  } catch (error) { devStatus(error, true); }
+  finally { devBusy = false; }
+}
+function devRenderAgents() { $$('[data-dev-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.devAgent === devAgent))); }
+$('#dev-session').addEventListener('change', event => { devSelect(event.target.value); updateDevNavigation(); });
+$('#dev-new').addEventListener('click', () => { const panel = $('#dev-new-panel'); panel.hidden = !panel.hidden; $('#dev-new').setAttribute('aria-expanded',String(!panel.hidden)); devLoadProjects(); });
+$$('[data-dev-agent]').forEach(button => button.addEventListener('click', () => { devAgent = button.dataset.devAgent; devRenderAgents(); }));
+$('#dev-create').addEventListener('click', () => devCreate(devAgent, $('#dev-project').value));
+$('#dev-empty-start').addEventListener('click', () => devCreate('claude', savedPreference('ponte-start-project') || devProjects[0] || ''));
+$('#dev-keys').addEventListener('click', event => {
+  const button = event.target.closest('[data-dev-key],[data-dev-text]');
+  const payload = button && devKeyPayload(button);
+  if (!payload || button.disabled) return;
+  try { if (navigator.vibrate) navigator.vibrate(8); } catch {}
+  devInput(payload);
+});
+$('#dev-send').addEventListener('click', () => devSend(true));
+$('#dev-paste').addEventListener('click', () => devSend(false));
+$('#dev-input').addEventListener('input', devGrow);
+$('#dev-dictate').addEventListener('click', () => {
+  toggleDictation($('#dev-dictate'), $('#dev-status'), async blob => {
+    // As in Terminals: the transcript lands in the field to review, not in the agent.
+    const text = await uploadDictation('/dictate', blob);
+    if (text) { const box = $('#dev-input'); box.value = box.value ? `${box.value} ${text}` : text; devGrow(); }
+    return text;
+  });
+});
+$('#dev-attach').addEventListener('click', () => $('#dev-file').click());
+$('#dev-file').addEventListener('change', async event => {
+  const file = event.target.files && event.target.files[0], id = devId;
+  event.target.value = '';
+  if (!file || !id) return;
+  if (IMAGE_TYPES.indexOf(file.type) < 0) { devStatus(i18n.apiMessage('UNSUPPORTED_IMAGE_FORMAT'), true); return; }
+  if (file.size > IMAGE_MAX_BYTES) { devStatus(i18n.apiMessage('IMAGE_TOO_LARGE'), true); return; }
+  devStatus(t('Enviando imagem…'));
+  try {
+    const uploaded = await (await api('/images',{method:'POST',headers:{'Content-Type':file.type},body:file,timeout:90000})).json();
+    await api(`/images/${encodeURIComponent(uploaded.id)}/paste`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({terminal:id})});
+    devStatus(t('Imagem anexada: o caminho foi colado na sessão.'));
+    devLastInput = Date.now(); devSchedule(devGeneration);
+  } catch (error) { devStatus(imageFailure(error), true); }
+});
+$('#dev-font-down').addEventListener('click', () => { devFont = Math.max(DEV_FONT_MIN, devFont - 1); savePreference('ponte-dev-font', String(devFont)); devApplyFont(); devRefit(); });
+$('#dev-font-up').addEventListener('click', () => { devFont = Math.min(DEV_FONT_MAX, devFont + 1); savePreference('ponte-dev-font', String(devFont)); devApplyFont(); devRefit(); });
+$('#dev-screen').addEventListener('scroll', () => {
+  const screen = $('#dev-screen');
+  devFollow = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 8;
+  $('#dev-live').hidden = devFollow;
+});
+$('#dev-live').addEventListener('click', () => { const screen = $('#dev-screen'); devFollow = true; screen.scrollTop = screen.scrollHeight; $('#dev-live').hidden = true; });
+$('#dev-open-pc').addEventListener('click', () => { if (devId) $('#dev-open-dialog').showModal(); });
+$('#dev-open-cancel').addEventListener('click', () => $('#dev-open-dialog').close());
+$('#dev-open-confirm').addEventListener('click', async () => {
+  $('#dev-open-dialog').close();
+  if (!devId) return;
+  try { await api(`/terminals/${encodeURIComponent(devId)}/open`,{method:'POST'}); devStatus(t('Aberta numa janela do PC.')); }
+  catch (error) { devStatus(error, true); }
+});
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => { if (devVisible()) devRefit(); }).observe($('#dev-screen'));
+window.addEventListener('resize', () => { if (devVisible()) devRefit(); });
+document.addEventListener('visibilitychange', updateDevNavigation);
+window.addEventListener('pagehide', () => { clearTimeout(devTimer); devGeneration++; });
+window.addEventListener('ponte-native-resume', updateDevNavigation);
+devApplyFont(); devRenderAgents(); devRenderSessions();
 
 // A device already on the owner's tailnet is handed the key by the PC, so it
 // never sees the pairing screen. The typed key stays as the fallback.
