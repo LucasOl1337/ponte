@@ -2,6 +2,34 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.23 (2026-09-28)
+
+The owner's calls on the Dev tab and the agents list. No new routes; the APK (versionCode 20) only carries the version.
+
+- **Dev tab.** The key row puts the 1/2/3 permission-menu answers right after Esc.
+  "Open on the PC" asks only the first time for each session. Claude Code's ⏵ ⏸ ⏺ ⎿
+  symbols, which no font on the phone has, are drawn as one-cell look-alikes
+  (▸ ‖ ● └), so the footer no longer shows empty boxes and columns stay aligned.
+- **Agents tell you when they need you.** An idle Claude that already did work in its
+  session now shows as **Ready** in a softer amber. One that was just opened and never
+  asked anything stays **Idle**. The list is ordered waiting, working, ready, idle,
+  terminal.
+- **Automated agents hidden.** `codex exec` and `claude -p` are hidden by default
+  behind **Show automated (N)**, which keeps counting them.
+- **Agent alerts.** With the app open on any tab, the phone reads the agent list every
+  10 s; this pauses when the app is in the background. When an agent goes from working
+  to waiting for you, or to ready, a banner says "<title> needs you" or "<title>
+  finished". The phone buzzes and the Terminals tab gets a dot; tapping the banner
+  opens the conversation. It never fires on the first read, for automated agents, or
+  right after you replied from the phone. **Agent alerts** turns it off.
+- Maestri agents stay read-only: the Maestri CLI refuses to run outside its own
+  terminals, and the hint now says so.
+
+Verified with `npm test`, including fixture tests for the ready rule and UI tests for
+the filter, the alerts, the per-session confirmation and the symbol mapping. The glyph
+coverage was checked against the fonts pulled from the phone. On the phone itself, the
+Dev tab and the agents list were checked after install.
+
 ## 0.1.0-alpha.22 (2026-09-28)
 
 A Dev tab for developing from the phone: an agent terminal on the PC that reads and types like the real thing. Needs the new APK (versionCode 19) only for "Open on the PC"; the rest reloads with the page.
