@@ -21,13 +21,13 @@ const agents = [
   { id: 'w-f2', kind: 'terminal', title: 'lol@lol:~', cwd: '', state: 'terminal', where: { type: 'terminal', address: '0xf2', monitor: 0, workspace: { id: 2, name: '2' } }, transcript: false, canReply: false },
 ];
 
-function harness(respond) {
+function harness(respond, { navigator: extra = {}, storage = null, stored = {} } = {}) {
   const document = makeDocument(html), window = makeWindow();
-  const saved = new Map([['ponte-pair-token', 'synthetic-test-token']]);
+  const saved = new Map([['ponte-pair-token', 'synthetic-test-token'], ...Object.entries(stored)]);
   const calls = [];
   const context = vm.createContext({
-    document, window, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) },
-    navigator: { language: 'en-US', languages: ['en-US'], userAgent: 'Test browser' }, location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
+    document, window, localStorage: storage || { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) },
+    navigator: { language: 'en-US', languages: ['en-US'], userAgent: 'Test browser', ...extra }, location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
     CustomEvent: class { constructor(type, { detail } = {}) { this.type = type; this.detail = detail; } },
     Intl, Date, Error, TypeError, TextDecoder, Uint8Array, AbortController, URL, Blob, performance,
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
@@ -120,4 +120,143 @@ test('an older native shell that blocks /api/agents still lists PC terminal wind
   assert.match(text[0], /✳ Demo project/);
   assert.match(text[2], /Terminal 1/);
   assert.equal(h.el('#agent-count').textContent, '');
+});
+
+// Synthetic agents for the filter and notice checks: no real names, ids or paths.
+const sample = (id, state, extra = {}) => ({ id, kind: 'claude', title: `Sample ${id}`, cwd: '~/work/sample', state, waitingFor: null, since: minutesAgo(1), where: { type: 'none' }, headless: false, transcript: true, canReply: false, ...extra });
+
+function watchHarness(initial, options = {}) {
+  let items = initial;
+  const vibrations = [];
+  const h = harness(path => {
+    if (path === '/api/agents') return ok({ items, scannedAt: Date.now(), scanMs: 5 });
+    if (path === '/api/terminals') return ok({ available: true, sessions: [], limit: 4 });
+    if (path.startsWith('/api/agents/') && path.endsWith('/transcript')) return ok({ id: path.split('/')[3], available: true, messages: [] });
+    return null;
+  }, { navigator: { vibrate: ms => { vibrations.push(ms); return true; } }, ...options });
+  const reads = () => h.calls.filter(call => call.path === '/api/agents').length;
+  const watch = async () => { await h.run('agentWatch(terminalGeneration)'); await flush(); };
+  return { h, vibrations, reads, watch, set: next => { items = next; } };
+}
+
+test('automated agents are hidden by default behind "Show automated (N)", which counts them and remembers the choice', async () => {
+  const list = [sample('p-10-1', 'working'), sample('p-11-1', 'working', { kind: 'codex', headless: true, where: { type: 'app', app: 'Sample app' } }), sample('p-12-1', 'waiting', { headless: true })];
+  const { h } = watchHarness(list);
+  await flush();
+  h.run("navigate('terminais')"); await flush(); await flush();
+  const titles = () => h.el('#agent-list').querySelectorAll('.agent-card').map(card => card.querySelector('strong').textContent);
+  assert.deepEqual(titles(), ['Sample p-10-1']);
+  assert.equal(h.el('#agent-show-auto').hidden, false);
+  assert.equal(h.el('#agent-show-auto').textContent, 'Show automated (2)', 'the count shows while they are hidden');
+  assert.equal(h.el('#agent-show-auto').getAttribute('aria-pressed'), 'false');
+  assert.equal(h.el('#agent-count').textContent, '1 ACTIVE', 'hidden agents are not counted');
+  h.el('#agent-show-auto').click(); await flush();
+  assert.deepEqual(titles(), ['Sample p-10-1', 'Sample p-11-1', 'Sample p-12-1']);
+  assert.equal(h.el('#agent-show-auto').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.el('#agent-count').textContent, '3 ACTIVE');
+  assert.equal(h.run("localStorage.getItem('ponte-agents-auto')"), 'show');
+  h.i18n.setLanguage('pt'); await flush();
+  assert.equal(h.el('#agent-show-auto').textContent, 'Mostrar automáticos (2)');
+  // A WebView whose storage throws still starts with them hidden.
+  const broken = harness(path => path === '/api/agents' ? ok({ items: list }) : null, { storage: { getItem(key) { if (key === 'ponte-pair-token') return 'synthetic-test-token'; throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() {} } });
+  await flush();
+  broken.run("navigate('terminais')"); await flush(); await flush();
+  assert.equal(broken.el('#agent-list').querySelectorAll('.agent-card').length, 1);
+  broken.el('#agent-show-auto').click(); await flush();
+  assert.equal(broken.el('#agent-list').querySelectorAll('.agent-card').length, 3);
+});
+
+test('a ready Claude shows "Ready" with its own style', async () => {
+  const { h } = watchHarness([sample('p-20-1', 'ready'), sample('p-21-1', 'idle')]);
+  await flush();
+  h.run("navigate('terminais')"); await flush(); await flush();
+  const cards = h.el('#agent-list').querySelectorAll('.agent-card');
+  assert.equal(cards[0].getAttribute('data-state'), 'ready');
+  assert.match(cards[0].textContent, /Ready/);
+  assert.match(cards[1].textContent, /Idle/);
+  h.i18n.setLanguage('pt'); await flush();
+  assert.match(h.el('#agent-list').textContent, /Pronto/);
+});
+
+test('working → waiting or ready raises one tappable notice on any tab; the first read, automated agents and fresh replies never do', async () => {
+  const a = sample('p-30-1', 'working'), b = sample('p-31-1', 'working'), auto = sample('p-32-1', 'working', { headless: true });
+  const w = watchHarness([a, b, auto]);
+  await flush();
+  w.h.run("navigate('inicio')"); await flush();
+  await w.watch();
+  assert.ok(w.reads() >= 1, 'the Home reads the agent list too');
+  assert.equal(w.h.el('#agent-notice').hidden, true, 'first read only sets the baseline');
+  w.set([{ ...a, state: 'waiting', waitingFor: 'input needed' }, b, { ...auto, state: 'waiting' }]);
+  await w.watch();
+  assert.equal(w.h.el('#agent-notice').hidden, false);
+  assert.equal(w.h.el('#agent-notice-title').textContent, 'Sample p-30-1 needs you');
+  assert.equal(w.h.el('#agent-notice-detail').textContent, 'input needed');
+  assert.deepEqual(w.vibrations.length, 1);
+  assert.equal(w.h.el('#nav-agent-dot').hidden, false);
+  await w.watch();
+  assert.equal(w.vibrations.length, 1, 'a transition fires once');
+  w.set([{ ...a, state: 'waiting', waitingFor: 'input needed' }, { ...b, state: 'ready' }, { ...auto, state: 'waiting' }]);
+  await w.watch();
+  assert.equal(w.h.el('#agent-notice-title').textContent, 'Sample p-31-1 finished');
+  assert.equal(w.h.el('#agent-notice-detail').textContent, '');
+  assert.equal(w.vibrations.length, 2);
+  w.h.el('#agent-notice').click(); await flush(); await flush();
+  assert.equal(w.h.el('#agent-notice').hidden, true);
+  assert.equal(w.h.el('#agent-dialog').open, true);
+  assert.equal(w.h.el('#agent-dialog-title').textContent, 'Sample p-31-1');
+  w.h.run('closeAgent()');
+  // A reply sent from the phone a moment ago does not echo back as a notice.
+  w.set([{ ...a, state: 'working' }, { ...b, state: 'working' }, auto]);
+  await w.watch();
+  w.h.run("agentRepliedAt['p-30-1'] = Date.now()");
+  w.set([{ ...a, state: 'waiting' }, { ...b, state: 'working' }, auto]);
+  await w.watch();
+  assert.equal(w.vibrations.length, 2);
+  // Opening Terminals clears the dot; there the 3 s read is the only one.
+  w.h.run("navigate('terminais')"); await flush(); await flush();
+  assert.equal(w.h.el('#nav-agent-dot').hidden, true);
+  const before = w.reads();
+  await w.watch();
+  assert.equal(w.reads(), before, 'no second reader on Terminals');
+  w.h.i18n.setLanguage('pt');
+  w.h.run('agentNoticeCheck(agentItems.map(item => Object.assign({}, item, {state:"working"})))');
+  w.h.run("agentNoticeCheck([Object.assign({}, agentItems[1], {state:'waiting', title:'Amostra'})])");
+  assert.equal(w.h.el('#agent-notice-title').textContent, 'Amostra precisa de você');
+});
+
+test('notices switched off never fire nor read outside Terminals, and a paused or hidden app does not read', async () => {
+  const a = sample('p-40-1', 'working');
+  const w = watchHarness([a]);
+  await flush();
+  w.h.run("navigate('terminais')"); await flush(); await flush();
+  assert.equal(w.h.el('#agent-notices').getAttribute('aria-pressed'), 'true', 'on by default');
+  w.h.el('#agent-notices').click(); await flush();
+  assert.equal(w.h.el('#agent-notices').getAttribute('aria-pressed'), 'false');
+  assert.equal(w.h.run("localStorage.getItem('ponte-agent-notices')"), 'off');
+  w.h.run("agentNoticeCheck([Object.assign({}, agentItems[0], {state:'waiting'})])");
+  assert.equal(w.h.el('#agent-notice').hidden, true);
+  assert.equal(w.vibrations.length, 0);
+  w.h.run("navigate('inicio')"); await flush();
+  let before = w.reads();
+  await w.watch();
+  assert.equal(w.reads(), before, 'off means no background reading');
+  // Back on: reading resumes, but not while the native shell is paused or the page is hidden.
+  w.h.run("navigate('terminais')"); await flush();
+  w.h.el('#agent-notices').click(); await flush();
+  w.h.run("navigate('inicio')"); await flush();
+  w.h.run("window.dispatchEvent({type:'ponte-native-pause', detail:{}})");
+  before = w.reads();
+  await w.watch();
+  assert.equal(w.reads(), before, 'paused: no read');
+  w.h.run("window.dispatchEvent({type:'ponte-native-resume'})"); await flush();
+  await w.watch();
+  assert.equal(w.reads(), before + 1);
+  w.h.document.hidden = true;
+  before = w.reads();
+  await w.watch();
+  assert.equal(w.reads(), before, 'hidden: no read');
+  // Remembered across launches.
+  const again = watchHarness([a], { stored: { 'ponte-agent-notices': 'off' } });
+  await flush();
+  assert.equal(again.h.el('#agent-notices').getAttribute('aria-pressed'), 'false');
 });

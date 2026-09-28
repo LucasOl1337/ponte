@@ -339,6 +339,13 @@ export function createAgents(options = {}) {
       } else if (TITLE_WORKING.test(windowTitle)) state = 'working';
       else if (TITLE_IDLE.test(windowTitle)) state = 'idle';
       else state = (cpuShare !== null && cpuShare >= CPU_WORKING) || (written && scanAt - written < RECENT_WRITE_MS) ? 'working' : 'idle';
+      // An idle Claude that already did something in this process is ready for
+      // the next request, not merely stopped. Claude creates its transcript on
+      // the first message, so a fresh session has none; a resumed one has an
+      // old transcript and counts once it was written or its status moved
+      // after this process started.
+      if (state === 'idle' && agent.kind === 'claude' && written !== null && startedAt
+        && (written > startedAt || (session && Number(session.statusUpdatedAt) > startedAt))) state = 'ready';
       if (!since) since = written || startedAt;
 
       const headless = agent.argv.some(arg => arg === '-p' || arg === '--print' || arg === 'exec');
@@ -362,7 +369,7 @@ export function createAgents(options = {}) {
     }
     for (const key of cpu.keys()) if (!seen.has(key)) { cpu.delete(key); codexFiles.delete(key); }
     for (const key of privateInfo.keys()) if (!items.some(item => item.id === key)) privateInfo.delete(key);
-    const order = { waiting: 0, working: 1, idle: 2, terminal: 3 };
+    const order = { waiting: 0, working: 1, ready: 2, idle: 3, terminal: 4 };
     items.sort((a, b) => order[a.state] - order[b.state] || (b.since || 0) - (a.since || 0));
     lastScanMs = Math.round((performance.now() - started) * 10) / 10;
     return { items, scannedAt: scanAt, scanMs: lastScanMs };
