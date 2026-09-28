@@ -935,7 +935,7 @@ test('a line with enter is typed and confirmed in one action, and a Super drag h
 // Magma controller with --json: one entry per device, printed also before a non-zero exit.
 const magmaReport = (ok, statuses) => JSON.stringify({ action: 'sleep', ok, devices: Object.entries(statuses).map(([device, status]) => ({ device, status, ...(status === 'failed' ? { error: 'i2c timeout' } : {}) })) });
 const commandFailure = detail => Object.assign(new ApiError(503, 'COMMAND_FAILED', { command: 'python' }), { detail: { exitCode: 1, signal: null, timedOut: false, stdout: '', stderr: '', ...detail } });
-function sleepDesktop({ python, hyprFails = false, controller = '/nonexistent/controller.py' }) {
+function sleepDesktop({ python, hyprFails = false, controller = '/nonexistent/controller.py', lightsAnswerMs }) {
   const calls = []; const logs = [];
   const log = { log: line => logs.push(['log', line]), error: line => logs.push(['error', line]) };
   const runner = async (command, args) => {
@@ -948,7 +948,7 @@ function sleepDesktop({ python, hyprFails = false, controller = '/nonexistent/co
     if (command === 'python') return python(args);
     return 'ok';
   };
-  const desktop = createDesktop({ runner, exists: async () => true, env: { ...process.env, MAGMA_LIGHTS_CONTROLLER: controller }, log });
+  const desktop = createDesktop({ runner, exists: async () => true, env: { ...process.env, MAGMA_LIGHTS_CONTROLLER: controller }, log, lightsAnswerMs });
   return { desktop, calls, logs };
 }
 
@@ -1026,4 +1026,26 @@ test('a failed command keeps its exit code, stdout and a redacted stderr tail of
     assert.equal(error.detail.stderr.includes(secret), false);
     return true;
   });
+});
+
+test('a sleep longer than the phone proxy allows answers pending, then reports through state.lights.last', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-lights-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const controller = path.join(root, 'controller.py');
+  await writeFile(controller, '# fake Magma controller\n');
+  let finish;
+  const { desktop, logs } = sleepDesktop({ controller, lightsAnswerMs: 20, python: args => args[1] === 'status'
+    ? JSON.stringify({ last_applied: { preset: 'lava', sleeping: true, brightness: 100, incomplete: ['ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC'] } })
+    : new Promise((resolve, reject) => { finish = () => reject(commandFailure({ stdout: magmaReport(false, { 'ENE DRAM': 'ok', 'ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC': 'failed', 'G515 LS TKL': 'absent', 'MSI B650M': 'ok' }) })); }) });
+  assert.deepEqual(await desktop.action({ type: 'power.sleep' }), { ok: true, lights: { pending: true, job: 1 } });
+  assert.equal((await desktop.getState()).lights.last, null, 'nothing reported while the controller runs');
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  const { lights } = await desktop.getState();
+  assert.deepEqual(lights.last, { job: 1, action: 'power.sleep', ok: false, devices: [{ device: 'RAM ENE', status: 'ok' }, { device: 'GPU', status: 'failed' }, { device: 'G515', status: 'absent' }, { device: 'MSI (fans)', status: 'ok' }] });
+  assert.deepEqual(lights.incomplete, ['GPU']);
+  assert.match(logs.at(-1)[1], /\[lights\] power\.sleep failed/);
+  // A quick answer still comes back inline, with the next job number recorded.
+  const quick = sleepDesktop({ lightsAnswerMs: 1000, python: () => magmaReport(true, { 'ENE DRAM': 'ok' }) });
+  assert.deepEqual((await quick.desktop.action({ type: 'power.wake' })).lights, { ok: true, devices: [{ device: 'RAM ENE', status: 'ok' }] });
 });

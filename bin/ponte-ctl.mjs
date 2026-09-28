@@ -258,9 +258,7 @@ async function main() {
   }
   if (options['dry-run']) { emit({ ok: true, data: { dryRun: true, requiresConfirmation: !!command.confirm, ...redacted(request) } }); return; }
   if (command.confirm && !options.yes) throw new CliError('CONFIRMATION_REQUIRED', 'This command requires --yes. Inspect it with --dry-run first.', 2);
-  // Sleep, wake and light changes make one OpenRGB call per device group on the PC.
-  const slowAction = /^(power\.(sleep|smart_sleep|wake|restore)|lights\.(preset|sleep|restore|reapply))$/.test(String(request.body?.type || ''));
-  const client = await createClient({ url: options.url, tokenFile: options['token-file'], caFile: options['ca-file'], timeout: options.timeout ?? Math.max(slowAction ? 80000 : 15000, (request.durationMs || 0) + 5000), signal: controller.signal });
+  const client = await createClient({ url: options.url, tokenFile: options['token-file'], caFile: options['ca-file'], timeout: options.timeout ?? Math.max(15000, (request.durationMs || 0) + 5000), signal: controller.signal });
   mutation = request.method !== 'GET';
   const result = await client.request(request);
   if (command.select && !Object.hasOwn(result, command.select)) throw new CliError('INVALID_RESPONSE', 'Server response is missing the requested state field.', 6);

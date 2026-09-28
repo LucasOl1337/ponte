@@ -77,7 +77,7 @@ function getEthernetWolInfo(env = process.env) {
   return best ? { mac: best.mac, interface: best.name } : { mac: null, interface: null };
 }
 
-export function createDesktop({ runner = runCommand, exists = commandExists, env = process.env, dragTimeout = 1800, log = console } = {}) {
+export function createDesktop({ runner = runCommand, exists = commandExists, env = process.env, dragTimeout = 1800, log = console, lightsAnswerMs = 11000 } = {}) {
   const ydotoolEnv = { ...env, YDOTOOL_SOCKET: env.YDOTOOL_SOCKET || path.join(env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`, 'ponte-input.sock') };
   const run = (command, args, options = {}) => runner(command, args, { env: command === 'ydotool' ? ydotoolEnv : env, ...options });
   const readHypr = async (kind, options = {}) => {
@@ -215,11 +215,26 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       const report = lightsReport(error.detail?.stdout);
       const failed = report ? report.devices.filter(item => item.status === 'failed').map(item => item.device) : [];
       log.error(`[lights] ${label} failed: exit=${error.detail?.exitCode ?? '?'}${error.detail?.timedOut ? ' (timeout)' : ''} ${report ? JSON.stringify(report.devices) : ''} ${error.detail?.stderr || ''}`.trim());
-      throw new ApiError(503, 'LIGHTS_FAILED', { devices: failed.length ? failed.join(', ') : 'RGB' });
-    }
+      throw Object.assign(new ApiError(503, 'LIGHTS_FAILED', { devices: failed.length ? failed.join(', ') : 'RGB' }), { devices: report ? report.devices : [] });
+    } finally { lightsCache.at = 0; }
     const report = lightsReport(stdout);
     log.log(`[lights] ${label} ok${report ? ` ${JSON.stringify(report.devices)}` : ''}`);
     return report;
+  }
+  // The Android shell's proxy drops a response after 15 s, and a sleep takes
+  // ~20 s. Past lightsAnswerMs the phone gets { pending, job } and the outcome
+  // arrives later as state.lights.last with the same job number.
+  let lightsJobs = 0;
+  let lightsLast = null;
+  async function lightsInTime(label, ...args) {
+    const job = ++lightsJobs;
+    const work = lightsAction(label, ...args).then(
+      report => { lightsLast = { job, action: label, ok: true, devices: report ? report.devices : [] }; return report; },
+      error => { lightsLast = { job, action: label, ok: false, devices: error.devices || [] }; throw error; });
+    work.catch(() => {});
+    let timer;
+    const late = new Promise(resolve => { timer = setTimeout(() => resolve({ pending: true, job }), lightsAnswerMs); });
+    try { return await Promise.race([work, late]); } finally { clearTimeout(timer); }
   }
   let lightsCache = { at: 0, value: null };
   async function lightsInstalled() {
@@ -327,7 +342,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       power: { wakeOnLan: { mac: wol.mac, interface: wol.interface, enabled: wolEnabled, instructions: wolInstructions } },
       session: { locked, lockAvailable: !!caps.lock },
       textInput,
-      lights: lights ? { ...lights, presets: LIGHT_PRESETS } : null,
+      lights: lights ? { ...lights, presets: LIGHT_PRESETS, last: lightsLast } : null,
     };
   }
 
@@ -513,7 +528,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         } catch (error) { monitorError = error; log.error(`[power] ${value.type} monitors failed: ${error.code || error.message}`); }
         lightsCache.at = 0;
         let lights;
-        try { lights = await lightsAction(value.type, sleeping ? 'sleep' : 'restore'); }
+        try { lights = await lightsInTime(value.type, sleeping ? 'sleep' : 'restore'); }
         catch (error) { if (!monitorError && sleeping) throw new ApiError(503, 'SLEEP_LIGHTS_FAILED', error.parameters); throw monitorError || error; }
         if (monitorError) throw monitorError;
         return { ok: true, lights };
@@ -522,14 +537,14 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         if (typeof value.preset !== 'string' || !LIGHT_PRESETS.includes(value.preset)) throw new ApiError(400, 'INVALID_PRESET');
         if (!await lightsInstalled()) throw new ApiError(503, 'LIGHTS_UNAVAILABLE');
         lightsCache.at = 0;
-        return { ok: true, lights: await lightsAction(value.type, 'preset', value.preset) };
+        return { ok: true, lights: await lightsInTime(value.type, 'preset', value.preset) };
       }
       case 'lights.sleep':
       case 'lights.restore':
       case 'lights.reapply': {
         if (!await lightsInstalled()) throw new ApiError(503, 'LIGHTS_UNAVAILABLE');
         lightsCache.at = 0;
-        return { ok: true, lights: await lightsAction(value.type, value.type.slice('lights.'.length)) };
+        return { ok: true, lights: await lightsInTime(value.type, value.type.slice('lights.'.length)) };
       }
       case 'lights.screen': {
         if (typeof value.enabled !== 'boolean') throw new ApiError(400, 'INVALID_POWER_STATE');

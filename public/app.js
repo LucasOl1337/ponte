@@ -92,16 +92,33 @@ async function action(type, payload = {}, feedback = '') {
 }
 
 // Sleep, wake and light changes run one OpenRGB call per device group on the PC
-// (~20 s), and the answer says which lights were not found or did not respond.
+// (~20 s). The PC answers within ~11 s; a longer job comes back as pending and
+// its outcome arrives with the state poll as lights.last for the same job.
+let pendingLights = null;
+function lightsOutcome(devices, feedback) {
+  const absent = devices.filter(item => item.status === 'absent').map(item => item.device);
+  return absent.length ? `${feedback} ${t('Não encontrado (desligado?): {devices}.',{devices:absent.join(', ')})}` : feedback;
+}
+function settleLights(last) {
+  if (!pendingLights || !last || last.job !== pendingLights.job) return;
+  const { feedback } = pendingLights;
+  pendingLights = null;
+  const devices = Array.isArray(last.devices) ? last.devices : [];
+  const failed = devices.filter(item => item.status === 'failed').map(item => item.device);
+  if (last.ok) toast(lightsOutcome(devices, feedback));
+  else toast(t('Estas luzes não responderam: {devices}.',{devices:failed.join(', ') || 'RGB'}), true);
+}
 async function lightsAction(type, payload = {}, feedback = '') {
   if (!connected) { toast(t("Reconecte ao PC para usar este controle."), true); return false; }
   try {
-    const response = await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}), timeout: 80000 });
+    const response = await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}) });
     let result = null;
     try { result = await response.json(); } catch {}
-    const devices = result && result.lights && Array.isArray(result.lights.devices) ? result.lights.devices : [];
-    const absent = devices.filter(item => item.status === 'absent').map(item => item.device);
-    toast(absent.length ? `${feedback} ${t('Não encontrado (desligado?): {devices}.',{devices:absent.join(', ')})}` : feedback);
+    const lights = result && result.lights;
+    if (lights && lights.pending) {
+      pendingLights = { job: lights.job, feedback };
+      toast(t("As luzes ainda estão mudando no PC. O resultado aparece aqui."));
+    } else toast(lightsOutcome(lights && Array.isArray(lights.devices) ? lights.devices : [], feedback));
     setTimeout(pollState, 180);
     return true;
   } catch (error) { toast(error, true); setTimeout(pollState, 180); return false; }
@@ -292,6 +309,7 @@ async function pollState() {
 let renderedAllOnce = false;
 function renderVisiblePage() {
   if (!state) return;
+  settleLights(state.lights && state.lights.last);
   // The first state (and a language change) fills every page so nothing is
   // empty when navigated to; after that only the visible page is refreshed.
   if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderScreenWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }

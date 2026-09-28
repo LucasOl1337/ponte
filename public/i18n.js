@@ -460,6 +460,8 @@
   "Luzes apagadas. Toque em um preset ou em Restaurar.": "Lights are off. Tap a preset or Restore.",
   "Luzes apagadas, menos: {devices}. Toque em Apagar luzes de novo ou em Restaurar luzes.": "Lights are off except: {devices}. Tap Lights off again or Restore lights.",
   "Não encontrado (desligado?): {devices}.": "Not found (turned off?): {devices}.",
+  "As luzes ainda estão mudando no PC. O resultado aparece aqui.": "The lights are still changing on the PC. The result will show here.",
+  "Estas luzes não responderam: {devices}.": "These lights did not respond: {devices}.",
   "Luzes no preset {preset}.": "Lights set to {preset}.",
   "Luzes restauradas.": "Lights restored.",
   "MOVER PARA": "MOVE TO",
