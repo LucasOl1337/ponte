@@ -21,6 +21,7 @@ import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
 import { message, publicErrorParameters, requestLocale } from './backend/i18n.mjs';
 import { readNativeTls } from './backend/tls.mjs';
+import { createMesh } from './backend/mesh.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -110,6 +111,22 @@ function createRequestGuard(trustedHosts) {
   };
 }
 
+// A relayed state must not teach the phone's proxy another node's MAC: it
+// keeps the first one it sees as the PC to wake.
+function stripMac(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 6) return;
+  if (!Array.isArray(value) && Object.hasOwn(value, 'mac')) delete value.mac;
+  for (const item of Object.values(value)) stripMac(item, depth + 1);
+}
+
+async function readJson(req, maxBytes) {
+  if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
+  const body = await readBody(req, maxBytes);
+  try { return JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
+}
+
+const bearer = req => { const value = req.headers.authorization; return typeof value === 'string' && value.startsWith('Bearer ') ? value.slice(7) : ''; };
+
 function json(res, status, value) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(value));
@@ -195,6 +212,29 @@ export async function createApp(options = {}) {
   const agentEvents = options.agentEvents || createAgentEvents({ list: () => agents.list() });
   const transcriber = options.transcriber || createTranscriber(initialized.dataDir, { env });
   const tailnetIdentity = options.tailnetIdentity || createTailscaleIdentity({ env, selfAddress: settings?.nativeTls?.host || env.OMARCHY_REMOTE_NATIVE_BIND });
+  // Other nodes pin this CA (or the self-signed leaf when there is no CA).
+  const caPem = options.caPem || (settings?.nativeTls?.caFile ? await readFile(settings.nativeTls.caFile, 'utf8') : nativeTls?.cert ? String(nativeTls.cert) : null);
+  const mesh = options.mesh || await createMesh({
+    dataDir: initialized.dataDir, env, identity: tailnetIdentity, version: uiVersion, caPem, selfPort: settings?.nativeTls?.port,
+    enabled: !!settings?.nativeTls && env.PONTE_MESH !== '0', ...options.meshOptions,
+  });
+  // The owner token, or a paired node's token over the tailnet listener only
+  // (bound to that node's address). The RD WebSocket reuses this.
+  function authenticate(token, req) {
+    const candidate = Buffer.from(typeof token === 'string' ? token : '');
+    if (candidate.length === tokenBytes.length && timingSafeEqual(candidate, tokenBytes)) return { kind: 'owner' };
+    if (!req?.ponteNative && req?.socket?.encrypted !== true) return null;
+    const peer = mesh.authorizePeer(token, req.socket?.remoteAddress);
+    return peer ? { kind: 'peer', peer } : null;
+  }
+  function relayedState(value, peer) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    stripMac(value);
+    value.node = { id: peer.peerId, name: peer.name, version: typeof value.version === 'string' ? value.version : null };
+    value.version = uiVersion;
+    value.mesh = { ...mesh.view(), target: peer.peerId };
+    return value;
+  }
   const activeRequests = new Set();
   let shuttingDown = false, closingPromise;
 
@@ -294,15 +334,49 @@ export async function createApp(options = {}) {
         if (!allowed) throw pairingRejection();
         json(res, 200, { token: initialized.token }); return;
       }
+      // Mesh pairing between nodes: hello is public; a request needs a device
+      // of this node's owner; its outcome needs the secret that made it.
+      if (pathname === '/api/mesh/hello' && req.method === 'GET') { json(res, 200, mesh.hello()); return; }
+      if (pathname === '/api/mesh/requests' && req.method === 'POST') {
+        if (!req.ponteNative) throw new ApiError(403, 'MESH_NOT_OWNER');
+        const value = await limits.only('body', 8, () => readJson(req, 4096));
+        json(res, 200, await mesh.createRequest(req.socket?.remoteAddress, value)); return;
+      }
+      const meshRequest = pathname.match(/^\/api\/mesh\/requests\/([a-f0-9]{16})$/);
+      if (meshRequest && req.method === 'GET') {
+        if (!req.ponteNative) throw new ApiError(404, 'MESH_REQUEST_NOT_FOUND');
+        json(res, 200, mesh.requestStatus(req.socket?.remoteAddress, meshRequest[1], bearer(req))); return;
+      }
       if (!pathname.startsWith('/api/')) { await staticFile(req, res, pathname); return; }
-      const provided = req.headers.authorization;
-      const candidate = Buffer.from(typeof provided === 'string' && provided.startsWith('Bearer ') ? provided.slice(7) : '');
-      if (candidate.length !== tokenBytes.length || !timingSafeEqual(candidate, tokenBytes)) throw new ApiError(401, 'PAIRING_REQUIRED');
+      const caller = authenticate(bearer(req), req);
+      if (!caller) throw new ApiError(401, 'PAIRING_REQUIRED');
+      req.ponteCaller = caller;
+      // ?node=<id> relays to a paired node. Only the owner of this node may
+      // relay, and a paired node never manages pairings here (no chains).
+      const nodes = query.getAll('node');
+      if (nodes.length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
+      const meshRoute = pathname === '/api/mesh' || pathname.startsWith('/api/mesh/');
+      if (caller.kind === 'peer' && nodes.length) throw new ApiError(403, 'MESH_CHAIN_DENIED');
+      if (caller.kind === 'peer' && meshRoute) throw new ApiError(403, 'MESH_OWNER_ONLY');
+      if (nodes[0] && nodes[0] !== mesh.id) {
+        if (meshRoute) throw new ApiError(400, 'MESH_INVALID_REQUEST');
+        const url = new URL(req.url, 'http://localhost');
+        url.searchParams.delete('node');
+        await mesh.relay(req, res, nodes[0], url.pathname + url.search, { transform: pathname === '/api/state' && req.method === 'GET' ? relayedState : undefined });
+        return;
+      }
       if (pathname === '/api/state' && req.method === 'GET') {
         const state = await limits.only('state', 2, () => desktop.getState({ locale }));
         if (state?.capabilities) state.capabilities = { ...state.capabilities, stt: await transcriber.available() };
         if (state && typeof state === 'object') state.version = uiVersion;
+        if (state && typeof state === 'object' && caller.kind === 'owner' && mesh.active()) state.mesh = mesh.view();
         json(res, 200, state); return;
+      }
+      if (pathname === '/api/mesh' && req.method === 'GET') { json(res, 200, await mesh.list()); return; }
+      const meshAdmin = pathname.match(/^\/api\/mesh\/(pair|approve|deny|revoke)$/);
+      if (meshAdmin && req.method === 'POST') {
+        const value = await limits.only('body', 8, () => readJson(req, 4096));
+        json(res, 200, await mesh.action({ ...(value && typeof value === 'object' ? value : {}), type: `mesh.${meshAdmin[1]}` })); return;
       }
       // Dictation audio is transcribed on the PC and discarded; only the text is
       // typed, into a terminal session (optionally followed by Enter) or returned.
@@ -326,6 +400,11 @@ export async function createApp(options = {}) {
         await limits.only('body', 8, async () => {
           const body = await readBody(req, 24 * 1024);
           let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
+          // Pairing actions for the phone, whose proxy reaches no /api/mesh route.
+          if (typeof value?.type === 'string' && value.type.startsWith('mesh.')) {
+            if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
+            json(res, 200, await mesh.action(value)); return;
+          }
           json(res, 200, await limits.action(() => desktop.action(value)));
         }); return;
       }
@@ -485,11 +564,12 @@ export async function createApp(options = {}) {
       await terminalsClosed;
       await Promise.resolve(desktop.close?.()).catch(() => {});
       await audio.close?.();
+      await mesh.close?.();
       await closed;
     })();
     return closingPromise;
   }
-  return { server, nativeServer, close, dataDir: initialized.dataDir };
+  return { server, nativeServer, close, dataDir: initialized.dataDir, mesh, authenticate };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
