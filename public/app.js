@@ -1924,6 +1924,162 @@ $('#stop-pc-audio').addEventListener('click', async () => {
   catch(error) { toast(error,true); }
 });
 
+// Images from the phone (a screenshot shared to Ponte, or one picked here) go
+// to the PC only where the user points: nothing is uploaded, copied or pasted
+// before a destination button is pressed, and Enter is never sent.
+const IMAGE_TYPES = ['image/png','image/jpeg','image/webp'];
+const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+let imageQueue = [];
+let imageIndex = 0;
+let imageBusy = false;
+const imageTerminalTitles = new Map();
+function currentImage() { return imageQueue[imageIndex] || null; }
+function imageResult(message, error = false) {
+  const element = $('#image-result');
+  if (!message) { element.hidden = true; element.textContent = ''; return; }
+  i18n.write(element,message); element.classList.toggle('error', error); element.hidden = false;
+}
+function imageFailure(error) {
+  if (error && error.errorCode) return i18n.apiMessage(error.errorCode,error.errorParameters || {},error.message);
+  return error && error.message ? error.message : String(error);
+}
+function renderImageChoice() {
+  const item = currentImage();
+  $('#image-empty').hidden = !!item;
+  $('#image-chosen').hidden = !item;
+  if (!item) { $('#image-preview').removeAttribute('src'); return; }
+  $('#image-preview').src = item.url;
+  $('#image-caption').textContent = `${item.name} · ${formatBytes(item.blob.size)}`;
+  $('#image-nav').hidden = imageQueue.length < 2;
+  $('#image-position').textContent = t('{current} de {total}',{current:imageIndex + 1,total:imageQueue.length});
+  ['#image-copy','#image-paste','#image-save','#image-prev','#image-next'].forEach(selector => { $(selector).disabled = imageBusy; });
+  $('#image-paste').disabled = imageBusy || !$('#image-terminal').value;
+}
+function setImageQueue(items) {
+  imageQueue.forEach(item => { if (item.ownURL) URL.revokeObjectURL(item.url); });
+  imageQueue = items.map(item => ({...item, url: item.url || URL.createObjectURL(item.blob), ownURL: !item.url}));
+  imageIndex = 0; imageResult('');
+  renderImageChoice();
+}
+function acceptImageFiles(files) {
+  const items = [];
+  for (const file of files) {
+    if (IMAGE_TYPES.indexOf(file.type) < 0) { toast(i18n.apiMessage('UNSUPPORTED_IMAGE_FORMAT'), true); continue; }
+    if (file.size > IMAGE_MAX_BYTES) { toast(i18n.apiMessage('IMAGE_TOO_LARGE'), true); continue; }
+    items.push({blob:file, name:file.name || 'imagem', mime:file.type, uploaded:null});
+  }
+  if (items.length) setImageQueue(items.slice(0,10));
+}
+async function loadImageTerminals() {
+  const select = $('#image-terminal');
+  const previous = select.value;
+  let sessions = [];
+  try { sessions = (await (await api('/terminals')).json()).sessions || []; } catch {}
+  select.innerHTML = sessions.length
+    ? sessions.map(session => `<option value="${escaped(session.id)}">${escaped(session.title)}</option>`).join('')
+    : `<option value="">${h('Nenhum terminal do Ponte aberto')}</option>`;
+  imageTerminalTitles.clear(); sessions.forEach(session => imageTerminalTitles.set(session.id, session.title));
+  select.value = sessions.some(session => session.id === previous) ? previous : (sessions.length ? sessions[0].id : '');
+  renderImageChoice();
+}
+async function loadRecentImages() {
+  const list = $('#image-list');
+  try {
+    const { images } = await (await api('/images')).json();
+    list.innerHTML = images.length ? images.slice(0,8).map(image => `<article class="image-item"><div><strong>${escaped(image.name)}</strong><span><time data-i18n-date="${escaped(image.createdAt)}">${escaped(recordingDate(image.createdAt))}</time> · <span data-i18n-bytes="${Number(image.bytes)}">${escaped(formatBytes(image.bytes))}</span></span></div><button class="button small" data-image-use="${escaped(image.id)}" data-image-mime="${escaped(image.mime)}" data-image-path="${escaped(image.path)}">${h('Usar')}</button><button class="button small danger-subtle" data-image-delete="${escaped(image.id)}">${h('Apagar')}</button></article>`).join('') : `<p class="hint">${h('Nenhuma imagem enviada ainda.')}</p>`;
+  } catch { list.innerHTML = `<p class="hint">${h('Não foi possível carregar os envios.')}</p>`; }
+}
+function openImageDialog() {
+  const dialog = $('#image-dialog');
+  if (!dialog.open) dialog.showModal();
+  renderImageChoice();
+  loadImageTerminals(); loadRecentImages();
+}
+async function uploadCurrentImage() {
+  const item = currentImage();
+  if (item.uploaded) return item.uploaded;
+  imageResult(t('Enviando imagem…'));
+  const response = await api('/images', { method:'POST', headers:{'Content-Type':item.mime}, body:item.blob, timeout:90000 });
+  item.uploaded = await response.json();
+  return item.uploaded;
+}
+async function sendImage(kind) {
+  const item = currentImage();
+  if (!item || imageBusy) return;
+  const terminal = $('#image-terminal');
+  if (kind === 'paste' && !terminal.value) { imageResult(t('Abra um terminal na aba Terminais para colar o caminho.'), true); return; }
+  imageBusy = true; renderImageChoice();
+  try {
+    const uploaded = await uploadCurrentImage();
+    if (kind === 'copy') {
+      await api(`/images/${encodeURIComponent(uploaded.id)}/copy`, { method:'POST' });
+      imageResult(t('Copiada no PC. Cole com Ctrl+V onde quiser.'));
+    } else if (kind === 'paste') {
+      await api(`/images/${encodeURIComponent(uploaded.id)}/paste`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({terminal:terminal.value}) });
+      imageResult(t('Caminho colado em {terminal}. Confira e aperte Enter lá.',{terminal:imageTerminalTitles.get(terminal.value) || terminal.value}));
+    } else imageResult(t('Salva no PC: {path}',{path:uploaded.path}));
+    loadRecentImages();
+  } catch (error) {
+    if (error && error.errorCode === 'IMAGE_NOT_FOUND') item.uploaded = null;
+    imageResult(imageFailure(error), true);
+  } finally { imageBusy = false; renderImageChoice(); }
+}
+// Screenshots shared from another app are read by the Android shell and held
+// in memory until this page fetches each one once from the shell itself.
+async function receiveSharedImages() {
+  if (!token || !window.PonteNative || typeof window.PonteNative.sharedImages !== 'function') return;
+  let shared = [];
+  try { shared = JSON.parse(window.PonteNative.sharedImages()) || []; } catch { return; }
+  const items = [];
+  for (const entry of shared) {
+    try {
+      const response = await fetch(`/__ponte_shared/${encodeURIComponent(entry.id)}`, { cache:'no-store' });
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      items.push({blob, name:entry.name || 'print', mime:entry.mime, uploaded:null});
+    } catch {}
+  }
+  if (!items.length) return;
+  setImageQueue(items);
+  openImageDialog();
+}
+$('#image-open').addEventListener('click', openImageDialog);
+$('#image-close').addEventListener('click', () => $('#image-dialog').close());
+$('#image-pick').addEventListener('click', () => $('#image-file').click());
+$('#image-pick-other').addEventListener('click', () => $('#image-file').click());
+$('#image-file').addEventListener('change', event => { acceptImageFiles([...event.target.files]); event.target.value = ''; });
+$('#image-copy').addEventListener('click', () => sendImage('copy'));
+$('#image-paste').addEventListener('click', () => sendImage('paste'));
+$('#image-save').addEventListener('click', () => sendImage('save'));
+$('#image-terminal').addEventListener('change', renderImageChoice);
+$('#image-refresh').addEventListener('click', () => { loadRecentImages(); loadImageTerminals(); });
+$('#image-prev').addEventListener('click', () => { imageIndex = (imageIndex + imageQueue.length - 1) % imageQueue.length; imageResult(''); renderImageChoice(); });
+$('#image-next').addEventListener('click', () => { imageIndex = (imageIndex + 1) % imageQueue.length; imageResult(''); renderImageChoice(); });
+$('#image-list').addEventListener('click', async event => {
+  const use = event.target.closest('[data-image-use]');
+  const remove = event.target.closest('[data-image-delete]');
+  if (use) {
+    use.disabled = true;
+    try {
+      const id = use.dataset.imageUse;
+      const blob = await (await api(`/images/${encodeURIComponent(id)}`)).blob();
+      setImageQueue([{blob, name:`${id}`, mime:use.dataset.imageMime, uploaded:{id, path:use.dataset.imagePath}}]);
+    } catch (error) { toast(error,true); }
+    finally { use.disabled = false; }
+  }
+  if (remove) {
+    remove.disabled = true;
+    try {
+      const id = remove.dataset.imageDelete;
+      await api(`/images/${encodeURIComponent(id)}`, { method:'DELETE' });
+      imageQueue.forEach(item => { if (item.uploaded && item.uploaded.id === id) item.uploaded = null; });
+      toast(t('Imagem apagada do PC.')); loadRecentImages();
+    } catch (error) { toast(error,true); remove.disabled = false; }
+  }
+});
+window.addEventListener('ponte-native-shared', receiveSharedImages);
+receiveSharedImages();
+
 $('#connection-open').addEventListener('click', () => { $('#connection-dialog').showModal(); });
 $('#connection-close').addEventListener('click', () => { $('#connection-dialog').close(); });
 $('#connection-dialog').addEventListener('click', event => {
