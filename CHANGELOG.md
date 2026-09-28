@@ -2,6 +2,68 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.26 (2026-09-28)
+
+A remote-desktop client for computers: real keyboard and mouse on another Omarchy machine, with low-latency video, instead of the phone's streamed snapshots. The APK does not change (still versionCode 21).
+
+- **`./ponte rd [device]`** opens `rd.html` in a Chromium `--app` window with its own
+  profile (`$XDG_STATE_HOME/ponte/rd-chromium`), never the owner's browser. The same
+  page works in any Chromium, Windows included.
+- **Video.** The node captures one monitor with `gpu-screen-recorder` (KMS capture,
+  hardware H.264: NVENC here, VAAPI where that is the GPU, 60 fps CBR, one keyframe a
+  second) and sends access units over a dependency-free WebSocket (`/api/rd`). The page
+  decodes them with WebCodecs on a low-latency canvas. Late deltas are dropped to the
+  next keyframe; lasting congestion lowers bitrate and fps, calm raises them back.
+  Monitors can be switched from the bar.
+- **Input.** Keys go as `KeyboardEvent.code` to a persistent uinput helper
+  (python-evdev) as evdev keycodes, so the target's own layout (br/intl, fcitx5)
+  applies and no keymap is uploaded (no wtype). In full screen the page takes Keyboard
+  Lock, so Super, Alt+Tab, Ctrl+W and the like go to the target. The mouse is absolute
+  by default, through an absolute uinput device mapped onto the Hyprland layout.
+  Pointer Lock gives relative mode for games and 3D. Buttons 0 to 4 and the
+  high-resolution wheel are supported. Everything held is released when the window
+  loses focus, the session ends, or input goes quiet for 2 s while something is
+  pressed.
+- **Release** with Ctrl+Alt+Shift alone or Esc held for 2 s. **Clipboard** (text, up
+  to 1 MiB) goes both ways. One controlling session per machine: a new one takes over
+  and the old tab says so.
+- **Through the mesh.** `/api/rd?node=<paired device>` goes through the home node,
+  which checks the owner key and opens its own connection to that node with the peer
+  token and pinned CA. The two are joined only after the far node answers:
+  - a revoked link becomes `PEER_REVOKED` and is forgotten;
+  - a peer is never relayed onward.
+  The target shows a desktop notice when a paired node takes its screen.
+- `state.capabilities.rd` says whether this node can serve a session (gsr,
+  python-evdev, writable `/dev/uinput`).
+
+Verified with `npm test` (351, 1 skip). The tests cover:
+- the WebSocket framing, including limits, fragmentation, close and the Node 26 client;
+- the MPEG-TS demux on an ffmpeg fixture;
+- the full key map and the absolute mapping over a three-monitor layout;
+- sessions, takeover and release;
+- a two-node test where the owner on A drives B through the relay (and the refusals);
+- DOM tests for the client.
+
+Measured:
+- **The lab (synthetic 1080p60 with a time band), in a bench browser:** 60 fps and
+  glass-to-glass (capture to draw) p95 ~4 ms. Keys, clicks, wheel, clipboard, takeover
+  and the release chord arrived at the dry-run input log. In full screen with Keyboard
+  Lock, Super and Alt+Tab reached the page (an X11 bench: this proves the client side,
+  not yet Hyprland's shortcut inhibitor).
+- **The real PC:**
+  - Capture of the 3440x1440 monitor: 60 fps at ~11 Mbps, about 0.2 ms from the
+    encoder's output to the socket.
+  - Passive (input off) in a bench browser with software decode: 60 fps, 0 drops, and
+    frame latency (server send to draw) of ~5 ms on average, p95 ~8.5 ms.
+  - The absolute uinput device, checked harmlessly (the pointer sent to where it was,
+    then 2 px and back), landed on the exact pixel across the three-monitor layout.
+
+Not yet verified:
+- keys on a real Hyprland session (layout and fcitx5 through uinput, Super, AltGr);
+- capture-to-encode time;
+- a slow link;
+- the real notebook, whose Tailscale SSH still needs the owner's browser check.
+
 ## 0.1.0-alpha.25 (2026-09-28)
 
 Ponte becomes a mesh: every Omarchy machine runs the same node, and one node controls another only after being approved on it. The APK does not change (still versionCode 21); the page reloads with the new version.

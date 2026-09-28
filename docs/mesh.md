@@ -32,6 +32,19 @@ B keeps only a hash of the token, bound to A's node id and A's tailnet address. 
 
 A pins B's CA the first time it asks (trust on first use over the tailnet, where WireGuard already vouches that the 100.x address is B) and checks every later connection against it.
 
+## Remote desktop between computers
+
+`./ponte rd` opens the remote-desktop client for this machine, and `./ponte rd <device>` opens it for a paired device. The client runs in a Chromium app window with its own profile.
+
+- **Full screen** (the button on the bar, or F11) takes every key, Super and Alt+Tab included.
+- **Release control** with Ctrl+Alt+Shift, or hold Esc for 2 seconds.
+- **Monitors and the pointer.** The bar switches monitors and toggles between absolute and relative pointer. Relative uses Pointer Lock and suits games.
+- **Clipboard.** Text copied on either side goes to the other.
+
+The target needs `gpu-screen-recorder` and `python-evdev`, and its user must be in the `input` group so that `/dev/uinput` is writable. `state.capabilities.rd` says whether it is ready, and `tools/node-install.sh` checks all three.
+
+`/api/rd?node=<id>` is a WebSocket that the home node joins to the paired node after checking the owner key. The target sees a desktop notice while a paired node controls it.
+
 ## Files
 
 - `dataDir/node.json`: this node's `id` (16 hex) and `name` (the tailnet host name).
