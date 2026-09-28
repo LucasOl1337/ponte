@@ -258,7 +258,7 @@ function closed(event) {
   socket = null; session = null;
   dropInput();
   closeDecoder();
-  if (event && (event.code === 4401 || event.code === 4403 || event.code === 1008)) stopped ||= 'auth';
+  if (event && (event.code === 4401 || event.code === 4403 || event.code === 1008)) { if (!stopped) stopped = 'auth'; }
   if (stopped === 'taken') { overlay(t('Outro aparelho assumiu o controle deste PC.'), true); return; }
   if (stopped === 'auth') { overlay(stopMessage || t('A chave foi recusada. Pareie de novo com ./ponte rd.'), true); return; }
   const delay = RECONNECT_STEPS[Math.min(reconnectAttempt, RECONNECT_STEPS.length - 1)];
@@ -420,7 +420,7 @@ function draw(frame) {
   const canvas = $('#rd-canvas');
   if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; canvasContext = null; }
   if (videoSize.width !== width || videoSize.height !== height) setVideoSize(width, height);
-  canvasContext ||= canvas.getContext('2d', { desynchronized: true, alpha: false });
+  if (!canvasContext) canvasContext = canvas.getContext('2d', { desynchronized: true, alpha: false });
   canvasContext.drawImage(frame, 0, 0, width, height);
   const drawnAt = nowEpoch();
   framesDrawn++;
