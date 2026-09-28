@@ -2,6 +2,44 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.24 (2026-09-28)
+
+Alerts with the app closed, a reload that recovers on its own, and browser pairing through Tailscale Serve. Needs the new APK (versionCode 21) for the alert service and the reload fix, and a server restart for the new route.
+
+- **Agent alerts with the app closed.** The Android app keeps a small foreground
+  service ("Ponte is watching your agents") that holds one long-poll to the PC's new
+  `/api/agents/events` route over the app's pinned TLS. When an agent goes from
+  working to waiting for you or to finished, the phone shows a notification ("<title>
+  needs you" / "<title> finished"), one per agent, and tapping it opens that
+  conversation. The lock screen only says that an agent needs you. The PC scans agents
+  every 5 s only while the phone is listening. The phone holds no wakelock or timer:
+  with the screen off it waits on the open connection, backs off from 5 s to 5 min on
+  errors and waits for the network when there is none. The same **Agent alerts**
+  switch turns it on and off and asks for Android's notification permission. If that
+  is denied, the page says how to allow it and the in-app alert keeps working. The
+  notification's **Turn off** also turns the switch off. Nothing is posted while Ponte
+  is on screen, where the in-app banner already shows it.
+- **A load cut by the lock screen reloads.** `ponte phone app` on a running instance
+  now brings it above the keyguard. A main-frame load reset while the app was paused
+  (ERR_CONNECTION_RESET) reloads on resume instead of sticking. While the PC does not
+  answer, Ponte says so and keeps retrying (1.5 s doubling to 15 s), checking
+  `/api/health` before reloading, until the service is back.
+- **Browser pairing through Tailscale Serve.** With `./ponte serve`, a browser on any
+  of the owner's tailnet devices opens `https://<pc>.<tailnet>.ts.net` and is paired
+  with no key. Serve stamps `Tailscale-User-Login` and strips any client copy, and
+  Funnel never sets it. Ponte accepts it only when the login is the PC owner's and the
+  loopback connection comes from a root-owned socket (tailscaled) in `/proc/net/tcp`,
+  so a local process cannot forge it.
+- **Lab.** `tools/lab/fake-agent.sh` makes one fake Claude session go waiting or ready
+  on demand, with no model call.
+
+Verified with `npm test`, `android/test.sh` (proxy 193 checks, alerts 49) and the APK
+check for the six permissions and the private `specialUse` service. The long-poll was
+exercised end to end in the lab with the fake agent. On the phone: the reload
+reproduced (lock-screen reset) and recovered after the fix, and recovered by itself
+after the service was stopped and started again. The alert service and a notification
+from a fake agent with the phone locked were checked after install.
+
 ## 0.1.0-alpha.23 (2026-09-28)
 
 The owner's calls on the Dev tab and the agents list. No new routes; the APK (versionCode 20) only carries the version.
