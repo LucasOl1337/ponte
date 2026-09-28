@@ -1349,10 +1349,170 @@ function terminalControls() {
   $('#terminal-pause').textContent = terminalPaused ? t('Retomar leitura') : t('Pausar leitura');
   $$('#terminal-send,#terminal-paste,#terminal-clear,#terminal-input,#terminal-close,#terminal-size,[data-terminal-key]').forEach(element => { element.disabled = !ready; });
 }
-function renderDesktopTerminals() {
-  const windows = (state?.windows || []).filter(w => appIcon(w.class) === 'terminal');
-  $('#desktop-terminals').innerHTML = windows.length ? windows.map(w => `<button class="terminal-window" data-preview-window="${escaped(w.address)}">${icon('terminal')}<span><strong>${escaped(w.title || w.class)}</strong><small>${escaped(t('Focar e ver no monitor'))}</small></span>${icon('arrow')}</button>`).join('') : `<p class="hint">${h('Nenhuma janela de terminal aberta.')}</p>`;
+// Agents and terminals: one list for the agents running on the PC (from
+// /api/agents), plain terminal windows and this phone's Ponte sessions.
+// Reading never touches the desktop; only the reply button types, and says so.
+let agentItems = null;
+let agentTimer;
+let agentOpenId = '';
+let agentTranscriptTimer;
+let agentReplyBusy = false;
+let agentListHtml = '';
+let agentTranscriptHtml = '';
+const agentKinds = {claude:'Claude',codex:'Codex',grok:'Grok',opencode:'OpenCode',gemini:'Gemini',pi:'Pi',aider:'Aider',crush:'Crush',goose:'Goose',amp:'Amp',qwen:'Qwen','cursor-agent':'Cursor'};
+function agentKindLabel(kind) { return agentKinds[kind] || t('Terminal'); }
+function agentStateLabel(item) {
+  if (item.state === 'working') return t('Trabalhando');
+  if (item.state === 'waiting') return t('Esperando você');
+  if (item.state === 'idle') return t('Parado');
+  return t('Aberto');
 }
+function agentAgo(ms) {
+  if (!ms) return '';
+  const minutes = Math.floor(Math.max(0, Date.now() - ms) / 60000);
+  if (minutes < 1) return t('agora');
+  if (minutes < 60) return t('há {count} min',{count:minutes});
+  if (minutes < 1440) return t('há {count} h',{count:Math.floor(minutes / 60)});
+  return t('há {count} d',{count:Math.floor(minutes / 1440)});
+}
+function agentWhere(item) {
+  const where = item.where || {};
+  if (where.type === 'ponte') return t('Sessão do Ponte');
+  if (where.type === 'terminal') return where.workspace && where.workspace.id > 0 ? t('Janela no workspace {workspace}',{workspace:where.workspace.name || where.workspace.id}) : t('Janela no PC');
+  if (where.type === 'maestri') return t('Maestri');
+  if (where.type === 'app') return t('Dentro de {app}',{app:where.app || where.class || ''});
+  return item.headless ? t('Sem janela (automático)') : t('Sem janela');
+}
+function agentSummary(item) { return [agentWhere(item), item.cwd, agentAgo(item.since)].filter(Boolean).join(' · '); }
+function agentCard(attributes, kind, title, state, stateLabel, detail) {
+  return `<button class="agent-card" ${attributes} data-state="${escaped(state)}"><span><span class="agent-kind">${escaped(kind)}</span><strong>${escaped(title)}</strong><small>${escaped(detail)}</small></span><span class="agent-state" data-state="${escaped(state)}">${escaped(stateLabel)}</span></button>`;
+}
+function renderDesktopTerminals() {
+  const list = $('#agent-list');
+  if (!list) return;
+  const cards = [];
+  const linked = {};
+  if (agentItems) {
+    agentItems.forEach(item => {
+      if (item.where && item.where.type === 'ponte') linked[item.where.session] = true;
+      if (item.kind === 'terminal') cards.push(agentCard(`data-preview-window="${escaped(item.where.address)}"`, t('Terminal'), item.title, 'terminal', t('Aberto'), `${agentWhere(item)} · ${t('Focar e ver no monitor')}`));
+      else cards.push(agentCard(`data-agent-id="${escaped(item.id)}"`, agentKindLabel(item.kind), item.title, item.state, agentStateLabel(item), agentSummary(item)));
+    });
+  } else {
+    // A phone whose native shell predates the agent routes still lists windows.
+    (state && state.windows || []).filter(w => appIcon(w.class) === 'terminal').forEach(w => cards.push(agentCard(`data-preview-window="${escaped(w.address)}"`, t('Terminal'), w.title || w.class, 'terminal', t('Aberto'), t('Focar e ver no monitor'))));
+  }
+  terminalSessions.forEach(session => {
+    if (!linked[session.id]) cards.push(agentCard(`data-ponte-session="${escaped(session.id)}"`, t('Terminal'), session.title || t('Terminal'), 'terminal', t('Aberto'), t('Sessão do Ponte')));
+  });
+  const working = (agentItems || []).filter(item => item.state === 'working' || item.state === 'waiting').length;
+  $('#agent-count').textContent = agentItems ? t('{count} ATIVOS',{count:working}) : '';
+  const html = cards.length ? cards.join('') : `<p class="hint">${h('Nenhum agente ou terminal aberto.')}</p>`;
+  if (agentListHtml !== html) { list.innerHTML = html; agentListHtml = html; }
+  if (agentOpenId) renderAgentHeader();
+}
+async function readAgents(generation) {
+  clearTimeout(agentTimer);
+  if (!terminalVisible() || generation !== terminalGeneration) return;
+  try {
+    const listing = await (await api('/agents',{timeout:8000})).json();
+    if (generation !== terminalGeneration) return;
+    agentItems = Array.isArray(listing.items) ? listing.items : [];
+  } catch (error) {
+    if (generation !== terminalGeneration) return;
+    agentItems = null;
+  }
+  renderDesktopTerminals();
+  if (generation === terminalGeneration && terminalVisible()) agentTimer = setTimeout(() => readAgents(generation), 3000);
+}
+function agentOpenItem() { return (agentItems || []).filter(item => item.id === agentOpenId)[0] || null; }
+function renderAgentHeader() {
+  const item = agentOpenItem();
+  if (!item) { $('#agent-dialog-meta').textContent = t('Este agente não está mais rodando.'); $('#agent-reply-form').hidden = true; return; }
+  $('#agent-dialog-kind').textContent = `${agentKindLabel(item.kind)} · ${agentStateLabel(item)}${item.waitingFor ? ` (${item.waitingFor})` : ''}`;
+  $('#agent-dialog-title').textContent = item.title;
+  $('#agent-dialog-meta').textContent = agentSummary(item);
+  const where = item.where || {};
+  $('#agent-view').hidden = !(where.type === 'terminal' && where.address);
+  $('#agent-open-session').hidden = where.type !== 'ponte';
+  $('#agent-reply-form').hidden = !item.canReply;
+  $('#agent-readonly').hidden = !!item.canReply;
+  $('#agent-readonly').textContent = where.type === 'maestri' ? t('Só leitura aqui: responda pelo canvas do Maestri.') : t('Só leitura: este agente não tem janela de terminal nem sessão do Ponte para digitar.');
+  $('#agent-reply-send').textContent = where.type === 'ponte' ? t('Enviar para a sessão') : t('Responder no PC');
+  $('#agent-reply-hint').textContent = where.type === 'ponte' ? t('Digita na sessão do Ponte e aperta Enter, sem mudar o foco do PC.') : t('Atenção: traz esta janela para a frente no PC e digita o texto + Enter nela.');
+  $('#agent-reply-send').disabled = agentReplyBusy;
+}
+function renderAgentTranscript(view) {
+  const box = $('#agent-transcript');
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const who = {user:t('Você'),assistant:t('Agente'),tool:t('Ação')};
+  const html = view.available && view.messages.length ? view.messages.map(message => `<div class="agent-msg" data-role="${escaped(message.role)}">${message.role === 'tool' ? '' : `<b>${escaped(who[message.role] || '')}</b>`}${escaped(message.text)}</div>`).join('') : `<p class="hint">${h(view.available ? 'Nada escrito ainda.' : 'Sem conversa legível para este agente.')}</p>`;
+  if (agentTranscriptHtml !== html) { const first = !agentTranscriptHtml; box.innerHTML = html; agentTranscriptHtml = html; if (nearBottom || first) box.scrollTop = box.scrollHeight; }
+}
+async function readAgentTranscript(id) {
+  clearTimeout(agentTranscriptTimer);
+  if (agentOpenId !== id || !$('#agent-dialog').open) return;
+  try {
+    const view = await (await api(`/agents/${encodeURIComponent(id)}/transcript`,{timeout:8000})).json();
+    if (agentOpenId === id) renderAgentTranscript(view);
+  } catch (error) {
+    if (agentOpenId === id) i18n.write($('#agent-dialog-meta'),error);
+  }
+  if (agentOpenId === id && $('#agent-dialog').open && !document.hidden) agentTranscriptTimer = setTimeout(() => readAgentTranscript(id), 3000);
+}
+function openAgent(id) {
+  agentOpenId = id;
+  const box = $('#agent-transcript');
+  box.innerHTML = `<p class="hint">${h('Carregando conversa…')}</p>`; agentTranscriptHtml = '';
+  $('#agent-reply-text').value = '';
+  renderAgentHeader();
+  if (!$('#agent-dialog').open) $('#agent-dialog').showModal();
+  readAgentTranscript(id);
+}
+function agentShowSession() { const panel = $('#terminal-session'); if (panel.scrollIntoView) panel.scrollIntoView({block:'start',behavior:'smooth'}); }
+function closeAgent() {
+  agentOpenId = ''; clearTimeout(agentTranscriptTimer);
+  if ($('#agent-dialog').open) $('#agent-dialog').close();
+}
+$('#agent-list').addEventListener('click', event => {
+  const agent = event.target.closest('[data-agent-id]');
+  if (agent) { openAgent(agent.dataset.agentId); return; }
+  const session = event.target.closest('[data-ponte-session]');
+  if (session) { selectTerminal(session.dataset.ponteSession); terminalPaused = false; updateTerminalNavigation(); agentShowSession(); }
+});
+$('#agent-dialog-close').addEventListener('click', closeAgent);
+$('#agent-dialog').addEventListener('close', () => { agentOpenId = ''; clearTimeout(agentTranscriptTimer); });
+$('#agent-view').addEventListener('click', async () => {
+  const item = agentOpenItem();
+  if (!item || !item.where.address) return;
+  closeAgent();
+  if (await action('window.focus',{address:item.where.address})) {
+    const monitor = (state && state.monitors || []).filter(m => m.id === item.where.monitor)[0];
+    if (monitor) { $('#monitor-select').value = monitor.name; savePreference('ponte-monitor',monitor.name); }
+    navigate('tela');
+  }
+});
+$('#agent-open-session').addEventListener('click', () => {
+  const item = agentOpenItem();
+  if (!item || !item.where.session) return;
+  closeAgent();
+  selectTerminal(item.where.session); terminalPaused = false; updateTerminalNavigation(); agentShowSession();
+});
+$('#agent-reply-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const id = agentOpenId, box = $('#agent-reply-text');
+  // Newlines would press Enter early in a terminal agent; the reply is one line.
+  const text = box.value.replace(/[\r\n\t]+/g, ' ').trim();
+  if (!id || !text || agentReplyBusy || !connected) return;
+  agentReplyBusy = true; renderAgentHeader();
+  try {
+    await api(`/agents/${encodeURIComponent(id)}/reply`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    if (box.value.replace(/[\r\n\t]+/g, ' ').trim() === text) box.value = '';
+    toast(t('Enviado para o agente.'));
+    setTimeout(() => readAgentTranscript(id), 1200);
+  } catch (error) { toast(error, true); }
+  finally { agentReplyBusy = false; if (agentOpenId) renderAgentHeader(); }
+});
 function terminalSessionOptions() {
   const select = $('#terminal-select');
   const signature = JSON.stringify([terminalSessions,i18n.language]);
@@ -1412,7 +1572,7 @@ function updateTerminalNavigation() {
   clearTimeout(terminalTimer);
   const generation = ++terminalGeneration;
   terminalControls();
-  if (terminalVisible()) { renderDesktopTerminals(); readTerminals(generation); }
+  if (terminalVisible()) { renderDesktopTerminals(); readTerminals(generation); readAgents(generation); }
 }
 async function terminalMutation(path,body,method = 'POST') {
   if (terminalBusy || !connected || !token) return null;
