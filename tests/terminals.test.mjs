@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { mkdtemp, mkdir, readFile, writeFile, stat, rm, access, symlink, realpath, chmod } from 'node:fs/promises';
-import { createTerminals, TERMINAL_TEXT_LIMIT } from '../backend/terminals.mjs';
+import { createTerminals, sanitizeAnsi, TERMINAL_ANSI_LIMIT, TERMINAL_TEXT_LIMIT } from '../backend/terminals.mjs';
 import { createApp } from '../server.mjs';
 import { ApiError, commandExists, runCommand } from '../backend/process.mjs';
 
@@ -30,7 +30,8 @@ function mockedTmux() {
     if (args[0] === 'display-message') {
       const pane = panes.find(pane => pane.paneId === args[3]);
       if (!pane) throw new Error("can't find pane");
-      return `${line(pane)}\n${args[5] === ';' && args[6] === 'capture-pane' ? capture : ''}`;
+      const cursor = args[4].includes('cursor_x') ? `\t${pane.cursor || '0\t0\t1\t0'}` : '';
+      return `${line(pane)}${cursor}\n${args[5] === ';' && args[6] === 'capture-pane' ? capture : ''}`;
     }
     if (args.includes('new-session')) {
       const pane = { name: args[args.indexOf('-s') + 1], windowId: `@${next}`, paneId: `%${next++}`, cols: +args[args.indexOf('-x') + 1], rows: +args[args.indexOf('-y') + 1] };
@@ -257,6 +258,82 @@ test('a read is one tmux call, and given the hash of what the phone shows it ans
   await assert.rejects(terminals.read(session.id), { code: 'TERMINAL_NOT_FOUND' });
 });
 
+test('the ANSI sanitizer keeps SGR colours and drops every other escape, string command and control whole', () => {
+  const sgr = '\x1b[0m\x1b[1;31mred\x1b[38;5;208m256\x1b[38;2;10;20;30mtrue\x1b[48:2::1:2:3mcolon\x1b[39;49m';
+  assert.equal(sanitizeAnsi(sgr), sgr);
+  const cases = [
+    ['\x1b]8;;https://x.test\x1b\\link\x1b]8;;\x1b\\', 'link'],
+    ['\x1b]0;title\x07after', 'after'],
+    ['\x1b]52;c;ZXZpbA==\x07clip', 'clip'],
+    ['\x1bPq#0;2;0;0;0\x1b\\dcs', 'dcs'],
+    ['\x1b_apc\x1b\\x', 'x'],
+    ['a\x1b[2Jb\x1b[10;5Hc\x1b[?25ld\x1b[?1049he\x1b[Kf\x1b[3Ag', 'abcdefg'],
+    ['\x1b7save\x1b8\x1b(Bcharset\x1bM', 'savecharset'],
+    ['c1\x9b31mcsi\x9d0;t\x9cosc\x90dcs\x9cend\x85', 'c1csioscend'],
+    ['nul\x00bel\x07bs\x08cr\rdel\x7f\ttab\nline', 'nulbelbscrdel\ttab\nline'],
+    ['long\x1b[' + '1;'.repeat(40) + 'm!', 'long!'],
+    ['cut \x1b]8;;http://x', 'cut '],
+    ['trail\x1b', 'trail'],
+    ['\x1b[31m😀 ação\x1b[0m', '\x1b[31m😀 ação\x1b[0m'],
+  ];
+  for (const [input, output] of cases) assert.equal(sanitizeAnsi(input), output, JSON.stringify(input));
+  // Whatever survives is printable text, newlines, tabs and well-formed SGR only.
+  const noise = Array.from({ length: 4000 }, (_, i) => String.fromCharCode((i * 7919) % 256)).join('');
+  assert.equal(sanitizeAnsi(noise).replace(/\x1b\[[0-9;:]{0,64}m/g, '').match(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/), null);
+});
+
+test('format=ansi reads colours, cursor and alternate screen in one tmux call; the plain read is unchanged', async t => {
+  const { mock, terminals } = await fixture(t);
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  mock.setCapture('\x1b[31mred\x1b[39m\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\\n\x1b[1m> \x1b[0m\n');
+  mock.panes[0].cursor = '2\t1\t0\t1';
+  let before = mock.calls.length;
+  const ansi = await terminals.read(session.id, { format: 'ansi' });
+  assert.equal(mock.calls.length - before, 1, 'pane check, cursor and capture share one spawn');
+  const args = mock.calls.at(-1).args;
+  assert.deepEqual(args.slice(0, 3), ['display-message', '-p', '-t']);
+  assert.match(args[4], /#\{cursor_x\}\t#\{cursor_y\}\t#\{cursor_flag\}\t#\{alternate_on\}$/);
+  assert.deepEqual(args.slice(5), [';', 'capture-pane', '-p', '-e', '-t', mock.panes[0].paneId, '-S', '-1000']);
+  assert.equal(ansi.text, '\x1b[31mred\x1b[39mlink\n\x1b[1m> \x1b[0m\n');
+  assert.deepEqual(ansi.cursor, { x: 2, y: 1, visible: false });
+  assert.equal(ansi.alternate, true);
+  assert.deepEqual(Object.keys(ansi).sort(), ['alternate', 'attachCommand', 'cols', 'cursor', 'hash', 'id', 'inMode', 'rows', 'text', 'title']);
+  const same = await terminals.read(session.id, { format: 'ansi', since: ansi.hash });
+  assert.equal(same.unchanged, true); assert.equal(same.text, undefined); assert.deepEqual(same.cursor, ansi.cursor);
+  mock.panes[0].cursor = '3\t1\t0\t1';
+  const moved = await terminals.read(session.id, { format: 'ansi', since: ansi.hash });
+  assert.equal(moved.unchanged, undefined, 'a moved cursor is a change'); assert.equal(moved.cursor.x, 3);
+  // Without format=ansi the answer keeps today's exact shape and plain text.
+  before = mock.calls.length;
+  for (const format of [undefined, 'plain', 'ANSI', '']) {
+    const plain = await terminals.read(session.id, { format });
+    assert.deepEqual(Object.keys(plain).sort(), ['attachCommand', 'cols', 'hash', 'id', 'inMode', 'rows', 'text', 'title']);
+    assert.equal(plain.text, '[31mred[39m]8;;http://x\\link]8;;\\\n[1m> [0m\n');
+  }
+  assert.equal(mock.calls.slice(before).some(call => call.args.includes('-e')), false);
+  // A malformed cursor line is never trusted.
+  mock.panes[0].cursor = '2\tx\t0\t1';
+  await assert.rejects(terminals.read(session.id, { format: 'ansi' }), { code: 'TERMINAL_UNAVAILABLE' });
+});
+
+test('format=ansi is bounded at a line boundary and a replaced pane is never read', async t => {
+  const { mock, terminals } = await fixture(t);
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  const line = i => `\x1b[38;2;1;2;3mlinha ${String(i).padStart(5, '0')} ${'😀'.repeat(20)}\x1b[0m`;
+  mock.setCapture(Array.from({ length: 3000 }, (_, i) => line(i)).join('\n') + '\nFIM\n');
+  const read = await terminals.read(session.id, { format: 'ansi' });
+  assert.ok(Buffer.byteLength(read.text) <= TERMINAL_ANSI_LIMIT);
+  assert.ok(Buffer.byteLength(read.text) > TERMINAL_ANSI_LIMIT - 200);
+  assert.ok(read.text.startsWith('\x1b[38;2;1;2;3mlinha '), 'the cut starts a whole line, never mid-SGR');
+  assert.ok(read.text.endsWith('\nFIM\n'));
+  assert.ok(read.text.isWellFormed());
+  assert.equal(mock.calls.at(-1).options.maxBuffer, 4 * 1024 * 1024);
+  mock.panes[0].paneId = '%999';
+  const before = mock.calls.length;
+  await assert.rejects(terminals.read(session.id, { format: 'ansi' }), { code: 'TERMINAL_CHANGED' });
+  assert.equal(mock.calls.slice(before).some(call => call.args.includes('capture-pane') && call.args.includes('%999')), false);
+});
+
 test('typed input never waits behind an output read that is still running', async t => {
   const { root, mock } = await fixture(t);
   let release, started;
@@ -451,6 +528,10 @@ test('terminal HTTP endpoints inherit authentication, origin, content bounds and
   assert.equal(typeof full.text, 'string');
   const same = await (await request(`/api/terminals/${session.id}?since=${full.hash}`)).json();
   assert.deepEqual([same.unchanged, same.text, same.hash], [true, undefined, full.hash], 'HTTP passes the shown hash through');
+  const ansi = await (await request(`/api/terminals/${session.id}?format=ansi`)).json();
+  assert.deepEqual([typeof ansi.text, ansi.cursor, ansi.alternate], ['string', { x: 0, y: 0, visible: true }, false], 'HTTP passes format=ansi through');
+  const ansiSame = await (await request(`/api/terminals/${session.id}?format=ansi&since=${ansi.hash}`)).json();
+  assert.deepEqual([ansiSame.unchanged, ansiSame.text], [true, undefined]);
   mock.panes[0].inMode = true;
   const inMode = await request(`/api/terminals/${session.id}/input`, 'POST', { key: 'Enter' }, { 'Accept-Language': 'pt' });
   assert.equal(inMode.status, 409);
@@ -550,6 +631,44 @@ test('real isolated tmux runs a fake agent with the literal request in its proje
   await terminals.input(session.id, { text: `touch '${done}'`, enter: true });
   for (let tries = 0; tries < 80; tries++) { try { await access(done); break; } catch { await new Promise(resolve => setTimeout(resolve, 25)); } }
   await access(done);
+  await terminals.remove(session.id);
+});
+
+test('real isolated tmux gives format=ansi colours, the visible cursor and the alternate screen', async t => {
+  if (!await commandExists('tmux')) { t.skip('tmux is not installed'); return; }
+  const root = await temporary(t, false);
+  const env = { PATH: process.env.PATH, HOME: root, XDG_RUNTIME_DIR: root, SHELL: '/bin/sh', TERM: 'xterm-256color', LANG: 'C.UTF-8' };
+  const socketPath = path.join(root, 'terminals', 'tmux.sock');
+  const terminals = createTerminals(root, { env });
+  t.after(async () => {
+    await terminals.close();
+    await runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', 'kill-server'], { env }).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = await terminals.create({ cols: 40, rows: 10 });
+  const script = path.join(root, 'draw.sh');
+  // Colours, a hyperlink, a title and a cursor move, then (on a signal file) the alternate screen.
+  await writeFile(script, "printf '\\033[1;31mred\\033[0m \\033[38;2;10;20;30mtrue\\033[0m\\n\\033]8;;http://x.test\\033\\\\link\\033]8;;\\033\\\\\\n\\033]0;title\\007\\033[4;7Hcur'; while [ ! -e go ]; do sleep 0.05; done; printf '\\033[?1049h\\033[?25l\\033[2;3Halt'; sleep 5\n");
+  await terminals.input(session.id, { text: `clear; cd '${root}'; sh draw.sh`, enter: true });
+  const until = async check => { for (let i = 0; i < 80; i++) { const read = await terminals.read(session.id, { format: 'ansi' }); if (check(read)) return read; await new Promise(resolve => setTimeout(resolve, 25)); } return terminals.read(session.id, { format: 'ansi' }); };
+  const drawn = await until(read => read.text.includes('cur'));
+  assert.match(drawn.text, /\x1b\[1;31mred|\x1b\[1m\x1b\[31mred/);
+  assert.match(drawn.text, /\x1b\[38;2;10;20;30mtrue/);
+  assert.ok(drawn.text.includes('link'));
+  assert.equal(/\x1b\]|\x07|title/.test(drawn.text), false, 'OSC 8 and titles never reach the phone');
+  assert.equal(drawn.text.replace(/\x1b\[[0-9;:]*m/g, '').match(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/), null);
+  const visible = drawn.text.replace(/\n$/, '').split('\n').slice(-drawn.rows);
+  assert.equal(visible.length, 10, 'the last rows lines are the visible pane, blank lines included');
+  assert.deepEqual(drawn.cursor, { x: 9, y: 3, visible: true });
+  assert.equal(visible[3].replace(/\x1b\[[0-9;:]*m/g, '').slice(6, 9), 'cur');
+  assert.equal(drawn.alternate, false);
+  const plain = await terminals.read(session.id);
+  assert.equal(plain.cursor, undefined); assert.equal(plain.text.includes('\x1b'), false);
+  await writeFile(path.join(root, 'go'), '');
+  const alternate = await until(read => read.alternate);
+  assert.equal(alternate.alternate, true);
+  assert.deepEqual(alternate.cursor, { x: 5, y: 1, visible: false });
+  await terminals.input(session.id, { key: 'Interrupt' });
   await terminals.remove(session.id);
 });
 

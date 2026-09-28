@@ -8,12 +8,17 @@ import { ApiError, commandExists, runCommand } from './process.mjs';
 
 export const TERMINAL_LIMIT = 4;
 export const TERMINAL_TEXT_LIMIT = 64 * 1024;
+// A coloured capture (format=ansi) keeps its SGR codes, so it gets more room.
+export const TERMINAL_ANSI_LIMIT = 192 * 1024;
 export const PROJECT_LIMIT = 8;
 const idPattern = /^[a-f0-9]{24}$/;
 const panePattern = /^%\d+$/;
 const windowPattern = /^@\d+$/;
 const hashPattern = /^[A-Za-z0-9_-]{1,64}$/;
 const format = '#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_in_mode}';
+// The coloured read also asks where the cursor is, relative to the visible
+// pane, and whether a full-screen app switched to the alternate screen.
+const cursorFormat = `${format}\t#{cursor_x}\t#{cursor_y}\t#{cursor_flag}\t#{alternate_on}`;
 // A session can start an agent CLI instead of a bare shell. Only these fixed
 // program names run; the phone chooses a key, never a command.
 const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' } });
@@ -57,8 +62,23 @@ function sessionStart(value) {
   return { agent, prompt, project: value.project };
 }
 
+// A capture taken with -e carries tmux's own SGR codes and, since tmux 3.4,
+// OSC 8 hyperlinks. Only SGR (colours and attributes) reaches the phone; every
+// other escape sequence, string command or control is removed whole, so the
+// phone's renderer never sees cursor movement, titles, clipboard or links.
+const ansiToken = /\x1b\[([0-9;:]{0,64})m|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]?|\x1b[\]PX^_][^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?|\x9b[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]?|[\x90\x98\x9d\x9e\x9f][^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?|\x1b[\x20-\x2f]*[\x30-\x7e]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+export function sanitizeAnsi(text) {
+  return text.replace(ansiToken, (match, sgr) => sgr === undefined ? '' : match);
+}
+
 function validateId(id) {
   if (typeof id !== 'string' || !idPattern.test(id)) throw new ApiError(404, 'TERMINAL_NOT_FOUND');
+}
+
+function parseCursor(fields) {
+  const [x, y, visible, alternate, extra] = fields;
+  if (extra !== undefined || !/^\d+$/.test(x || '') || !/^\d+$/.test(y || '') || !/^[01]$/.test(visible || '') || !/^[01]$/.test(alternate || '')) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+  return { cursor: { x: Number(x), y: Number(y), visible: visible === '1' }, alternate: alternate === '1' };
 }
 
 function parsePanes(text) {
@@ -130,10 +150,10 @@ export function createTerminals(dataDir, options = {}) {
     await rename(temporary, registryPath);
   }
 
-  async function command(args, input) {
+  async function command(args, input, maxBuffer = 512 * 1024) {
     if (stopping) throw new ApiError(503, 'SERVER_RESTARTING');
     try {
-      return await runner('tmux', ['-u', '-S', socketPath, '-f', '/dev/null', ...args], { env, input, timeout: 2500, maxBuffer: 512 * 1024, signal: controller.signal });
+      return await runner('tmux', ['-u', '-S', socketPath, '-f', '/dev/null', ...args], { env, input, timeout: 2500, maxBuffer, signal: controller.signal });
     } catch { throw new ApiError(503, stopping ? 'SERVER_RESTARTING' : 'TERMINAL_UNAVAILABLE'); }
   }
 
@@ -224,6 +244,42 @@ export function createTerminals(dataDir, options = {}) {
     }
     catch (error) { await command(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
   }
+  // The coloured read: one tmux call checks the pane, reads the cursor and
+  // captures with -e. The ansi text is cut at a line boundary; tmux closes
+  // every line's attributes itself, so no line depends on an earlier one.
+  function readAnsi(id, since) {
+    return run(async available => {
+      if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+      let item = registry.find(entry => entry.id === id), result;
+      const capture = async paneId => {
+        const output = await command(['display-message', '-p', '-t', paneId, cursorFormat, ';', 'capture-pane', '-p', '-e', '-t', paneId, '-S', '-1000'], undefined, 4 * 1024 * 1024);
+        const newline = output.indexOf('\n');
+        if (newline < 0) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+        const fields = output.slice(0, newline).split('\t');
+        const [pane, extra] = parsePanes(fields.slice(0, 6).join('\t'));
+        return { pane, extra, ...parseCursor(fields.slice(6)), capture: output.slice(newline + 1) };
+      };
+      const matches = (read, entry) => !read.extra && read.pane.name === `ponte_${id}` && read.pane.paneId === entry.paneId && read.pane.windowId === entry.windowId;
+      if (item) {
+        try { const read = await capture(item.paneId); if (matches(read, item)) result = read; } catch {}
+      }
+      if (!result) {
+        item = await target(id, available, false);
+        result = await capture(item.paneId);
+        if (!matches(result, item)) throw new ApiError(409, 'TERMINAL_CHANGED');
+      }
+      item = { ...item, cols: result.pane.cols, rows: result.pane.rows, inMode: result.pane.inMode };
+      const bytes = Buffer.from(sanitizeAnsi(result.capture));
+      const offset = bytes.length > TERMINAL_ANSI_LIMIT ? bytes.indexOf(0x0a, bytes.length - TERMINAL_ANSI_LIMIT - 1) + 1 : 0;
+      const text = offset > 0 ? bytes.subarray(offset).toString('utf8') : offset === 0 && bytes.length <= TERMINAL_ANSI_LIMIT ? bytes.toString('utf8') : '';
+      const { cursor, alternate } = result;
+      // The hash covers the cursor too: a cursor that moved is a change.
+      const hash = createHash('sha256').update(`${text}\u0000${cursor.x},${cursor.y},${cursor.visible ? 1 : 0},${alternate ? 1 : 0}`).digest('base64url').slice(0, 22);
+      const answer = { ...summary(item), cursor, alternate, hash };
+      return since === hash ? { ...answer, unchanged: true } : { ...answer, text };
+    }, 'read');
+  }
+
   return {
     // The most recently changed project folders, by name only, for the phone
     // to offer as the new session's folder. It never needs tmux.
@@ -278,9 +334,12 @@ export function createTerminals(dataDir, options = {}) {
     },
     // `since` is the hash of the text the phone already shows: when nothing
     // changed only the hash comes back, not up to 64 KiB of the same text.
+    // format=ansi keeps the colours (SGR only) and adds the cursor and the
+    // alternate-screen flag; without it the answer is the plain text as always.
     read(id, options = {}) {
       validateId(id);
       const since = typeof options.since === 'string' && hashPattern.test(options.since) ? options.since : null;
+      if (options.format === 'ansi') return readAnsi(id, since);
       return run(async available => {
         if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
         let item = registry.find(entry => entry.id === id), capture;
