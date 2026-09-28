@@ -2754,6 +2754,11 @@ function devCellWidth(code) {
   if (code >= 0x1100 && code <= 0x115f || code >= 0x2e80 && code <= 0xa4cf || code >= 0xac00 && code <= 0xd7a3 || code >= 0xf900 && code <= 0xfaff || code >= 0xfe30 && code <= 0xfe4f || code >= 0xff00 && code <= 0xff60 || code >= 0xffe0 && code <= 0xffe6 || code >= 0x1f300 && code <= 0x1faff || code >= 0x20000 && code <= 0x3fffd) return 2;
   return 1;
 }
+// Claude Code draws these symbols, which no font on the phone has (Droid Sans
+// Mono, Roboto, Noto Symbols; ⏸ only as a wide colour emoji): each becomes a
+// one-cell look-alike the phone can draw, so columns stay aligned.
+const DEV_GLYPHS = {'\u23f4':'\u25c2','\u23f5':'\u25b8','\u23f6':'\u25b4','\u23f7':'\u25be','\u23f8':'\u2016','\u23fa':'\u25cf','\u23f9':'\u25a0','\u23bf':'\u2514'};
+const DEV_GLYPH_PATTERN = /[\u23f4-\u23f8\u23fa\u23f9\u23bf]/g;
 // Only SGR survives from the server; anything else that slips through is
 // dropped, and every character is escaped before it becomes HTML.
 function ansiToHtml(text, cursor, rows) {
@@ -2765,7 +2770,7 @@ function ansiToHtml(text, cursor, rows) {
     const flush = (chunk, css) => { if (chunk) html += css ? `<span style="${css}">${escaped(chunk)}</span>` : escaped(chunk); };
     for (const part of line.split(/(\x1b\[[0-9;:]*m)/)) {
       if (/^\x1b\[[0-9;:]*m$/.test(part)) { sgrApply(style, part.slice(2,-1)); continue; }
-      const clean = part.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[^[\]]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');
+      const clean = part.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[^[\]]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'').replace(DEV_GLYPH_PATTERN, ch => DEV_GLYPHS[ch]);
       const css = devStyle(style);
       if (cursorDone) { flush(clean, css); column += [...clean].reduce((sum, ch) => sum + devCellWidth(ch.codePointAt(0)), 0); continue; }
       let chunk = '';
@@ -3028,14 +3033,27 @@ $('#dev-screen').addEventListener('scroll', () => {
   $('#dev-live').hidden = devFollow;
 });
 $('#dev-live').addEventListener('click', () => { const screen = $('#dev-screen'); devFollow = true; screen.scrollTop = screen.scrollHeight; $('#dev-live').hidden = true; });
-$('#dev-open-pc').addEventListener('click', () => { if (devId) $('#dev-open-dialog').showModal(); });
-$('#dev-open-cancel').addEventListener('click', () => $('#dev-open-dialog').close());
-$('#dev-open-confirm').addEventListener('click', async () => {
-  $('#dev-open-dialog').close();
-  if (!devId) return;
-  try { await api(`/terminals/${encodeURIComponent(devId)}/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); devStatus(t('Aberta numa janela do PC.')); }
+// The window lands on the owner's screen, so each session asks once; the
+// sessions already confirmed are remembered (the newest 16 ids).
+function devOpenConfirmed() {
+  let ids; try { ids = JSON.parse(savedPreference('ponte-dev-open-ok', '[]')); } catch { ids = []; }
+  return Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && /^[a-f0-9]{24}$/.test(id)) : [];
+}
+async function devOpenOnPc() {
+  const id = devId;
+  if (!id) return;
+  const confirmed = devOpenConfirmed().filter(other => other !== id);
+  savePreference('ponte-dev-open-ok', JSON.stringify(confirmed.concat(id).slice(-16)));
+  try { await api(`/terminals/${encodeURIComponent(id)}/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); devStatus(t('Aberta numa janela do PC.')); }
   catch (error) { devStatus(error, true); }
+}
+$('#dev-open-pc').addEventListener('click', () => {
+  if (!devId) return;
+  if (devOpenConfirmed().indexOf(devId) >= 0) devOpenOnPc();
+  else $('#dev-open-dialog').showModal();
 });
+$('#dev-open-cancel').addEventListener('click', () => $('#dev-open-dialog').close());
+$('#dev-open-confirm').addEventListener('click', () => { $('#dev-open-dialog').close(); devOpenOnPc(); });
 // Scrollbars coming and going (a wider PC pane) change the content box but not
 // the box itself, so they never count as a layout change.
 if (typeof ResizeObserver === 'function') new ResizeObserver(() => {

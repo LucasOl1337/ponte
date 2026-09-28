@@ -612,6 +612,7 @@
   "Desenvolvimento": "Development",
   "Abrir esta sessão no PC?": "Open this session on the PC?",
   "Abre uma janela de terminal na tela do PC, ligada a esta mesma sessão. O celular continua conectado.": "Opens a terminal window on the PC screen, attached to this same session. The phone stays connected.",
+  "Só pergunto na primeira vez de cada sessão.": "Asked only the first time for each session.",
   "Novo Claude em {project}": "New Claude in {project}",
   "Texto longo demais: até {max} caracteres.": "Text too long: up to {max} characters.",
   "Imagem anexada: o caminho foi colado na sessão.": "Image attached: its path was pasted into the session.",
