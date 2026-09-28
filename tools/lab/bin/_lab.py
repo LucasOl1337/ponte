@@ -13,6 +13,18 @@ def monitor():
     w, h = (int(v) for v in size.lower().split('x'))
     return {'id': 0, 'name': 'LAB-1', 'x': 0, 'y': 0, 'width': w, 'height': h, 'scale': 1.0, 'focused': True, 'dpmsStatus': True, 'activeWorkspace': {'id': 1, 'name': '1'}}
 
+def extra_monitors():
+    """PONTE_LAB_EXTRA_MONITORS="LAB-2:1280x720,LAB-3:800x600": more outputs to
+    the right of LAB-1, listed by hyprctl only (for the remote-desktop monitor
+    picker; the synthetic screenshot is always LAB-1)."""
+    out, x = [], monitor()['width']
+    for i, item in enumerate(filter(None, os.environ.get('PONTE_LAB_EXTRA_MONITORS', '').split(','))):
+        name, size = item.split(':')
+        w, h = (int(v) for v in size.lower().split('x'))
+        out.append({'id': i + 1, 'name': name, 'x': x, 'y': 0, 'width': w, 'height': h, 'scale': 1.0, 'transform': 0, 'focused': False, 'dpmsStatus': True, 'activeWorkspace': {'id': i + 2, 'name': str(i + 2)}})
+        x += w
+    return out
+
 def default_state():
     m = monitor()
     return {'cursor': {'x': m['width'] // 2, 'y': m['height'] // 2}, 'held': False, 'typed': '', 'clicks': [], 'accel': float(os.environ.get('PONTE_LAB_ACCEL', '1')), 'profile': 'adaptive', 'textFocus': False, 'scrolls': [], 'wheel': 0}
