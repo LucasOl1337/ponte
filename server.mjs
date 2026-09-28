@@ -338,7 +338,7 @@ export async function createApp(options = {}) {
           json(res, terminalRoute ? 200 : 201, result);
         }); return;
       }
-      if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { json(res, 200, await terminals.read(terminalRoute[1], { since: query.get('since') || undefined })); return; }
+      if (terminalRoute && !terminalRoute[2] && req.method === 'GET') { json(res, 200, await terminals.read(terminalRoute[1], { since: query.get('since') || undefined, format: query.get('format') || undefined })); return; }
       if (terminalRoute && !terminalRoute[2] && req.method === 'DELETE') { json(res, 200, await terminals.remove(terminalRoute[1])); return; }
       // Agents and terminals running on the PC: read-only listing and
       // transcript; a reply types into that agent's own session or window.
