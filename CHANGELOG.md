@@ -2,6 +2,55 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.21 (2026-09-28)
+
+A round built from the owner's six-point mission: see and answer every agent from the phone, start agent work from Home, scroll with the phone, a reliable Smart sleep, and screenshots from the phone to the PC. Plus a lighter app. Needs the new APK (versionCode 18) for agents, images and compression; everything else reloads with the page.
+
+- **Agents and terminals.** The Terminals page is now one list of everything open:
+  Claude, Codex and other agents in foot windows, on the Maestri canvas, inside apps
+  or headless, terminal windows and Ponte sessions. Each card says whether the agent
+  is working, waiting for you or idle, where it runs, its folder and since when.
+  Claude's state comes from `~/.claude/sessions/<pid>.json`, checked against pid
+  reuse; other agents use CPU and recent transcript writes. Tapping opens the
+  conversation in readable type. "Reply on PC" focuses the window, confirms the focus
+  and only then types the text and Enter; a Ponte session is typed into without
+  moving focus; a locked PC refuses. The `/proc` scan takes ~43 ms (median), cached 1.5 s.
+- **Start working from Home.** A card opens a text session already running Claude,
+  Codex or a shell, in a recent `~/Projects` folder, with a typed or dictated request,
+  and jumps to it. The request reaches the agent as a process argument, never as shell
+  text; when the agent exits the session falls back to a shell.
+- **Scrolling from the phone.** Hold one finger still and drag another to scroll the
+  PC under the resting finger, zoomed or not, without ever clicking or dragging. Scroll
+  gestures follow the finger like a phone, and every phone scroll first places the PC
+  pointer at the gesture, so the wheel reaches the window under your fingers (before,
+  it scrolled wherever the pointer was). Up/down buttons on the Screen repeat while
+  held. The Terminals reader keeps the 1000-line history and your place.
+- **Reliable Smart sleep.** The Magma lights controller sent RAM, GPU, keyboard and
+  board in one OpenRGB call; when the Logitech keyboard was asleep OpenRGB 1.0rc3
+  aborted the whole call and only the fans went dark. The controller now makes one
+  call per group with the MSI board last, skips an absent keyboard and reports each
+  device (`controller.py sleep --json`). Ponte logs each light's result, tries the
+  lights even if Hyprland fails, names on the phone the lights that stayed on, and
+  answers within 11 s (the Android proxy gives up at 15 s) with the outcome arriving
+  through the state. The lab no longer drives the real lights controller.
+- **Screenshots to the PC.** Share an image to Ponte from Android's Share menu or pick
+  one from Home: a sheet previews it and uploads only when you choose Copy to PC
+  (`wl-copy --type`, paste with Ctrl+V, including into Claude Code), Paste path into a
+  Ponte session (no Enter) or Just save. Images live in `<dataDir>/inbox` (0600,
+  newest 30 / 200 MiB).
+- **Lighter app.** Static files are compressed (br/gzip) and revalidated by ETag: a
+  cold load goes from 292 KB to ~70 KB, a reload to ~3 KB. `/api/state` caches
+  capabilities (60 s) and the lock flag (5 s): median poll 30.5 → 9.4 ms. Viewers of the
+  same picture share one capture loop (half the capture CPU for two). Sharp streams at
+  JPEG quality 40. An idle terminal costs 29 tmux spawns and 29 KB a minute instead of
+  219 spawns and 4.4 MB; typed input no longer waits behind output polling. The page
+  stops polling while the Android app is paused.
+- Verified: NODE_TESTS Node tests, the native checks in `android/test.sh`, CDP
+  multi-touch and emulator runs against the lab for each feature, and on this PC a real
+  Smart sleep and restore through the new controller (every light reported ok, 18 s and
+  8 s). Physical confirmation of the lights and a human pick inside Android's file
+  picker are still pending.
+
 ## 0.1.0-alpha.20 (2026-09-27)
 
 Ponte now works in both directions: the phone still drives the PC, and the PC can open and control an authorized Android phone. Agents get a JSON CLI over the running server. The Android shell did not change: phones on the alpha.19 APK need no reinstall.
