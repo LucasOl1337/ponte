@@ -97,3 +97,23 @@ test('the Home button opens the sheet empty in a plain browser, without the Andr
   assert.equal(h.el('#image-chosen').hidden, true);
   assert.deepEqual(h.writes(), []);
 });
+
+test('images picked in the file chooser open the preview and still wait for a destination', async () => {
+  const h = harness({ shared: null });
+  await flush();
+  h.el('#image-open').click(); await flush();
+  const png = new Blob([Buffer.from('png')], { type: 'image/png' });
+  const gif = new Blob([Buffer.from('gif')], { type: 'image/gif' });
+  png.name = 'Screenshot_20260928.png'; gif.name = 'anim.gif';
+  const input = h.el('#image-file');
+  input.files = [gif, png];
+  input.dispatchEvent({ type: 'change' });
+  await flush();
+  assert.equal(h.el('#image-chosen').hidden, false);
+  assert.match(h.el('#image-preview').src, /^blob:/);
+  assert.match(h.el('#image-caption').textContent, /Screenshot_20260928\.png/);
+  assert.deepEqual(h.writes(), [], 'picking a file uploads nothing');
+  h.el('#image-save').click(); await flush();
+  assert.equal(h.writes().filter(call => call.path === '/api/images').length, 1);
+  assert.equal(h.writes()[0].headers['Content-Type'], 'image/png');
+});
