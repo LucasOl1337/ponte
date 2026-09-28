@@ -841,6 +841,28 @@ test('session lock runs the Omarchy locker and unlock types the password only wh
   assert.deepEqual(state.session, { locked: true, lockAvailable: true });
 });
 
+test('state caches capabilities and the displayed lock flag, but unlock always asks the lock itself', async t => {
+  const f = await fixture(t);
+  let locked = 'true', existsCalls = 0;
+  const base = f.runner;
+  const desktop = createDesktop({ runner: async (command, args, options) => { if (command === 'omarchy-shell') { f.calls.push({ command, args, options }); return `${locked}\n`; } return base(command, args, options); }, exists: async () => { existsCalls++; return true; } });
+  const lockReads = () => f.calls.filter(call => call.command === 'omarchy-shell').length;
+  assert.equal((await desktop.getState()).session.locked, true);
+  const afterFirst = { lock: lockReads(), exists: existsCalls };
+  assert.equal(afterFirst.lock, 1);
+  locked = 'false';
+  assert.equal((await desktop.getState()).session.locked, true, 'a poll within 5 s reuses the lock flag');
+  assert.deepEqual({ lock: lockReads(), exists: existsCalls }, afterFirst, 'no lock spawn and no capability probe on a cached poll');
+  // The display may be stale; the password is still never typed into an unlocked session.
+  await assert.rejects(desktop.action({ type: 'session.unlock', password: 'segredo' }), { code: 'SESSION_NOT_LOCKED' });
+  assert.equal(f.calls.filter(call => call.command === 'ydotool').length, 0);
+  await desktop.action({ type: 'session.lock' });
+  locked = 'true';
+  assert.equal((await desktop.getState()).session.locked, true, 'a lock from the phone is read fresh');
+  locked = 'false';
+  assert.equal((await desktop.getState()).session.locked, false, 'and keeps being read fresh while it settles');
+});
+
 test('dictation transcribes on the PC, types into the chosen terminal, and presses Enter unless disabled', async t => {
   const inputs = [];
   const terminals = {
