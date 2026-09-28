@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { KEY_CODES, BUTTON_CODES, HELPER, absolutePoint, absoluteToLayout, logicalBox, createRdInput } from '../backend/rd-input.mjs';
 
 const hasPython = spawnSync('python3', ['--version']).status === 0;
@@ -149,4 +149,61 @@ test('the helper releases a held key after the watchdog when nothing arrives, an
   await new Promise(resolve => child.once('close', resolve));
   const eof = events(await readLog(eofLog, () => true));
   assert.deepEqual(eof, ['ponte-rd-keys:KEY_LEFTSHIFT=1', 'ponte-rd-abs:BTN_LEFT=1', 'ponte-rd-keys:KEY_LEFTSHIFT=0', 'ponte-rd-abs:BTN_LEFT=0']);
+});
+
+// A stand-in for python-evdev: UInput behaves like the real one, whose
+// constructor reads the new device node back through _find_device (two
+// seconds of retries, and None when the node stays unreadable). No
+// /dev/uinput here.
+const FAKE_EVDEV = `
+import json, os, time
+LOG = os.environ['FAKE_EVDEV_LOG']
+def log(entry):
+    with open(LOG, 'a') as out:
+        out.write(json.dumps(entry) + '\\n')
+class AbsInfo(tuple):
+    def __new__(cls, *values):
+        return tuple.__new__(cls, values)
+class UInput:
+    def __init__(self, events=None, name='py-evdev-uinput', vendor=1, product=1, **rest):
+        self.name = name
+        log({'created': name})
+        self.device = self._find_device(3)
+    def _find_device(self, fd):
+        log({'readBack': self.name})
+        time.sleep(2)
+        return None
+    def write(self, kind, code, value):
+        log({'dev': self.name, 'event': [kind, code, value]})
+    def syn(self):
+        pass
+    def close(self):
+        log({'closed': self.name})
+`;
+
+test('the real helper opens its devices write-only: no read-back of the node, ready at once', { skip: !hasPython }, async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'ponte-rd-input-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, 'evdev'));
+  await writeFile(path.join(dir, 'evdev', '__init__.py'), FAKE_EVDEV);
+  await writeFile(path.join(dir, 'evdev', 'ecodes.py'), '');
+  const logFile = path.join(dir, 'calls.jsonl');
+  const started = Date.now();
+  const child = spawn('python3', [HELPER], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PYTHONPATH: dir, FAKE_EVDEV_LOG: logFile } });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  let out = '', err = '';
+  child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+  child.stdout.on('data', chunk => { out += chunk; });
+  child.stderr.on('data', chunk => { err += chunk; });
+  while (!out.includes('"ready"') && Date.now() - started < 5000 && child.exitCode === null) await new Promise(r => setTimeout(r, 10));
+  const readyMs = Date.now() - started;
+  assert.match(out, /"ready": true, "dryRun": false/, err);
+  assert.ok(readyMs < 1500, `ready after ${readyMs} ms: the node was read back`);
+  child.stdin.end('{"s":1,"k":30,"v":1}\n');
+  await new Promise(resolve => child.once('close', resolve));
+  const calls = (await readFile(logFile, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert.deepEqual(calls.filter(c => c.created).map(c => c.created), ['ponte-rd-keys', 'ponte-rd-abs']);
+  assert.equal(calls.some(c => c.readBack), false, 'no read-back of /dev/input/event*');
+  assert.deepEqual(calls.filter(c => c.dev === 'ponte-rd-keys').map(c => c.event), [[1, 30, 1], [1, 30, 0]], 'the key goes out, and is released on EOF');
+  assert.deepEqual(calls.filter(c => c.closed).map(c => c.closed).sort(), ['ponte-rd-abs', 'ponte-rd-keys']);
 });

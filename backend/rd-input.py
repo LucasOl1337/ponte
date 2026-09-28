@@ -78,10 +78,21 @@ def open_devices():
         out = open(args.log, 'a') if args.log else sys.stderr
         return DryDevice('ponte-rd-keys', out), DryDevice('ponte-rd-abs', out)
     from evdev import UInput, AbsInfo
-    keys = UInput({EV_KEY: KEYS + BUTTONS, EV_REL: [REL_X, REL_Y, REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES]},
-                  name='ponte-rd-keys', vendor=0x1d6b, product=0x0104)
-    absolute = UInput({EV_KEY: BUTTONS, EV_ABS: [(ABS_X, AbsInfo(0, 0, 65535, 0, 0, 0)), (ABS_Y, AbsInfo(0, 0, 65535, 0, 0, 0))]},
-                      name='ponte-rd-abs', vendor=0x1d6b, product=0x0105)
+
+    class WriteOnly(UInput):
+        # python-evdev opens the new /dev/input/event* node to read it back,
+        # retrying for two seconds when that fails. Nothing here reads from it,
+        # and a service started before its user joined the 'input' group can
+        # write /dev/uinput (logind's ACL) but not open the node: every device
+        # would cost two seconds, and a session's first keys would wait that
+        # long and then land all at once.
+        def _find_device(self, fd):
+            return None
+
+    keys = WriteOnly({EV_KEY: KEYS + BUTTONS, EV_REL: [REL_X, REL_Y, REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES]},
+                     name='ponte-rd-keys', vendor=0x1d6b, product=0x0104)
+    absolute = WriteOnly({EV_KEY: BUTTONS, EV_ABS: [(ABS_X, AbsInfo(0, 0, 65535, 0, 0, 0)), (ABS_Y, AbsInfo(0, 0, 65535, 0, 0, 0))]},
+                         name='ponte-rd-abs', vendor=0x1d6b, product=0x0105)
     return keys, absolute
 
 
