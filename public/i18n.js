@@ -792,6 +792,14 @@
     "en": "This key is not allowed.",
     "pt": "Tecla não permitida."
   },
+  "TERMINAL_TEXT_INVALID": {
+    "en": "Send 1 to 16000 characters; line breaks are allowed, other control characters are not.",
+    "pt": "Envie de 1 a 16000 caracteres; quebras de linha podem, outros controles não."
+  },
+  "MULTILINE_NOT_SUPPORTED": {
+    "en": "This terminal is not waiting for pasted text now, so several lines would run one by one. Send one line at a time.",
+    "pt": "Este terminal não está esperando texto colado agora, então várias linhas rodariam uma a uma. Mande uma linha por vez."
+  },
   "INVALID_WINDOW": {
     "en": "Invalid window identifier.",
     "pt": "Identificador de janela inválido."

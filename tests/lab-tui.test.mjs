@@ -88,3 +88,19 @@ test('keys and one-character answers reach the fake Claude TUI as the keys Claud
   await until(read => plain(read.text).includes('recusado'), 'No chosen with the arrows');
   assert.deepEqual((await events()).filter(event => event.event === 'permission').map(event => event.choice), [1, 3]);
 });
+
+test('a request of several lines reaches the fake Claude TUI as one bracketed paste and is sent with Enter', async t => {
+  const lab = await labTui(t, 'oi');
+  if (!lab) return;
+  const { terminals, session, until, events } = lab;
+  await until(read => plain(read.text).includes('Do you want to proceed?'), 'the first menu');
+  await terminals.input(session.id, { key: 'Escape' });
+  await until(read => plain(read.text).includes('? for shortcuts'), 'the input box');
+  const request = 'refatora o login\n- mantém a API\n- roda os testes';
+  await terminals.input(session.id, { text: request, enter: true });
+  await until(read => plain(read.text).includes('bracketed paste recebido'), 'the paste echo');
+  const log = await events();
+  assert.deepEqual(log.filter(event => event.event === 'paste').map(event => event.lines), [3]);
+  assert.deepEqual(log.filter(event => event.event === 'request').map(event => event.text), ['oi', request]);
+  assert.equal(log.some(event => event.key === 'Enter' && log.indexOf(event) < log.findIndex(item => item.event === 'paste')), false, 'no line break reached it as Enter before the paste ended');
+});

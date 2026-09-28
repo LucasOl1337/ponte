@@ -24,6 +24,14 @@ function mockedTmux() {
     calls.push({ command, argv, args, options });
     if (args[0] === 'if-shell') {
       if (panes.find(pane => pane.paneId === args[3])?.inMode) return 'PONTE_INPUT_BLOCKED\n';
+      // The multiline paste nests a second test: bracketed paste on (default) or off.
+      const nested = /^if-shell -F -t (%\d+) '#\{bracket_paste_flag\}' \{ (.+) \} \{ (.+) \}$/.exec(args.at(-1));
+      if (nested) {
+        calls.push({ command, argv, args: ['if-shell-bracket', nested[1]], options });
+        const chosen = panes.find(pane => pane.paneId === nested[1])?.bracket === false ? nested[3] : nested[2];
+        if (chosen.startsWith('display-message')) return `${chosen.split(' ').at(-1)}\n`;
+        return runner(command, [...argv.slice(0, 5), ...chosen.split(' ')], options);
+      }
       return runner(command, [...argv.slice(0, 5), ...args.at(-1).split(' ')], options);
     }
     if (args.includes('list-panes')) return panes.map(line).join('\n');
@@ -68,7 +76,7 @@ test('dimensions, opaque targets, text controls and non-allowlisted keys fail be
     assert.throws(() => terminals.create(value), { code: 'INVALID_TERMINAL_SIZE' });
   }
   const id = 'a'.repeat(24);
-  for (const value of [null, [], {}, { text: 'a', key: 'Enter' }, { text: 'a', enter: 'yes' }, { key: 'Enter', enter: true }, { enter: true }, { text: 'x', target: '%0' }, { text: '' }, { text: 'x'.repeat(4001) }, { text: 'a\nb' }, { text: 'a\rb' }, { text: '\x1b' }, { text: '\x7f' }, { text: '\x85' }, { text: '\u2028' }, { text: '\ud800' }, { key: '__proto__' }, { key: '-F' }, { key: 'Enter; run-shell true' }]) {
+  for (const value of [null, [], {}, { text: 'a', key: 'Enter' }, { text: 'a', enter: 'yes' }, { key: 'Enter', enter: true }, { enter: true }, { text: 'x', target: '%0' }, { text: '' }, { text: 'x'.repeat(16001) }, { text: 'a\tb' }, { text: 'a\rb' }, { text: '\x1b' }, { text: '\x7f' }, { text: '\x85' }, { text: '\u2028' }, { text: '\ud800' }, { key: '__proto__' }, { key: '-F' }, { key: 'Enter; run-shell true' }]) {
     assert.throws(() => terminals.input(id, value), ApiError);
   }
   for (const id of ['%0', '@1', '-a', 'ponte_abc', 'a'.repeat(24) + '; kill-server', '../token']) {
@@ -369,6 +377,35 @@ test('phone key names map to fixed tmux keys, and one typed character is sent as
   assert.equal(mock.calls.slice(start).find(call => call.args[0] === 'load-buffer').options.input, 'ok', 'two characters are still pasted');
 });
 
+test('several lines are one bracketed paste, only when the pane asked for it in the same tmux command', async t => {
+  const { mock, terminals } = await fixture(t);
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  const request = 'corrige o bug do login\n\n- roda os testes\n- não mexe na API ção 😀';
+  let start = mock.calls.length;
+  assert.deepEqual(await terminals.input(session.id, { text: request, enter: true }), { ok: true });
+  let sent = mock.calls.slice(start);
+  assert.equal(sent.find(call => call.args[0] === 'load-buffer').options.input, request, 'the text goes to tmux on stdin, untouched');
+  const guarded = sent.find(call => call.args[0] === 'if-shell');
+  assert.equal(guarded.args.at(-1), `if-shell -F -t ${mock.panes[0].paneId} '#{bracket_paste_flag}' { paste-buffer -d -p -r -b ponte_input -t ${mock.panes[0].paneId} } { display-message -p PONTE_NO_BRACKETED_PASTE }`);
+  const order = sent.map(call => call.args[0]);
+  assert.ok(order.indexOf('paste-buffer') > order.indexOf('if-shell-bracket') && order.lastIndexOf('send-keys') > order.indexOf('paste-buffer'), 'paste, then Enter');
+  // A pane not asking for bracketed paste gets nothing typed, not even Enter, and the buffer is dropped.
+  mock.panes[0].bracket = false;
+  start = mock.calls.length;
+  await assert.rejects(terminals.input(session.id, { text: 'ls\nrm -rf x', enter: true }), { code: 'MULTILINE_NOT_SUPPORTED', status: 409 });
+  sent = mock.calls.slice(start);
+  assert.equal(sent.some(call => call.args[0] === 'paste-buffer' || call.args[0] === 'send-keys'), false);
+  assert.deepEqual(sent.at(-1).args, ['delete-buffer', '-b', 'ponte_input']);
+  // One line is still pasted the old way, bracketed paste or not; a lone line break is refused as a key.
+  start = mock.calls.length;
+  await terminals.input(session.id, { text: 'ls -la' });
+  assert.equal(mock.calls.slice(start).some(call => call.args[0] === 'if-shell-bracket'), false);
+  await assert.rejects(terminals.input(session.id, { text: '\n' }), { code: 'MULTILINE_NOT_SUPPORTED' });
+  mock.panes[0].bracket = true;
+  assert.deepEqual(await terminals.input(session.id, { text: 'ç'.repeat(16000) }), { ok: true });
+  for (const text of ['a\rb', 'a\r\nb', 'a\tb', 'a\x1b[201~b', 'x'.repeat(16001)]) assert.throws(() => terminals.input(session.id, { text }), { code: 'TERMINAL_TEXT_INVALID' }, JSON.stringify(text.slice(0, 10)));
+});
+
 test('typed input never waits behind an output read that is still running', async t => {
   const { root, mock } = await fixture(t);
   let release, started;
@@ -563,6 +600,9 @@ test('terminal HTTP endpoints inherit authentication, origin, content bounds and
   assert.equal(typeof full.text, 'string');
   const same = await (await request(`/api/terminals/${session.id}?since=${full.hash}`)).json();
   assert.deepEqual([same.unchanged, same.text, same.hash], [true, undefined, full.hash], 'HTTP passes the shown hash through');
+  const long = await request(`/api/terminals/${session.id}/input`, 'POST', { text: 'ação\n'.repeat(3200) });
+  assert.equal(long.status, 200, 'a 16000-character request fits the input body limit');
+  assert.equal((await request(`/api/terminals/${session.id}/resize`, 'POST', { cols: 80, rows: 24, pad: 'x'.repeat(30000) })).status, 413, 'other terminal bodies keep 24 KiB');
   const ansi = await (await request(`/api/terminals/${session.id}?format=ansi`)).json();
   assert.deepEqual([typeof ansi.text, ansi.cursor, ansi.alternate], ['string', { x: 0, y: 0, visible: true }, false], 'HTTP passes format=ansi through');
   const ansiSame = await (await request(`/api/terminals/${session.id}?format=ansi&since=${ansi.hash}`)).json();
@@ -704,6 +744,48 @@ test('real isolated tmux gives format=ansi colours, the visible cursor and the a
   assert.equal(alternate.alternate, true);
   assert.deepEqual(alternate.cursor, { x: 5, y: 1, visible: false });
   await terminals.input(session.id, { key: 'Interrupt' });
+  await terminals.remove(session.id);
+});
+
+test('real isolated tmux: several lines reach a waiting shell as one paste, and are refused while a command runs', async t => {
+  if (!await commandExists('tmux')) { t.skip('tmux is not installed'); return; }
+  const root = await temporary(t, false);
+  const env = { PATH: process.env.PATH, HOME: root, XDG_RUNTIME_DIR: root, SHELL: '/bin/sh', TERM: 'xterm-256color', LANG: 'C.UTF-8' };
+  const socketPath = path.join(root, 'terminals', 'tmux.sock');
+  const terminals = createTerminals(root, { env });
+  const tmux = args => runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', ...args], { env });
+  t.after(async () => {
+    await terminals.close();
+    await runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', 'kill-server'], { env }).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = await terminals.create({ cols: 80, rows: 24 });
+  const pane = JSON.parse(await readFile(path.join(root, 'terminals', 'sessions.json'), 'utf8')).sessions[0].paneId;
+  const flag = async () => (await tmux(['display-message', '-p', '-t', pane, '#{bracket_paste_flag}'])).trim();
+  for (let i = 0; i < 80 && await flag() !== '1'; i++) await new Promise(resolve => setTimeout(resolve, 25));
+  const one = path.join(root, 'one'), two = path.join(root, 'two');
+  const lines = `printf 1 > '${one}'\nprintf 2 > '${two}'`;
+  if (await flag() !== '1') {
+    // A shell without bracketed paste (dash) never gets the lines.
+    await assert.rejects(terminals.input(session.id, { text: lines, enter: true }), { code: 'MULTILINE_NOT_SUPPORTED' });
+    await assert.rejects(access(one), { code: 'ENOENT' });
+    t.diagnostic('/bin/sh here does not ask for bracketed paste; the refusal was proven');
+    return;
+  }
+  await terminals.input(session.id, { text: lines });
+  await new Promise(resolve => setTimeout(resolve, 150));
+  await assert.rejects(access(one), { code: 'ENOENT' }, 'a bracketed paste runs nothing before Enter');
+  await terminals.input(session.id, { key: 'Enter' });
+  for (let i = 0; i < 80; i++) { try { await access(two); break; } catch { await new Promise(resolve => setTimeout(resolve, 25)); } }
+  assert.deepEqual([await readFile(one, 'utf8'), await readFile(two, 'utf8')], ['1', '2']);
+  // While a command runs, the shell is not reading a prompt: nothing is typed.
+  const busy = path.join(root, 'busy');
+  await terminals.input(session.id, { text: 'sleep 1', enter: true });
+  for (let i = 0; i < 40 && await flag() !== '0'; i++) await new Promise(resolve => setTimeout(resolve, 25));
+  await assert.rejects(terminals.input(session.id, { text: `touch '${busy}'\ntouch '${busy}'`, enter: true }), { code: 'MULTILINE_NOT_SUPPORTED' });
+  await new Promise(resolve => setTimeout(resolve, 1300));
+  await assert.rejects(access(busy), { code: 'ENOENT' });
+  assert.equal((await terminals.read(session.id)).text.includes('touch'), false, 'no line was typed into the running command');
   await terminals.remove(session.id);
 });
 
