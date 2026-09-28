@@ -31,6 +31,11 @@ export YDOTOOL_SOCKET="$sock"
 export PONTE_CONFIG="$config"
 export PATH="$root/tools/lab/bin:$PATH"
 export PONTE_SUSSURRO_SOCKET='' PONTE_STT_URL=''
+# Never the owner's Magma controller: it drives the real RGB. PONTE_LAB_MAGMA
+# (a folder with a controller.py copy) runs that copy with a lab HOME and the
+# fake openrgb; without it the lab has no lights.
+if [ -n "${PONTE_LAB_MAGMA:-}" ]; then export MAGMA_LIGHTS_CONTROLLER="$root/tools/lab/magma.py"
+else export MAGMA_LIGHTS_CONTROLLER="$PONTE_LAB_DIR/no-magma/controller.py"; fi
 cd "$root"
 ( sleep 1.5; if [ -f "$PONTE_LAB_DIR/data/token" ]; then echo "lab: http://127.0.0.1:$port/#pair=$(cat "$PONTE_LAB_DIR/data/token")"; fi ) &
 exec "${PONTE_NODE:-node}" server.mjs
