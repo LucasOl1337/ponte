@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { createApp } from '../server.mjs';
-import { createTailscaleIdentity, normalizePeerAddress } from '../backend/tailscale.mjs';
+import { createTailscaleIdentity, normalizePeerAddress, loopbackSocketOwner } from '../backend/tailscale.mjs';
 
 const run = promisify(execFile);
 const TOKEN = 'tailnet_autopair_test_token_at_least_32_chars';
@@ -115,4 +115,70 @@ test('GET /api/pair hands the key to an owner device over the tailnet and denies
   assert.equal((await httpsGet(nativePort, '/api/pair')).status, 403);
   // health advertises auto-pairing only on the native listener.
   assert.equal(JSON.parse((await httpsGet(nativePort, '/api/health')).body).autoPair, true);
+});
+
+// /proc/net/tcp as the kernel prints it: 127.0.0.1:41234 (root, tailscaled) -> 127.0.0.1:8787,
+// the accepted side owned by uid 1000, and an unrelated socket to another host on the same ports.
+const PROC_TCP = [
+  '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
+  '   0: 0100007F:2253 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 11 1',
+  '   1: 0100007F:A0D2 0100007F:2253 01 00000000:00000000 00:00000000 00000000     0        0 12 1',
+  '   2: 0100007F:2253 0100007F:A0D2 01 00000000:00000000 00:00000000 00000000  1000        0 13 1',
+  '   3: 0A00000A:A0D3 0200000A:2253 01 00000000:00000000 00:00000000 00000000  1001        0 14 1',
+].join('\n');
+const fakeProc = (tcp, tcp6 = 'header') => file => { if (file === '/proc/net/tcp') return tcp; if (file === '/proc/net/tcp6') return tcp6; throw new Error('ENOENT'); };
+
+test('the owner of a loopback client socket is read from /proc/net/tcp', () => {
+  assert.equal(loopbackSocketOwner(0xA0D2, 0x2253, fakeProc(PROC_TCP)), 0, 'tailscaled side');
+  assert.equal(loopbackSocketOwner(0xA0D3, 0x2253, fakeProc(PROC_TCP)), null, 'a non-loopback socket never counts');
+  assert.equal(loopbackSocketOwner(0xBEEF, 0x2253, fakeProc(PROC_TCP)), null);
+  assert.equal(loopbackSocketOwner(undefined, 0x2253, fakeProc(PROC_TCP)), null);
+  const v6 = 'header\n   0: 0000000000000000FFFF00000100007F:A0D2 0000000000000000FFFF00000100007F:2253 01 0:0 00:0 0 1000 0 1 1';
+  assert.equal(loopbackSocketOwner(0xA0D2, 0x2253, fakeProc('header', v6)), 1000);
+});
+
+test('a browser through Tailscale Serve pairs only as the owner and only from tailscaled', async () => {
+  const runner = async () => JSON.stringify({ Node: { User: OWNER }, UserProfile: { ID: OWNER, LoginName: 'owner@example.com' } });
+  let uid = 0;
+  const identity = createTailscaleIdentity({ runner, selfAddress: '100.100.100.100', env: {}, socketOwner: () => uid });
+  await identity.ready;
+  const request = { remoteAddress: '127.0.0.1', remotePort: 41234, localPort: 8787, login: 'Owner@Example.com' };
+  assert.equal(await identity.authorizeServe(request), true);
+  assert.equal(await identity.authorizeServe({ ...request, login: 'guest@example.com' }), false, 'another tailnet user');
+  assert.equal(await identity.authorizeServe({ ...request, login: '' }), false, 'no header: plain local or Funnel traffic');
+  assert.equal(await identity.authorizeServe({ ...request, remoteAddress: '100.88.0.9' }), false, 'not a loopback connection');
+  uid = 1000;
+  assert.equal(await identity.authorizeServe(request), false, 'a local user process forging the header');
+  uid = null;
+  assert.equal(await identity.authorizeServe(request), false, 'socket owner unknown');
+  const off = createTailscaleIdentity({ runner, selfAddress: '100.100.100.100', env: { PONTE_TAILSCALE_AUTO: '0' }, socketOwner: () => 0 });
+  assert.equal(await off.authorizeServe(request), false);
+});
+
+test('GET /api/pair on the loopback listener asks Serve identity and never the tailnet peer check', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-serve-pair-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'public'));
+  await writeFile(path.join(root, 'public/index.html'), '<title>Ponte</title>');
+  const seen = [];
+  const app = await createApp({
+    rootDir: root, dataDir: path.join(root, 'private'), token: TOKEN, env: {},
+    desktop: { getState: async () => ({ hostname: 'test-pc' }), close: async () => {} },
+    audio: { close: async () => {} },
+    tailnetIdentity: { available: true, ready: Promise.resolve(), ownerUserId: OWNER, authorize: async () => true,
+      authorizeServe: async request => { seen.push(request); return request.login === 'owner@example.com'; } },
+  });
+  t.after(() => app.close());
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  const port = app.server.address().port;
+  const get = async headers => { const r = await fetch(`http://127.0.0.1:${port}/api/pair`, { headers }); return { status: r.status, body: await r.json() }; };
+  assert.equal((await get({})).status, 403, 'no Serve header: the loopback listener never hands out the key');
+  assert.equal(seen.length, 0);
+  const ok = await get({ 'Tailscale-User-Login': 'owner@example.com' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.token, TOKEN);
+  assert.equal(seen[0].localPort, port);
+  assert.equal(seen[0].remoteAddress, '127.0.0.1');
+  assert.ok(Number.isInteger(seen[0].remotePort));
+  assert.equal((await get({ 'Tailscale-User-Login': 'guest@example.com' })).status, 403);
 });

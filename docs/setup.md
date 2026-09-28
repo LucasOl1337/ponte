@@ -96,6 +96,8 @@ A stopped service is unavailable to the phone. Your PC must be awake, connected 
 
 `./ponte serve` is an optional, explicit Tailscale Serve operation for the browser interface. It requires a configured Tailscale DNS name in `trustedHosts`; the native Android app does not require Serve. Check your existing Serve configuration before using that command.
 
+With Serve on, a browser on any of your own tailnet devices opens `https://<pc>.<tailnet>.ts.net` and is paired automatically, with no key to type. Serve stamps each request with `Tailscale-User-Login` (the tailnet user behind it), removes any copy the browser sent, and never adds it to Funnel traffic. Ponte hands out the key only when that login is the PC owner's and the loopback connection comes from a root-owned socket (tailscaled), so a local process cannot forge the header. Another user of your tailnet, a tagged device, or a request without the header still gets nothing. Serve stays inside the tailnet; never turn on Funnel for Ponte. `tailscale serve reset` turns it off, and `PONTE_TAILSCALE_AUTO=0` disables every kind of auto-pairing.
+
 ## Phone over Tailscale (no cable, no Wi-Fi)
 
 An agent or a script on this PC can install, launch and drive the Android app while the phone is anywhere with Tailscale up, on mobile data included. adb on the phone listens on TCP port 5555 on every interface, Tailscale's among them, and this PC's adb connects to `100.111.221.82:5555`.
