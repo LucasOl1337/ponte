@@ -693,6 +693,22 @@
     "en": "This window is no longer open.",
     "pt": "A janela não está mais aberta."
   },
+  "AGENT_NOT_FOUND": {
+    "en": "This agent or terminal is no longer running.",
+    "pt": "Este agente ou terminal não está mais rodando."
+  },
+  "AGENT_NOT_INTERACTIVE": {
+    "en": "This agent has no terminal window or Ponte session to type into.",
+    "pt": "Este agente não tem janela de terminal nem sessão do Ponte para digitar."
+  },
+  "AGENT_FOCUS_FAILED": {
+    "en": "The agent's window did not take focus, so nothing was typed.",
+    "pt": "A janela do agente não recebeu o foco, então nada foi digitado."
+  },
+  "AGENT_PC_LOCKED": {
+    "en": "The PC is locked. Unlock it before replying to an agent.",
+    "pt": "O PC está bloqueado. Desbloqueie antes de responder a um agente."
+  },
   "APP_NOT_ALLOWED": {
     "en": "This application is not allowed.",
     "pt": "Aplicativo não permitido."
