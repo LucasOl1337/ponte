@@ -1090,6 +1090,58 @@
     "en": "This device is not on your tailnet, so it needs the pairing key.",
     "pt": "Este aparelho não está no seu tailnet, então precisa da chave de pareamento."
   },
+  "MESH_NOT_OWNER": {
+    "en": "Only a device of this computer's owner on the tailnet, without tags, can ask for access.",
+    "pt": "Só um aparelho do dono deste computador no tailnet, sem tag, pode pedir acesso."
+  },
+  "MESH_INVALID_REQUEST": {
+    "en": "Invalid pairing request.",
+    "pt": "Pedido de pareamento inválido."
+  },
+  "MESH_TOO_MANY_REQUESTS": {
+    "en": "There are already 5 pending requests. Approve or deny one, or wait 10 minutes.",
+    "pt": "Já há 5 pedidos pendentes. Aprove ou negue um, ou espere 10 minutos."
+  },
+  "MESH_REQUEST_NOT_FOUND": {
+    "en": "This access request no longer exists. Ask again.",
+    "pt": "Este pedido de acesso não existe mais. Peça de novo."
+  },
+  "MESH_CODE_NOT_FOUND": {
+    "en": "No pending request has this code.",
+    "pt": "Nenhum pedido pendente tem esse código."
+  },
+  "MESH_OWNER_ONLY": {
+    "en": "Only this device's owner manages pairings, never another device.",
+    "pt": "Só o dono deste aparelho gerencia pareamentos, nunca outro aparelho."
+  },
+  "MESH_CHAIN_DENIED": {
+    "en": "A paired device cannot relay to a third device.",
+    "pt": "Um aparelho pareado não pode repassar para um terceiro."
+  },
+  "MESH_PEER_ADDRESS": {
+    "en": "This device key works only from the device it was approved for.",
+    "pt": "Esta chave de aparelho só vale do aparelho para o qual foi aprovada."
+  },
+  "MESH_PEER_NOT_FOUND": {
+    "en": "This device is not paired or was not found on the tailnet.",
+    "pt": "Este aparelho não está pareado ou não foi encontrado no tailnet."
+  },
+  "MESH_PEER_AMBIGUOUS": {
+    "en": "More than one device has this name. Use its id.",
+    "pt": "Mais de um aparelho tem esse nome. Use o id."
+  },
+  "PEER_OFFLINE": {
+    "en": "{name} is not answering. Check that it is on and on Tailscale.",
+    "pt": "{name} não está respondendo. Confira se está ligado e no Tailscale."
+  },
+  "PEER_REVOKED": {
+    "en": "{name} no longer accepts this device. Pair again.",
+    "pt": "{name} não aceita mais este aparelho. Pareie de novo."
+  },
+  "PEER_UNTRUSTED": {
+    "en": "{name} presented a certificate that does not match the one saved when pairing.",
+    "pt": "{name} apresentou um certificado diferente do salvo no pareamento."
+  },
   "WOL_INSTRUCTIONS": {
     "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",
     "pt": "Habilite Wake-on-LAN na BIOS/UEFI (Power On By PCI-E) e no Linux com sudo ethtool -s {interface} wol g. Acorde com Magic Packet para {mac} na porta UDP 9."
