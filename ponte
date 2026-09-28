@@ -898,6 +898,112 @@ def doctor(config_file):
     return 0 if problems == 0 else 1
 
 
+def local_api(config_file, method, route, body=None, timeout=20):
+    """Call this node's own server on its loopback listener with the owner token."""
+    import urllib.error
+    import urllib.request
+    config = load_config(config_file)
+    data = absolute(os.environ.get('OMARCHY_REMOTE_DATA', config['dataDir']), 'dataDir')
+    token = (data / 'token').read_text().strip()
+    if not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', token):
+        raise ValueError('Invalid pairing token.')
+    host, port_value = config['http']['host'], config['http']['port']
+    authority = f'[{host}]' if ':' in host else host
+    payload = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(f'http://{authority}:{port_value}/api{route}', data=payload, method=method, headers={
+        'Authorization': f'Bearer {token}', 'Accept-Language': 'pt' if os.environ.get('LANG', '').startswith('pt') else 'en',
+        **({'Content-Type': 'application/json'} if payload is not None else {})})
+    # Never through an HTTP proxy from the environment: this is loopback.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.load(error)
+        except ValueError:
+            detail = {}
+        raise ValueError(detail.get('error') or f'Ponte answered HTTP {error.code}.') from None
+    except urllib.error.URLError as error:
+        raise ValueError(f'Ponte is not answering on {authority}:{port_value}. Start it with ./ponte start.') from error
+
+
+def print_mesh(listing):
+    me = listing.get('self') or {}
+    print(f"This device: {me.get('name')} ({me.get('id')})")
+    peers = listing.get('peers') or []
+    if not peers:
+        print('No other Ponte device found on your Tailscale.')
+    for peer in peers:
+        state = 'paired' if peer.get('paired') else 'available'
+        pairing = peer.get('pairing') or {}
+        if pairing.get('status') == 'pending':
+            state = f"waiting for approval, code {pairing.get('code')}"
+        elif pairing.get('status') in ('denied', 'expired'):
+            state = f"request {pairing['status']}"
+        extra = ', controls this device' if peer.get('controlsMe') else ''
+        print(f"  {peer.get('name'):<24} {'online ' if peer.get('online') else 'offline'}  {state}{extra}  [{peer.get('id')}]")
+    for item in listing.get('requests') or []:
+        print(f"Request: {item.get('name')} ({item.get('ip')}) asks to control this device, code {item.get('code')}. ./ponte mesh approve {item.get('code')}")
+    controllers = listing.get('controllers') or []
+    if controllers:
+        print('Devices that control this one:')
+        for item in controllers:
+            print(f"  {item.get('name'):<24} {item.get('ip')}  last seen {item.get('lastSeen') or 'never'}  [{item.get('id')}]")
+
+
+def mesh_main(argv, sleep=time.sleep):
+    parser = argparse.ArgumentParser(prog='ponte mesh', description='Pair this device with other Ponte devices on your Tailscale and control them.')
+    sub = parser.add_subparsers(dest='action', required=True)
+    sub.add_parser('list', help='This device, Ponte devices on the tailnet, pending requests and who controls this one.')
+    pair = sub.add_parser('pair', help='Ask another device for access. Approve it there with the code shown here.')
+    pair.add_argument('device', help='Name or id from ./ponte mesh list.')
+    pair.add_argument('--no-wait', action='store_true', help='Print the code and return without waiting for the approval.')
+    for name, text in [('approve', 'Approve a request for this device by its code.'), ('deny', 'Deny a request for this device by its code.')]:
+        sub.add_parser(name, help=text).add_argument('code')
+    sub.add_parser('revoke', help='Cut a link in either direction: a device this one controls or one that controls it.').add_argument('device')
+    parser.add_argument('--json', action='store_true', help='Print the server answer as JSON.')
+    args = parser.parse_args(argv)
+    config_file, _, _ = paths()
+    emit = (lambda value: print(json.dumps(value, indent=2))) if args.json else None
+    if args.action == 'list':
+        listing = local_api(config_file, 'GET', '/mesh')
+        return emit(listing) if emit else print_mesh(listing)
+    if args.action in ('approve', 'deny'):
+        result = local_api(config_file, 'POST', f'/mesh/{args.action}', {'code': args.code})
+        if emit:
+            return emit(result)
+        who = (result.get('approved') or result.get('denied') or {}).get('name')
+        print(f'Approved: {who} can now control this device.' if args.action == 'approve' else f'Denied the request from {who}.')
+        return
+    if args.action == 'revoke':
+        result = local_api(config_file, 'POST', '/mesh/revoke', {'peer': args.device})
+        if emit:
+            return emit(result)
+        print(f"Revoked: {result['revoked']['name']} no longer linked with this device.")
+        return
+    result = local_api(config_file, 'POST', '/mesh/pair', {'peer': args.device})
+    peer = result.get('peer') or {}
+    if result.get('status') == 'paired':
+        print(f"Already paired with {peer.get('name')}.")
+        return
+    print(f"Code {result.get('code')}: approve it on {peer.get('name')} (Devices card, or ./ponte mesh approve {result.get('code')} there).")
+    if args.no_wait:
+        return
+    deadline = time.monotonic() + 10 * 60
+    while time.monotonic() < deadline:
+        sleep(2)
+        listing = local_api(config_file, 'GET', '/mesh')
+        entry = next((item for item in listing.get('peers') or [] if item.get('id') == peer.get('id')), {})
+        if entry.get('paired'):
+            print(f"Paired: this device now controls {peer.get('name')}.")
+            return
+        status = (entry.get('pairing') or {}).get('status')
+        if status in ('denied', 'expired'):
+            raise ValueError(f"The request was {status} on {peer.get('name')}.")
+    raise ValueError('No answer within 10 minutes.')
+
+
 def pc_main(argv):
     # SSH-friendly local control over Tailscale. Reuses the Node desktop actions
     # (power, lock, unlock, monitors, RGB) validated by the server, so `ssh
@@ -944,7 +1050,10 @@ def main():
     if sys.argv[1:2] == ['pc']:
         pc_main(sys.argv[2:])
         return
-    parser = argparse.ArgumentParser(description=__doc__, epilog='Desktop app: ./ponte desktop (control Android from this PC). Agent control: ./ponte ctl help. Offline discovery: ./ponte ctl schema or ./ponte desktop schema. Other groups: ./ponte pc --help and ./ponte phone --help.')
+    if sys.argv[1:2] == ['mesh']:
+        mesh_main(sys.argv[2:])
+        return
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Desktop app: ./ponte desktop (control Android from this PC). Agent control: ./ponte ctl help. Offline discovery: ./ponte ctl schema or ./ponte desktop schema. Other groups: ./ponte pc --help, ./ponte phone --help and ./ponte mesh --help.')
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config'])
     parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')
     parser.add_argument('--tailscale-ip', help='Explicit canonical Tailscale IPv4 instead of automatic detection.')

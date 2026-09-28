@@ -335,3 +335,33 @@ test('discovery lists online, untagged tailnet peers of the same owner that answ
   assert.equal(mesh.view().peers.length, 1);
   assert.ok(performance.now() - started < 50);
 });
+
+test('./ponte mesh lists, pairs, approves and revokes through the local server', async t => {
+  const { a, b } = await twoNodes(t);
+  const root = path.dirname(path.dirname(new URL(import.meta.url).pathname));
+  const cli = async (target, args) => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'ponte-mesh-cli-'));
+    t.after(() => rm(home, { recursive: true, force: true }));
+    const config = path.join(home, 'config.json');
+    await writeFile(config, JSON.stringify({ schemaVersion: 1, dataDir: target.dataDir, http: { host: '127.0.0.1', port: target.httpPort }, trustedHosts: [] }), { mode: 0o600 });
+    const env = { HOME: home, PATH: process.env.PATH, PONTE_CONFIG: config, http_proxy: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9' };
+    return run('python3', [path.join(root, 'ponte'), 'mesh', ...args], { env, timeout: 15000 }).catch(error => error);
+  };
+  const listed = await cli(a, ['list']);
+  assert.match(listed.stdout, /This device: pc-teste/);
+  assert.match(listed.stdout, /notebook-teste\s+online\s+available/);
+  const asked = await cli(a, ['pair', 'notebook-teste', '--no-wait']);
+  const code = /Code (\d{6})/.exec(asked.stdout)?.[1];
+  assert.ok(code, asked.stdout + asked.stderr);
+  assert.match((await cli(b, ['list'])).stdout, new RegExp(`pc-teste \\(127\\.0\\.0\\.1\\) asks to control this device, code ${code}`));
+  const wrong = await cli(b, ['approve', code === '000000' ? '111111' : '000000']);
+  assert.equal(wrong.code, 1); assert.match(wrong.stderr, /No pending request has this code/);
+  assert.match((await cli(b, ['approve', code])).stdout, /Approved: pc-teste can now control this device/);
+  await until(async () => (await json(await a.local('/api/mesh'))).body.peers.find(peer => peer.paired), 'the link');
+  assert.match((await cli(a, ['list'])).stdout, /notebook-teste\s+online\s+paired/);
+  const json2 = JSON.parse((await cli(b, ['--json', 'list'])).stdout);
+  assert.equal(json2.controllers[0].name, 'pc-teste');
+  assert.match((await cli(b, ['revoke', 'pc-teste'])).stdout, /Revoked: pc-teste/);
+  const offline = await cli({ dataDir: a.dataDir, httpPort: 9 }, ['list']);
+  assert.equal(offline.code, 1); assert.match(offline.stderr, /not answering/);
+});
