@@ -781,7 +781,7 @@ def doctor(config_file):
 
     def report(status, message):
         nonlocal problems
-        if status != 'ok':
+        if status not in ('ok', 'info'):
             problems += 1
         print(f'[{status:>4}] {message}')
 
@@ -877,7 +877,13 @@ def doctor(config_file):
 
     apk = Path(__file__).resolve().parent / '.work' / 'Ponte.apk'
     if not apk.is_file():
-        report('warn', 'no APK built yet: ./android/build.sh')
+        # A mesh node (a notebook, a second PC) serves the phone through its
+        # home node and needs no APK; only the machine that ships the app
+        # (an `android` block in the private config) is missing one.
+        if 'android' in config:
+            report('warn', 'no APK built yet: ./android/build.sh')
+        else:
+            report('info', 'no APK here: this node is reached through the mesh (the phone app ships from its home node)')
     else:
         try:
             with zipfile.ZipFile(apk) as archive:
