@@ -15,6 +15,7 @@ import { ApiError } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
 import { createTerminals } from './backend/terminals.mjs';
 import { createAgents } from './backend/agents.mjs';
+import { createAgentEvents } from './backend/agent-events.mjs';
 import { createTailscaleIdentity, pairingRejection } from './backend/tailscale.mjs';
 import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
@@ -191,6 +192,7 @@ export async function createApp(options = {}) {
   const terminals = options.terminals || createTerminals(initialized.dataDir, { env });
   const images = options.images || await createImageInbox(initialized.dataDir, { env, terminals, clipboard: options.clipboard });
   const agents = options.agents || createAgents({ env, dataDir: initialized.dataDir });
+  const agentEvents = options.agentEvents || createAgentEvents({ list: () => agents.list() });
   const transcriber = options.transcriber || createTranscriber(initialized.dataDir, { env });
   const tailnetIdentity = options.tailnetIdentity || createTailscaleIdentity({ env, selfAddress: settings?.nativeTls?.host || env.OMARCHY_REMOTE_NATIVE_BIND });
   const activeRequests = new Set();
@@ -359,6 +361,21 @@ export async function createApp(options = {}) {
       // Agents and terminals running on the PC: read-only listing and
       // transcript; a reply types into that agent's own session or window.
       if (pathname === '/api/agents' && req.method === 'GET') { json(res, 200, await limits.only('agents', 2, () => agents.list())); return; }
+      // The Android alert service's long-poll: at most `wait` seconds, then an
+      // empty answer. It reveals nothing /api/agents does not already show.
+      if (pathname === '/api/agents/events' && req.method === 'GET') {
+        for (const key of ['after', 'wait']) if (query.getAll(key).length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
+        const after = /^\d{1,15}$/.test(query.get('after') || '') ? Number(query.get('after')) : null;
+        const wait = /^\d{1,3}$/.test(query.get('wait') || '') ? Number(query.get('wait')) : 0;
+        const gone = new AbortController();
+        const hangUp = () => gone.abort();
+        res.once('close', hangUp);
+        try {
+          const result = await agentEvents.wait({ after, wait, signal: gone.signal });
+          if (!res.destroyed && !res.writableEnded) json(res, 200, result);
+        } finally { res.off('close', hangUp); }
+        return;
+      }
       const agentRoute = pathname.match(/^\/api\/agents\/([^/]+)\/(transcript|reply)$/);
       if (agentRoute?.[2] === 'transcript' && req.method === 'GET') { json(res, 200, await limits.only('agents', 2, () => agents.transcript(agentRoute[1]))); return; }
       if (agentRoute?.[2] === 'reply' && req.method === 'POST') {
@@ -366,7 +383,10 @@ export async function createApp(options = {}) {
         await limits.only('body', 8, async () => {
           const body = await readBody(req, 24 * 1024);
           let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
-          json(res, 200, await limits.action(() => agents.reply(agentRoute[1], value, { desktop, terminals })));
+          // The answer itself moves the agent; that is not news for the phone.
+          agentEvents.replied(agentRoute[1]);
+          try { json(res, 200, await limits.action(() => agents.reply(agentRoute[1], value, { desktop, terminals }))); }
+          finally { agentEvents.replied(agentRoute[1]); }
         }); return;
       }
       if (pathname === '/api/screenshot' && req.method === 'GET') {
@@ -449,6 +469,7 @@ export async function createApp(options = {}) {
     if (closingPromise) return closingPromise;
     shuttingDown = true;
     limits.stop();
+    agentEvents.close?.();
     live.close();
     const terminalsClosed = Promise.resolve(terminals.close?.());
     closingPromise = (async () => {

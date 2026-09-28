@@ -57,6 +57,13 @@ public final class MainActivity extends Activity {
     private static final int MAX_SHARED_BYTES = 20 * 1024 * 1024;
     private static final int FILE_CHOOSER_REQUEST = 7201;
     private final Map<String, SharedImage> sharedImages = Collections.synchronizedMap(new LinkedHashMap<>());
+    // Agent alerts with the app closed (AgentAlertService). The page's "Agent
+    // alerts" switch drives it through PonteNative; a tapped alert leaves the
+    // agent's id here until the page takes it and opens that conversation.
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 7202;
+    private final Object agentToOpenLock = new Object();
+    private String agentToOpen = "";
+    private boolean alertsPermissionPending;
     private ValueCallback<Uri[]> fileCallback;
     private static final class SharedImage {
         final String mime; final String name; final byte[] bytes;
@@ -68,6 +75,7 @@ public final class MainActivity extends Activity {
         preferences = getSharedPreferences("ponte-pairing", MODE_PRIVATE);
         consumePairingIntent(getIntent());
         consumeShareIntent(getIntent());
+        consumeAgentIntent(getIntent());
         agentSession = getIntent() != null && getIntent().getBooleanExtra("ponte.agent", false);
         if (agentSession && android.os.Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true); }
         getWindow().setStatusBarColor(Color.rgb(21, 23, 20));
@@ -106,6 +114,7 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         boolean paired = consumePairingIntent(intent);
         consumeShareIntent(intent);
+        if (consumeAgentIntent(intent)) dispatchToPage("window.dispatchEvent(new Event('ponte-native-agent')); true;");
         // `ponte phone app` on an instance that is already running arrives
         // here, not in onCreate: without this it stays behind the keyguard.
         if (intent != null && intent.getBooleanExtra("ponte.agent", false) && !agentSession) {
@@ -368,6 +377,75 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public void hideKeyboard() {
             runOnUiThread(() -> hidePhoneKeyboard());
         }
+        // Agent alerts: "unset" until the page first reports its switch, then
+        // "on", "off" (also set by "Turn off" on the notification) or
+        // "blocked" (on, but Android notifications are not allowed).
+        @JavascriptInterface public String agentAlerts() { return agentAlertsState(); }
+        @JavascriptInterface public void setAgentAlerts(boolean on, String token, boolean ask) {
+            runOnUiThread(() -> applyAgentAlerts(on, token, ask));
+        }
+        // Unpairing: stop and drop the key, but keep the owner's choice.
+        @JavascriptInterface public void forgetAgentAlerts() {
+            runOnUiThread(() -> forgetAgentAlertsNow());
+        }
+        @JavascriptInterface public String takeAgentToOpen() {
+            synchronized (agentToOpenLock) { String id = agentToOpen; agentToOpen = ""; return id; }
+        }
+    }
+    private boolean consumeAgentIntent(Intent intent) {
+        if (intent == null) return false;
+        String id = intent.getStringExtra(AgentAlertService.EXTRA_AGENT);
+        intent.removeExtra(AgentAlertService.EXTRA_AGENT);
+        if (!AgentAlerts.validAgentId(id)) return false;
+        synchronized (agentToOpenLock) { agentToOpen = id; }
+        return true;
+    }
+    private String agentAlertsState() {
+        String choice = preferences.getString(AgentAlertService.PREF_STATE, "");
+        if ("off".equals(choice)) return "off";
+        if (!"on".equals(choice)) return "unset";
+        return AgentAlertService.notificationsAllowed(this) ? "on" : "blocked";
+    }
+    private boolean pageIsOurs() {
+        return !destroyed && browser != null && ownOrigin(Uri.parse(browser.getUrl() == null ? "" : browser.getUrl()));
+    }
+    private void applyAgentAlerts(boolean on, String token, boolean ask) {
+        if (!pageIsOurs()) return;
+        if (!on) {
+            preferences.edit().putString(AgentAlertService.PREF_STATE, "off").remove(AgentAlertService.PREF_TOKEN).apply();
+            AgentAlertService.stop(this);
+            reportAgentAlerts("off");
+            return;
+        }
+        if (!AgentAlerts.validToken(token)) return;
+        preferences.edit().putString(AgentAlertService.PREF_STATE, "on").putString(AgentAlertService.PREF_TOKEN, token).apply();
+        if (AgentAlertService.notificationsAllowed(this)) { startAgentAlerts(); return; }
+        if (ask && android.os.Build.VERSION.SDK_INT >= 33 && !alertsPermissionPending && !paused) {
+            alertsPermissionPending = true;
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, NOTIFICATION_PERMISSION_REQUEST);
+            return;
+        }
+        reportAgentAlerts("blocked");
+    }
+    private void onNotificationPermission(boolean granted) {
+        alertsPermissionPending = false;
+        if (granted && "on".equals(agentAlertsState())) startAgentAlerts();
+        else reportAgentAlerts(agentAlertsState());
+    }
+    private void startAgentAlerts() {
+        try { AgentAlertService.start(this); reportAgentAlerts("on"); }
+        catch (RuntimeException notAllowed) { reportAgentAlerts("unavailable"); }
+    }
+    private void forgetAgentAlertsNow() {
+        if (!pageIsOurs()) return;
+        preferences.edit().remove(AgentAlertService.PREF_TOKEN).apply();
+        AgentAlertService.stop(this);
+    }
+    private void reportAgentAlerts(String state) {
+        dispatchToPage("window.dispatchEvent(new CustomEvent('ponte-native-alerts',{detail:'" + state + "'})); true;");
+    }
+    private void dispatchToPage(String script) {
+        if (pageIsOurs()) browser.evaluateJavascript(script, null);
     }
     private void hidePhoneKeyboard() {
         if (destroyed || browser == null) return;
@@ -524,6 +602,7 @@ public final class MainActivity extends Activity {
     }
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST) { onNotificationPermission(results.length == 1 && results[0] == PackageManager.PERMISSION_GRANTED); return; }
         if (microphonePermission.receive(requestCode, results.length == 1 && results[0] == PackageManager.PERMISSION_GRANTED)) resolveMicrophonePermission();
     }
     private void pauseWebContent(boolean awaitingMicrophonePermission) {
