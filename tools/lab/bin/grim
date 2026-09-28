@@ -12,7 +12,15 @@ def opt(flag, default):
 scale = float(opt('-s', '1')); kind = opt('-t', 'png'); quality = int(opt('-q', '80'))
 m = _lab.monitor(); W, H = m['width'], m['height']
 s = _lab.load()
-im = Image.new('RGB', (W, H), (24, 26, 22)); d = ImageDraw.Draw(im)
+im = Image.new('RGB', (W, H), (24, 26, 22))
+# PONTE_LAB_BACKDROP: an image tiled at native pixels under the grid, so frame
+# sizes resemble a real desktop (the bare grid compresses far too well).
+backdrop = os.environ.get('PONTE_LAB_BACKDROP')
+if backdrop:
+    tile = Image.open(backdrop).convert('RGB')
+    for ty in range(0, H, tile.height):
+        for tx in range(0, W, tile.width): im.paste(tile, (tx, ty))
+d = ImageDraw.Draw(im)
 def load_font(size):
     for candidate in ('/usr/share/fonts/TTF/DejaVuSansMono.ttf', '/usr/share/fonts/liberation/LiberationMono-Regular.ttf', '/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf'):
         try: return ImageFont.truetype(candidate, size)
