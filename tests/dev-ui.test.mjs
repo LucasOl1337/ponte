@@ -249,3 +249,36 @@ test('the Terminals width select shows a measured width instead of going blank',
   assert.equal(select.value, '80');
   assert.equal(options().length, 3);
 });
+
+test('SSH shows only where the device lists machines, swaps the folder list for them, and sends the host', async () => {
+  const hosts = [{ host: 'cloud-vm', label: 'Hostinger' }, { host: 'work-vm', label: 'work-vm' }];
+  const bare = harness({ sessions: [] });
+  await flush();
+  bare.run("navigate('inicio')"); await flush();
+  assert.equal(bare.el('#start-ssh').hidden, true, 'no SSH machines, no SSH button');
+  const h = harness({ sessions: [], respond: path => path === '/api/terminals?projects=1' ? ok({ projects: ['ponte'], hosts }) : null });
+  await flush();
+  h.run("navigate('inicio')"); await flush();
+  assert.equal(h.el('#start-ssh').hidden, false);
+  h.el('#start-ssh').click();
+  assert.equal(h.el('#start-project-label').textContent, 'MACHINE');
+  assert.deepEqual(h.el('#start-project').querySelectorAll('option').map(option => [option.getAttribute('value'), option.textContent]), [['cloud-vm', 'Hostinger · cloud-vm'], ['work-vm', 'work-vm']]);
+  h.el('#start-project').value = 'work-vm'; h.el('#start-project').dispatchEvent({ type: 'change', target: h.el('#start-project') });
+  h.el('#start-go').click(); await flush();
+  const home = h.writes().filter(call => call.path === '/api/terminals').map(call => JSON.parse(call.body)).at(-1);
+  assert.equal(home.agent, 'ssh'); assert.equal(home.host, 'work-vm'); assert.equal(home.project, undefined);
+  assert.equal(h.saved.get('ponte-start-host'), 'work-vm');
+  // Back to Claude: the folders return, and the saved machine is not a folder.
+  h.run("navigate('inicio')"); h.el('[data-start-agent="claude"]').click();
+  assert.equal(h.el('#start-project-label').textContent, 'FOLDER');
+  assert.deepEqual(h.el('#start-project').querySelectorAll('option').map(option => option.getAttribute('value')), ['', 'ponte']);
+  // Dev: the same choice in the new-session panel.
+  h.run("navigate('dev')"); await flush();
+  h.el('#dev-new').click(); await flush();
+  assert.equal(h.el('#dev-ssh').hidden, false);
+  h.el('#dev-ssh').click();
+  assert.equal(h.el('#dev-project').value, 'work-vm', 'the last machine is remembered');
+  h.el('#dev-create').click(); await flush();
+  const dev = h.writes().filter(call => call.path === '/api/terminals').map(call => JSON.parse(call.body)).at(-1);
+  assert.equal(dev.agent, 'ssh'); assert.equal(dev.host, 'work-vm'); assert.equal(dev.project, undefined);
+});

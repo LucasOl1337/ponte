@@ -13,6 +13,24 @@ function absolute(value, name) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${name} must be an absolute path.`);
   return path.resolve(value);
 }
+// SSH hosts this node may open as Ponte terminals: aliases from the owner's
+// ~/.ssh/config, listed on purpose in the private config. The phone picks one
+// of these names; it never sends a hostname, user or option of its own.
+export const SSH_HOST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const SSH_HOST_LIMIT = 16;
+export function sshHosts(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > SSH_HOST_LIMIT) throw new Error(`ssh.hosts must be a list of at most ${SSH_HOST_LIMIT} SSH aliases.`);
+  const hosts = value.map(entry => {
+    const { host, label } = typeof entry === 'string' ? { host: entry } : entry || {};
+    if (typeof host !== 'string' || !SSH_HOST_PATTERN.test(host)) throw new Error('Each ssh.hosts entry needs an SSH alias (letters, digits, dot, dash, underscore).');
+    if (label !== undefined && (typeof label !== 'string' || !label.trim() || label.length > 40 || /[\u0000-\u001f\u007f<>]/.test(label))) throw new Error(`The label of SSH host ${host} must be 1–40 plain characters.`);
+    return { host, label: label === undefined ? host : label.trim() };
+  });
+  if (new Set(hosts.map(item => item.host)).size !== hosts.length) throw new Error('ssh.hosts lists an alias twice.');
+  return hosts;
+}
+
 function port(value, name) {
   if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error(`${name} must be a port from 1 to 65535.`);
   return value;
@@ -39,6 +57,7 @@ export function runtimeSettings(config = {}, env = process.env) {
     http: { host, port: port(env.OMARCHY_REMOTE_PORT !== undefined ? Number(env.OMARCHY_REMOTE_PORT) : (config.http?.port ?? 8787), 'HTTP port') },
     trustedHosts: env.OMARCHY_REMOTE_TRUSTED_HOSTS !== undefined ? env.OMARCHY_REMOTE_TRUSTED_HOSTS.split(',').filter(Boolean) : (config.trustedHosts || []),
     nativeTls: null,
+    sshHosts: sshHosts(config.ssh?.hosts),
   };
   if (!Array.isArray(settings.trustedHosts) || settings.trustedHosts.some(value => typeof value !== 'string')) throw new Error('trustedHosts must be an array of hostnames.');
   const tls = config.nativeTls;

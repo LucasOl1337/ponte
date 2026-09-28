@@ -44,6 +44,32 @@ Tailscale SSH on port 22 asks for a browser check in the owner's session, which 
 
 `ssh notebook` from the PC and `ssh pc` from the notebook then log in with no prompt. SSH is for files and shells; the mesh (`ctl --node`, `./ponte rd`) is what drives a desktop.
 
+## SSH machines in the app
+
+A node can open outside machines (VMs, servers) as Ponte terminals. The node's private config lists them by the alias they have in that user's `~/.ssh/config`:
+
+```json
+"ssh": { "hosts": [{ "host": "cloud-vm", "label": "Hostinger" }, "work-vm"] }
+```
+
+Home and Dev then show an **SSH** choice next to Claude, Codex and Terminal, with those machines in place of the folders, and `./ponte ctl terminals create --agent ssh --host ALIAS` does the same for agents (`terminals places` lists them). The session is a tmux pane running `ssh ALIAS`; when ssh ends, the pane falls back to a local shell. The phone only picks a listed alias: it never sends a hostname, user or ssh option. Up to 16 aliases, each with an optional label of up to 40 characters. Restart the service after changing the list.
+
+A key can stay on the one computer that holds it. The other computer reaches that machine through a hop over the 2222 link above. For example, on the PC, when the work VM's key lives only on the notebook:
+
+```
+Host work-vm
+  HostName notebook-omarchy
+  Port 2222
+  User me
+  IdentityFile ~/.ssh/id_ed25519
+  IdentitiesOnly yes
+  HostKeyAlias notebook-omarchy
+  RequestTTY force
+  RemoteCommand ssh work-vm
+```
+
+`ssh work-vm` on the PC is then an interactive shell on the VM. Such an alias does not take a command of its own (`ssh work-vm uptime` is refused because of `RemoteCommand`); type the command in the session instead, or run it on the computer that has the key.
+
 ## What a peer token can do
 
 B keeps only a hash of the token, bound to A's node id and A's tailnet address. With it A can do on B what B's owner can: screen, input, terminals, agents and actions. It cannot:

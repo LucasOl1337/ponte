@@ -2,6 +2,36 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.29 (2026-09-28)
+
+SSH machines open as Ponte terminals, from the phone, from the other computer and from agents. The APK does not change (still versionCode 21).
+
+- **SSH in Home and Dev.** A node lists outside machines in its private config
+  (`ssh.hosts`, aliases from that user's `~/.ssh/config`, with an optional label). Home and
+  Dev then show **SSH** next to Claude, Codex and Terminal, and the folder list becomes the
+  machine list. The session runs `ssh ALIAS` in the node's private tmux, as one argv word;
+  a first line is typed into it like a shell's. The button is hidden on a device without
+  machines, and the folder and machine lists reload when the phone switches devices (they
+  used to stay with the first device until the pairing changed).
+- **`ctl`:** `terminals places` lists folders and machines, and `terminals create --agent ssh
+  --host ALIAS` opens one, also with `--node`.
+- **Refused before tmux runs:** an alias outside the list, a `user@host`, anything that
+  starts with a dash, a host on a non-SSH session, and a project on an SSH one
+  (`SSH_HOST_NOT_ALLOWED`). The config rejects an invalid list at startup.
+- **Keys stay where they are.** The work VM's key lives only on the notebook and the
+  Hostinger VM's only on the PC. Each computer reaches the other's machine through an `~/.ssh/config`
+  hop over the 2222 link (`RemoteCommand ssh ALIAS`), documented in `docs/mesh.md`.
+
+Verified on the real PC: after the service restart, `ctl terminals places` listed both machines,
+and `ctl terminals create --agent ssh` opened the work VM (through the notebook) and the
+Hostinger VM, each answering `hostname` in the session. From a terminal, each computer
+reached the other one's VM through its hop alias. `npm test`
+(357, 1 skip) passes, with new cases for the allowlist, the config and the Home and Dev
+choice.
+
+Not yet verified: the SSH choice on the real phone (it was in use), and the notebook's
+service after the update.
+
 ## 0.1.0-alpha.28 (2026-09-28)
 
 The other computer is one click away: **Ponte Remoto** in the app menu opens its screen. The APK does not change (still versionCode 21).

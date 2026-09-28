@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.28';
+const UI_VERSION = '0.1.0-alpha.29';
 let token = '';
 let state = null;
 let connected = false;
@@ -2894,24 +2894,45 @@ $('#terminal-dictate').addEventListener('click', () => {
 // Home "Start working": one request opens a phone text session already running
 // Claude, Codex or a shell, then shows it on the Terminals page. The request is
 // typed or dictated into the field first, so it can be reviewed before starting.
-let startAgent = ['claude','codex','shell'].indexOf(savedPreference('ponte-start-agent')) >= 0 ? savedPreference('ponte-start-agent') : 'claude';
+let startAgent = ['claude','codex','shell','ssh'].indexOf(savedPreference('ponte-start-agent')) >= 0 ? savedPreference('ponte-start-agent') : 'claude';
 let startBusy = false;
-let startProjectsToken = '';
-// Recent ~/Projects folders are fetched once per pairing, when Home shows.
-async function loadStartProjects() {
-  if (!token || startProjectsToken === token) return;
-  const requestToken = startProjectsToken = token;
-  try {
-    const { projects } = await (await api('/terminals?projects=1',{timeout:8000})).json();
-    if (requestToken !== token || !Array.isArray(projects)) return;
-    const select = $('#start-project'), wanted = select.value || savedPreference('ponte-start-project');
-    select.innerHTML = `<option value="" data-i18n="Pasta pessoal (~)">${escaped(t('Pasta pessoal (~)'))}</option>${projects.map(name => `<option value="${escaped(name)}">${escaped(name)}</option>`).join('')}`;
-    select.value = projects.indexOf(wanted) >= 0 ? wanted : '';
-  } catch { if (requestToken === token) startProjectsToken = ''; }
+let startProjectsToken = '', startProjects = [], startHosts = [];
+// The session's place: a ~/Projects folder, or for SSH one of the machines the
+// controlled device lists in its private config (ssh.hosts). Shared by Home and Dev.
+function fillPlaceSelect(select, agent, projects, hosts) {
+  if (agent === 'ssh') {
+    const wanted = savedPreference('ponte-start-host');
+    select.innerHTML = hosts.map(item => `<option value="${escaped(item.host)}">${escaped(item.label === item.host ? item.host : `${item.label} · ${item.host}`)}</option>`).join('');
+    select.value = hosts.some(item => item.host === wanted) ? wanted : (hosts[0] ? hosts[0].host : '');
+    return;
+  }
+  const wanted = savedPreference('ponte-start-project');
+  select.innerHTML = `<option value="" data-i18n="Pasta pessoal (~)">${escaped(t('Pasta pessoal (~)'))}</option>${projects.map(name => `<option value="${escaped(name)}">${escaped(name)}</option>`).join('')}`;
+  select.value = projects.indexOf(wanted) >= 0 ? wanted : '';
 }
-$('#start-project').addEventListener('change',event => savePreference('ponte-start-project',event.target.value));
-function renderStartAgents() {
-  $$('[data-start-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.startAgent === startAgent)));
+function savePlace(agent, value) { savePreference(agent === 'ssh' ? 'ponte-start-host' : 'ponte-start-project', value); }
+// A saved SSH choice falls back to Terminal on a device without SSH machines.
+const startAgentNow = () => startAgent === 'ssh' && !startHosts.length ? 'shell' : startAgent;
+// Recent ~/Projects folders and SSH machines are fetched once per pairing and
+// device, when Home shows.
+async function loadStartProjects() {
+  const key = `${token}|${targetNode}`;
+  if (!token || startProjectsToken === key) return;
+  const requestToken = startProjectsToken = key;
+  try {
+    const { projects, hosts } = await (await api('/terminals?projects=1',{timeout:8000})).json();
+    if (requestToken !== `${token}|${targetNode}` || !Array.isArray(projects)) return;
+    startProjects = projects; startHosts = Array.isArray(hosts) ? hosts : [];
+    renderStartAgents(true);
+  } catch { if (requestToken === `${token}|${targetNode}`) startProjectsToken = ''; }
+}
+$('#start-project').addEventListener('change',event => savePlace(startAgentNow(),event.target.value));
+function renderStartAgents(refill = false) {
+  const agent = startAgentNow();
+  $('#start-ssh').hidden = !startHosts.length;
+  $$('[data-start-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.startAgent === agent)));
+  const label = $('#start-project-label'), place = agent === 'ssh' ? 'MÁQUINA' : 'PASTA';
+  if (refill || label.getAttribute('data-i18n') !== place) { label.setAttribute('data-i18n', place); label.textContent = t(place); fillPlaceSelect($('#start-project'), agent, startProjects, startHosts); }
   $('#start-go').disabled = startBusy;
 }
 $$('[data-start-agent]').forEach(button => button.addEventListener('click',() => { startAgent = button.dataset.startAgent; savePreference('ponte-start-agent',startAgent); renderStartAgents(); }));
@@ -2926,12 +2947,12 @@ $('#start-dictate').addEventListener('click',() => {
 $('#start-go').addEventListener('click',async () => {
   if (startBusy) return;
   if (!connected || !token) { toast(t("Reconecte ao PC para usar este controle."), true); return; }
-  // A shell runs its first line as typed, so it goes as one line.
-  const raw = $('#start-prompt').value;
-  const prompt = (startAgent === 'shell' ? raw.replace(/\s*\n\s*/g,' ') : raw).trim();
-  const body = {...devSessionSize(),agent:startAgent};
+  // A shell (or an SSH session) runs its first line as typed, so it goes as one line.
+  const agent = startAgentNow(), raw = $('#start-prompt').value;
+  const prompt = (agent === 'shell' || agent === 'ssh' ? raw.replace(/\s*\n\s*/g,' ') : raw).trim();
+  const body = {...devSessionSize(),agent};
   if (prompt) body.prompt = prompt;
-  if ($('#start-project').value) body.project = $('#start-project').value;
+  if ($('#start-project').value) body[agent === 'ssh' ? 'host' : 'project'] = $('#start-project').value;
   startBusy = true; renderStartAgents();
   dictationStatus($('#start-dictate-status'),'');
   const requestToken = token;
@@ -3055,7 +3076,7 @@ function devKeyPayload(button) {
 let devFont = Number(savedPreference('ponte-dev-font', String(DEV_FONT_DEFAULT)));
 if (!(devFont >= DEV_FONT_MIN && devFont <= DEV_FONT_MAX)) devFont = DEV_FONT_DEFAULT;
 let devId = '', devSessions = [], devHash = '', devHashId = '', devTimer, devGeneration = 0, devBusy = false;
-let devLastInput = 0, devIdleDelay = 1000, devFollow = true, devGridNow = null, devPane = null, devBox = '', devResizeTimer, devAgent = 'claude', devProjects = [], devProjectsToken = '';
+let devLastInput = 0, devIdleDelay = 1000, devFollow = true, devGridNow = null, devPane = null, devBox = '', devResizeTimer, devAgent = 'claude', devProjects = [], devHosts = [], devProjectsToken = '';
 function devVisible() { return currentPage === 'dev' && !!token && !document.hidden && !nativePaused; }
 function devStatus(message, error = false) { dictationStatus($('#dev-status'), message, error); }
 // The character grid the screen box holds at the current font, or an estimate
@@ -3101,17 +3122,17 @@ async function devLoadSessions() {
   } else devRenderSessions();
 }
 async function devLoadProjects() {
-  if (!token || devProjectsToken === token) return;
-  const requestToken = devProjectsToken = token;
+  const key = `${token}|${targetNode}`;
+  if (!token || devProjectsToken === key) return;
+  const requestToken = devProjectsToken = key;
   try {
-    const { projects } = await (await api('/terminals?projects=1',{timeout:8000})).json();
-    if (requestToken !== token || !Array.isArray(projects)) return;
-    devProjects = projects;
-    const select = $('#dev-project'), wanted = select.value || savedPreference('ponte-start-project');
-    select.innerHTML = `<option value="" data-i18n="Pasta pessoal (~)">${escaped(t('Pasta pessoal (~)'))}</option>${projects.map(name => `<option value="${escaped(name)}">${escaped(name)}</option>`).join('')}`;
-    select.value = projects.indexOf(wanted) >= 0 ? wanted : '';
+    const { projects, hosts } = await (await api('/terminals?projects=1',{timeout:8000})).json();
+    if (requestToken !== `${token}|${targetNode}` || !Array.isArray(projects)) return;
+    devProjects = projects; devHosts = Array.isArray(hosts) ? hosts : [];
+    if (devAgent === 'ssh' && !devHosts.length) devAgent = 'shell';
+    devRenderAgents();
     devRenderSessions();
-  } catch { if (requestToken === token) devProjectsToken = ''; }
+  } catch { if (requestToken === `${token}|${targetNode}`) devProjectsToken = ''; }
 }
 // Output is polled only while Dev is on screen: fast for a few seconds after
 // each input, then 1 s, backing off to 3 s while nothing changes.
@@ -3227,7 +3248,7 @@ async function devCreate(agent, project) {
   if (devBusy || !connected || !token) return;
   devBusy = true; devStatus('');
   const body = {...devSessionSize(), agent};
-  if (project) body.project = project;
+  if (project) body[agent === 'ssh' ? 'host' : 'project'] = project;
   try {
     const session = await (await api('/terminals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
     devSessions = devSortSessions(devSessions.concat([session]));
@@ -3236,12 +3257,17 @@ async function devCreate(agent, project) {
   } catch (error) { devStatus(error, true); }
   finally { devBusy = false; }
 }
-function devRenderAgents() { $$('[data-dev-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.devAgent === devAgent))); }
+function devRenderAgents() {
+  $('#dev-ssh').hidden = !devHosts.length;
+  $$('[data-dev-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.devAgent === devAgent)));
+  fillPlaceSelect($('#dev-project'), devAgent, devProjects, devHosts);
+}
 $('#dev-session').addEventListener('change', event => { devSelect(event.target.value); updateDevNavigation(); });
 $('#dev-size').addEventListener('click', () => devRefit(true));
 $('#dev-status').addEventListener('click', () => devStatus(''));
 $('#dev-new').addEventListener('click', () => { const panel = $('#dev-new-panel'); panel.hidden = !panel.hidden; $('#dev-new').setAttribute('aria-expanded',String(!panel.hidden)); devLoadProjects(); });
 $$('[data-dev-agent]').forEach(button => button.addEventListener('click', () => { devAgent = button.dataset.devAgent; devRenderAgents(); }));
+$('#dev-project').addEventListener('change', event => savePlace(devAgent, event.target.value));
 $('#dev-create').addEventListener('click', () => devCreate(devAgent, $('#dev-project').value));
 $('#dev-empty-start').addEventListener('click', () => devCreate('claude', savedPreference('ponte-start-project') || devProjects[0] || ''));
 $('#dev-keys').addEventListener('click', event => {

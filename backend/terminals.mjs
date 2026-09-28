@@ -6,6 +6,7 @@ import { constants } from 'node:fs';
 import { mkdir, lstat, open, readdir, rename, realpath, stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { ApiError, commandExists, runCommand } from './process.mjs';
+import { SSH_HOST_PATTERN } from './config.mjs';
 
 export const TERMINAL_LIMIT = 4;
 export const TERMINAL_TEXT_LIMIT = 64 * 1024;
@@ -23,8 +24,10 @@ const format = '#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_width}\t#{pane
 const cursorFormat = `${format}\t#{cursor_x}\t#{cursor_y}\t#{cursor_flag}\t#{alternate_on}`;
 // A session can start an agent CLI instead of a bare shell. Only these fixed
 // program names run; the phone chooses a key, never a command.
-const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' } });
-const titlePattern = /^(Terminal|Claude|Codex) [1-4]$/;
+// `ssh` opens one of the node's configured SSH aliases (ssh.hosts in the
+// private config), never a host the phone typed.
+const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' }, ssh: { title: 'SSH', program: 'ssh' } });
+const titlePattern = /^(Terminal|Claude|Codex|SSH [A-Za-z0-9][A-Za-z0-9._-]{0,63}) [1-4]$/;
 const projectPattern = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 // The agent runs as the pane's own argv (tmux execs it without a shell): the
 // program and the prompt are "$@", never parsed as shell text. When the agent
@@ -61,21 +64,27 @@ function validInput(text) {
 }
 
 // What a new session starts: which agent, an optional first request, and an
-// optional project folder by name. Everything is checked before tmux runs.
-function sessionStart(value) {
+// optional project folder by name (or, for ssh, which configured host).
+// Everything is checked before tmux runs.
+function sessionStart(value, hosts) {
   const agent = Object.hasOwn(value, 'agent') ? value.agent : 'shell';
   if (typeof agent !== 'string' || !Object.hasOwn(agents, agent)) throw new ApiError(400, 'AGENT_NOT_ALLOWED');
+  if (agent === 'ssh' || Object.hasOwn(value, 'host')) {
+    if (agent !== 'ssh' || Object.hasOwn(value, 'project') || typeof value.host !== 'string' || !hosts.some(item => item.host === value.host)) throw new ApiError(400, 'SSH_HOST_NOT_ALLOWED');
+  }
   let prompt;
   if (Object.hasOwn(value, 'prompt')) {
     prompt = value.prompt;
     // An agent receives the request as one argv word, so line breaks are safe
     // there; a shell gets it typed like the composer, one line only. A leading
     // dash would be read by the agent CLI as an option, not as the request.
-    const text = typeof prompt === 'string' && agent !== 'shell' ? prompt.replace(/\n/g, ' ') : prompt;
-    if (!validText(text) || !prompt.trim() || (agent !== 'shell' && /^\s*-/.test(prompt))) throw new ApiError(400, 'INVALID_PROMPT');
+    // An ssh session gets its first line typed like a shell's.
+    const typed = agent === 'shell' || agent === 'ssh';
+    const text = typeof prompt === 'string' && !typed ? prompt.replace(/\n/g, ' ') : prompt;
+    if (!validText(text) || !prompt.trim() || (!typed && /^\s*-/.test(prompt))) throw new ApiError(400, 'INVALID_PROMPT');
   }
   if (Object.hasOwn(value, 'project') && (typeof value.project !== 'string' || !projectPattern.test(value.project))) throw new ApiError(400, 'PROJECT_NOT_ALLOWED');
-  return { agent, prompt, project: value.project };
+  return { agent, prompt, project: value.project, host: value.host };
 }
 
 // A capture taken with -e carries tmux's own SGR codes and, since tmux 3.4,
@@ -132,6 +141,7 @@ export function createTerminals(dataDir, options = {}) {
   for (const name of Object.keys(env)) if (name.startsWith('OMARCHY_REMOTE_')) delete env[name];
   const shellDirectory = path.isAbsolute(env.HOME || '') ? env.HOME : os.homedir();
   const projectsDirectory = options.projectsDir || path.join(shellDirectory, 'Projects');
+  const sshHosts = (options.sshHosts || []).filter(item => SSH_HOST_PATTERN.test(item?.host || '')).map(({ host, label }) => ({ host, label: label || host }));
   const directory = path.join(dataDir, 'terminals');
   const socketPath = path.join(directory, 'tmux.sock');
   const registryPath = path.join(directory, 'sessions.json');
@@ -318,18 +328,18 @@ export function createTerminals(dataDir, options = {}) {
     // to offer as the new session's folder. It never needs tmux.
     async projects() {
       let parent, entries;
-      try { parent = await realpath(projectsDirectory); entries = await readdir(parent, { withFileTypes: true }); } catch { return { projects: [] }; }
+      try { parent = await realpath(projectsDirectory); entries = await readdir(parent, { withFileTypes: true }); } catch { return { projects: [], hosts: sshHosts }; }
       const dated = await Promise.all(entries.filter(entry => entry.isDirectory() && projectPattern.test(entry.name)).map(async entry => {
         try { return { name: entry.name, changed: (await stat(path.join(parent, entry.name))).mtimeMs }; } catch { return null; }
       }));
-      return { projects: dated.filter(Boolean).sort((a, b) => b.changed - a.changed || a.name.localeCompare(b.name)).slice(0, PROJECT_LIMIT).map(item => item.name) };
+      return { projects: dated.filter(Boolean).sort((a, b) => b.changed - a.changed || a.name.localeCompare(b.name)).slice(0, PROJECT_LIMIT).map(item => item.name), hosts: sshHosts };
     },
     list() {
       return run(async available => ({ available, sessions: available ? (await sessions(false)).filter(item => item.valid).map(summary) : [], limit: TERMINAL_LIMIT }), 'read');
     },
     create(value) {
-      const { cols, rows } = dimensions(value, ['agent', 'prompt', 'project']);
-      const start = sessionStart(value);
+      const { cols, rows } = dimensions(value, ['agent', 'prompt', 'project', 'host']);
+      const start = sessionStart(value, sshHosts);
       const { program } = agents[start.agent];
       return run(async available => {
         if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
@@ -340,8 +350,11 @@ export function createTerminals(dataDir, options = {}) {
         const id = randomBytes(12).toString('hex');
         // One number per slot, whatever runs in it: Claude 1, Terminal 2, Codex 3.
         const number = [1, 2, 3, 4].find(number => !registry.some(item => item.title.endsWith(` ${number}`)));
-        const title = `${agents[start.agent].title} ${number}`;
-        const launch = program ? ['--', ...agentLauncher, program, ...(start.prompt === undefined ? [] : [start.prompt])] : [];
+        const title = `${agents[start.agent].title}${start.host ? ` ${start.host}` : ''} ${number}`;
+        // ssh gets the alias alone (it starts with a letter or digit, never an
+        // option); its first line is typed below, like a shell's.
+        const args = start.host ? [start.host] : start.prompt === undefined ? [] : [start.prompt];
+        const launch = program ? ['--', ...agentLauncher, program, ...args] : [];
         let pane;
         try {
           const output = await command([
@@ -356,7 +369,7 @@ export function createTerminals(dataDir, options = {}) {
           await save();
           // A shell's first line is typed like the composer does; the pty holds
           // it until the shell reads its input, then Enter runs it.
-          if (!program && start.prompt !== undefined) await pasteText(pane, start.prompt, true);
+          if ((!program || start.host) && start.prompt !== undefined) await pasteText(pane, start.prompt, true);
         } catch (error) {
           registry = registry.filter(item => item.id !== id);
           await discardNewSession(id);

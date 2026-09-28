@@ -208,7 +208,7 @@ export async function createApp(options = {}) {
   const audio = options.audio || await createAudioStore(initialized.dataDir, { env });
   const limits = createLimits();
   const live = createLiveStreaming(desktop);
-  const terminals = options.terminals || createTerminals(initialized.dataDir, { env });
+  const terminals = options.terminals || createTerminals(initialized.dataDir, { env, sshHosts: options.sshHosts || settings?.sshHosts });
   const images = options.images || await createImageInbox(initialized.dataDir, { env, terminals, clipboard: options.clipboard });
   const agents = options.agents || createAgents({ env, dataDir: initialized.dataDir });
   const agentEvents = options.agentEvents || createAgentEvents({ list: () => agents.list() });

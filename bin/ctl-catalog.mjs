@@ -128,9 +128,14 @@ export const COMMANDS = [
   }, { input: { sources: ['stdin'], field: 'password' } }),
 
   query('terminals list', 'List Ponte terminal sessions.', '/api/terminals'),
+  query('terminals places', 'List the project folders and SSH machines a new session can start in.', '/api/terminals?projects=1'),
   {
-    name: 'terminals create', description: 'Create a Ponte terminal session.', method: 'POST', path: '/api/terminals',
-    params: { cols: integer(20, 240, { default: 80 }), rows: integer(8, 100, { default: 24 }) },
+    name: 'terminals create', description: 'Create a Ponte terminal session: a shell, or --agent ssh --host ALIAS for one of the SSH machines in `terminals places`.', method: 'POST', path: '/api/terminals',
+    params: {
+      cols: integer(20, 240, { default: 80 }), rows: integer(8, 100, { default: 24 }),
+      agent: string({ enum: ['shell', 'ssh'] }),
+      host: string({ maxLength: 64, pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}${end}` }),
+    },
   },
   {
     name: 'terminals read', description: 'Read a Ponte terminal session.', method: 'GET', path: '/api/terminals/:id',

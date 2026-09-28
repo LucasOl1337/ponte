@@ -640,6 +640,7 @@
   "Abre uma sessão de texto no PC, sem mexer no foco, e leva você direto pra ela.": "Opens a text session on the PC without changing focus and takes you straight to it.",
   "Abrindo {title}…": "Opening {title}…",
   "PASTA": "FOLDER",
+  "MÁQUINA": "MACHINE",
   "Pasta pessoal (~)": "Home folder (~)",
   "Sessão de desenvolvimento": "Development session",
   "Nenhuma sessão": "No session",
@@ -1093,8 +1094,12 @@
     "pt": "Envie texto ou uma tecla do terminal."
   },
   "AGENT_NOT_ALLOWED": {
-    "en": "Choose Claude, Codex or Terminal to start a session.",
-    "pt": "Escolha Claude, Codex ou Terminal para começar uma sessão."
+    "en": "Choose Claude, Codex, Terminal or SSH to start a session.",
+    "pt": "Escolha Claude, Codex, Terminal ou SSH para começar uma sessão."
+  },
+  "SSH_HOST_NOT_ALLOWED": {
+    "en": "That machine is not in this computer's SSH list.",
+    "pt": "Essa máquina não está na lista de SSH deste computador."
   },
   "AGENT_UNAVAILABLE": {
     "en": "{agent} is not installed on the PC.",

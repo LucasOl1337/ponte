@@ -138,6 +138,39 @@ test('a session can start an allowlisted agent with the request as one argv word
   assert.deepEqual((await restored.list()).sessions.map(item => item.title), ['Codex 2', 'Terminal 3', 'Codex 1']);
 });
 
+test('an ssh session opens only a configured alias, as one argv word, and types its first line like a shell', async t => {
+  const root = await temporary(t), mock = mockedTmux();
+  const looked = [];
+  const sshHosts = [{ host: 'cloud-vm', label: 'Hostinger' }, { host: 'work-vm', label: 'work-vm' }];
+  const terminals = createTerminals(root, { ...mock, sshHosts, exists: async name => { looked.push(name); return true; } });
+  t.after(() => terminals.close());
+  assert.deepEqual((await terminals.projects()).hosts, sshHosts);
+  const kvm = await terminals.create({ cols: 80, rows: 24, agent: 'ssh', host: 'cloud-vm' });
+  const workVm = await terminals.create({ cols: 80, rows: 24, agent: 'ssh', host: 'work-vm', prompt: 'uptime' });
+  assert.deepEqual([kvm.title, workVm.title], ['SSH cloud-vm 1', 'SSH work-vm 2']);
+  assert.deepEqual(looked, ['tmux', 'ssh', 'tmux', 'ssh']);
+  const launches = mock.calls.filter(call => call.args.includes('new-session')).map(call => call.args.slice(call.args.indexOf('-y') + 2));
+  assert.deepEqual(launches, [
+    ['--', '/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent', 'ssh', 'cloud-vm'],
+    ['--', '/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent', 'ssh', 'work-vm'],
+  ]);
+  // The first line reaches the pty as typed input, never as an ssh argument.
+  assert.ok(mock.calls.some(call => call.args[0] === 'load-buffer' && call.options.input === 'uptime'));
+  const base = { cols: 80, rows: 24 };
+  for (const value of [{ agent: 'ssh' }, { agent: 'ssh', host: 'other' }, { agent: 'ssh', host: '-oProxyCommand=id' }, { agent: 'ssh', host: 'root@cloud-vm' },
+    { agent: 'ssh', host: ['cloud-vm'] }, { agent: 'shell', host: 'cloud-vm' }, { agent: 'claude', host: 'cloud-vm' }, { host: 'cloud-vm' },
+    { agent: 'ssh', host: 'cloud-vm', project: 'ponte' }]) {
+    assert.throws(() => terminals.create({ ...base, ...value }), { code: 'SSH_HOST_NOT_ALLOWED' }, JSON.stringify(value));
+  }
+  await terminals.close();
+  const restored = createTerminals(root, { ...mock, sshHosts });
+  t.after(() => restored.close());
+  assert.deepEqual((await restored.list()).sessions.map(item => item.title), ['SSH cloud-vm 1', 'SSH work-vm 2']);
+  const none = createTerminals(await temporary(t), mockedTmux());
+  t.after(() => none.close());
+  assert.throws(() => none.create({ ...base, agent: 'ssh', host: 'cloud-vm' }), { code: 'SSH_HOST_NOT_ALLOWED' });
+});
+
 test('agents, requests and projects outside the allowlist fail before any command', async t => {
   const { mock, terminals } = await fixture(t);
   const base = { cols: 80, rows: 24 };
@@ -632,7 +665,7 @@ test('terminal HTTP endpoints inherit authentication, origin, content bounds and
   assert.equal((await agent.json()).title, 'Codex 1');
   const refused = await request('/api/terminals', 'POST', { cols: 40, rows: 24, agent: 'bash' }, { 'Accept-Language': 'pt' });
   assert.equal(refused.status, 400);
-  assert.deepEqual(await refused.json(), { errorCode: 'AGENT_NOT_ALLOWED', errorParameters: {}, error: 'Escolha Claude, Codex ou Terminal para começar uma sessão.' });
+  assert.deepEqual(await refused.json(), { errorCode: 'AGENT_NOT_ALLOWED', errorParameters: {}, error: 'Escolha Claude, Codex, Terminal ou SSH para começar uma sessão.' });
 });
 
 test('real isolated tmux proves Unicode, no implicit execution, resize, reopen and cleanup', async t => {
@@ -815,10 +848,10 @@ test('projects lists recent ~/Projects folders by name only, without tmux, and H
   await symlink(path.join(root, 'outside'), path.join(projects, 'link'));
   const terminals = createTerminals(root, { ...mock, projectsDir: projects });
   t.after(() => terminals.close());
-  assert.deepEqual(await terminals.projects(), { projects: ['new-one', 'ponte', 'old'] });
+  assert.deepEqual(await terminals.projects(), { projects: ['new-one', 'ponte', 'old'], hosts: [] });
   assert.equal(mock.calls.length, 0);
   const missing = createTerminals(root, { ...mock, projectsDir: path.join(root, 'none') });
-  assert.deepEqual(await missing.projects(), { projects: [] });
+  assert.deepEqual(await missing.projects(), { projects: [], hosts: [] });
   await mkdir(path.join(root, 'public'));
   await writeFile(path.join(root, 'public', 'index.html'), '<title>Test</title>');
   const token = 'synthetic_terminal_token_abcdefghijklmnopqrstuvwxyz';
@@ -827,7 +860,7 @@ test('projects lists recent ~/Projects folders by name only, without tmux, and H
   t.after(() => app.close());
   const base = `http://127.0.0.1:${app.server.address().port}`;
   assert.equal((await fetch(`${base}/api/terminals?projects=1`)).status, 401);
-  assert.deepEqual(await (await fetch(`${base}/api/terminals?projects=1`, { headers: { Authorization: `Bearer ${token}` } })).json(), { projects: ['new-one', 'ponte', 'old'] });
+  assert.deepEqual(await (await fetch(`${base}/api/terminals?projects=1`, { headers: { Authorization: `Bearer ${token}` } })).json(), { projects: ['new-one', 'ponte', 'old'], hosts: [] });
   assert.deepEqual(await (await fetch(`${base}/api/terminals`, { headers: { Authorization: `Bearer ${token}` } })).json(), { available: true, sessions: [], limit: 4 });
 });
 

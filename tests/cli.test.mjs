@@ -190,6 +190,13 @@ test('configuration rejects public permissions, symlinks, relative paths and pla
   assert.throws(() => runtimeSettings({ http: { host: '0.0.0.0' } }, f.env), /loopback/);
   for (const value of [0, -1, 65536, '8787', true]) assert.throws(() => runtimeSettings({ http: { port: value } }, f.env), /port/);
   assert.throws(() => runtimeSettings({}, { ...f.env, OMARCHY_REMOTE_BIND: '0.0.0.0' }), /loopback/);
+  // ssh.hosts: SSH aliases only, optionally labelled; anything that could be an option or a user@host is refused.
+  assert.deepEqual(runtimeSettings({}, f.env).sshHosts, []);
+  assert.deepEqual(runtimeSettings({ ssh: { hosts: ['work-vm', { host: 'cloud-vm', label: ' Hostinger ' }] } }, f.env).sshHosts,
+    [{ host: 'work-vm', label: 'work-vm' }, { host: 'cloud-vm', label: 'Hostinger' }]);
+  for (const hosts of ['work-vm', ['-oProxyCommand=id'], ['root@kvm'], ['a b'], [''], [{ host: 'x', label: '<b>' }], [{ host: 'x', label: '' }], ['x', 'x'], Array(17).fill(0).map((_, i) => `h${i}`)]) {
+    assert.throws(() => runtimeSettings({ ssh: { hosts } }, f.env), /ssh\.hosts|SSH/, JSON.stringify(hosts));
+  }
   const defaults = defaultPaths({ HOME: f.home });
   assert.equal(defaults.configFile, path.join(f.home, '.config/ponte/config.json'));
   assert.equal(defaults.dataDir, path.join(f.home, '.local/state/ponte'));

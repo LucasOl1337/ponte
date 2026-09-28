@@ -28,8 +28,12 @@ export const messages = {
     "pt": "Envie texto ou uma tecla do terminal."
   },
   "AGENT_NOT_ALLOWED": {
-    "en": "Choose Claude, Codex or Terminal to start a session.",
-    "pt": "Escolha Claude, Codex ou Terminal para começar uma sessão."
+    "en": "Choose Claude, Codex, Terminal or SSH to start a session.",
+    "pt": "Escolha Claude, Codex, Terminal ou SSH para começar uma sessão."
+  },
+  "SSH_HOST_NOT_ALLOWED": {
+    "en": "That machine is not in this computer's SSH list.",
+    "pt": "Essa máquina não está na lista de SSH deste computador."
   },
   "AGENT_UNAVAILABLE": {
     "en": "{agent} is not installed on the PC.",
