@@ -356,6 +356,37 @@ test('Superbuttons trigger smart sleep and wake actions', async () => {
   assert.deepEqual(wakeCall.body, { type: 'power.wake' });
 });
 
+test('Smart sleep names a keyboard it could not find and shows lights a partial sleep left on', async () => {
+  const lightsState = { ...powerFixture, capabilities: { ...powerFixture.capabilities, lights: true }, lights: { preset: 'lava', sleeping: true, brightness: 100, incomplete: ['GPU'], presets: ['lava'] } };
+  const h = powerUiHarness({ state: lightsState, actionResult: () => ({ ok: true, lights: { ok: true, devices: [{ device: 'RAM ENE', status: 'ok' }, { device: 'G515', status: 'absent' }, { device: 'MSI (fans)', status: 'ok' }] } }) });
+  await flushTicks();
+  h.run("navigate('inicio')");
+  h.el('#btn-smart-sleep').click();
+  await flushTicks(40);
+  assert.equal(h.el('#toast').textContent, 'Smart sleep: monitors and lights turned off. Not found (turned off?): G515.');
+  assert.equal(h.el('#toast').classList.contains('error'), false);
+  h.run('renderLights && renderLights()');
+  assert.match(h.el('#lights-status').textContent, /Lights are off except: GPU\./);
+});
+
+test('A pending sleep says the lights are still changing and later names the ones that did not respond', async () => {
+  const lightsState = { ...powerFixture, capabilities: { ...powerFixture.capabilities, lights: true }, lights: { preset: 'lava', sleeping: false, brightness: 100, incomplete: [], presets: ['lava'], last: null } };
+  const h = powerUiHarness({ state: lightsState, actionResult: () => ({ ok: true, lights: { pending: true, job: 7 } }) });
+  await flushTicks();
+  h.run("navigate('inicio')");
+  h.el('#btn-smart-sleep').click();
+  await flushTicks(40);
+  assert.equal(h.el('#toast').textContent, 'The lights are still changing on the PC. The result will show here.');
+  lightsState.lights = { ...lightsState.lights, sleeping: true, incomplete: ['GPU'], last: { job: 6, ok: true, devices: [] } };
+  h.run('navigate("tela")');
+  await h.run('pollState()'); await flushTicks(40);
+  assert.equal(h.el('#toast').textContent, 'The lights are still changing on the PC. The result will show here.', 'another job does not settle this one');
+  lightsState.lights = { ...lightsState.lights, last: { job: 7, action: 'power.sleep', ok: false, devices: [{ device: 'GPU', status: 'failed' }, { device: 'G515', status: 'absent' }] } };
+  await h.run('pollState()'); await flushTicks(40);
+  assert.equal(h.el('#toast').textContent, 'These lights did not respond: GPU.');
+  assert.equal(h.el('#toast').classList.contains('error'), true);
+});
+
 test('Power off button requires double confirmation dialog before dispatching poweroff', async () => {
   const h = powerUiHarness();
   await flushTicks();

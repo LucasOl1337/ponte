@@ -25,7 +25,8 @@ function readStdin() {
 async function main(argv) {
   const [command, ...rest] = argv;
   if (!command || command === '-h' || command === '--help') { console.log(usage); return command ? 0 : 2; }
-  const desktop = createDesktop({});
+  // No phone proxy in the way: wait for the whole lights answer.
+  const desktop = createDesktop({ lightsAnswerMs: 75000 });
   let action;
   switch (command) {
     case 'lock': action = { type: 'session.lock' }; break;

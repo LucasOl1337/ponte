@@ -319,6 +319,14 @@ export const messages = {
     "en": "The Magma lights controller is not installed on the PC.",
     "pt": "O controlador de luzes Magma não está instalado no PC."
   },
+  "LIGHTS_FAILED": {
+    "en": "These lights did not respond: {devices}. Details are in the PC journal.",
+    "pt": "Estas luzes não responderam: {devices}. Detalhes no journal do PC."
+  },
+  "SLEEP_LIGHTS_FAILED": {
+    "en": "Monitors are off, but these lights stayed on: {devices}. Details are in the PC journal.",
+    "pt": "Monitores apagados, mas estas luzes ficaram acesas: {devices}. Detalhes no journal do PC."
+  },
   "INVALID_QUALITY": {
     "en": "JPEG quality must be between 30 and 90.",
     "pt": "A qualidade JPEG deve estar entre 30 e 90."
