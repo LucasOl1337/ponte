@@ -373,6 +373,31 @@ test('glass to glass: with ?probe=1 the lab band (44 bits of 16 px, MSB first) i
   assert.equal(h.run('glassLatency.length'), 1);
 });
 
+test('the probe times the first frame whose patch changes after a 2 px move, and refuses a moving picture', async () => {
+  const h = await harness({ search: '?probe=1' }).connect();
+  let pixels = new Uint8ClampedArray(24 * 24 * 4);
+  h.context.OffscreenCanvas = class { constructor(width, height) { this.width = width; this.height = height; } getContext() { return { canvas: this, drawImage() {}, getImageData: (x, y, w, hgt) => ({ data: w === 24 ? pixels : new Uint8ClampedArray(w * hgt * 4) }) }; } };
+  const frame = () => h.decoder.output({ timestamp: 0, displayWidth: 1920, displayHeight: 1080, close() {} });
+  h.run('lastMove = { x: 0.25, y: 0.5 }; startProbe()');
+  for (let round = 0; round < 10; round++) {
+    pixels = new Uint8ClampedArray(24 * 24 * 4);
+    for (let i = 0; i < 9; i++) frame();
+    assert.equal(h.run('probe.phase'), 'wait', `round ${round} waits after a still patch`);
+    const moved = h.sent('move').at(-1);
+    assert.ok(Math.abs(moved.x - (0.25 + 2 / 1920)) < 1e-9);
+    h.advance(30); frame();
+    h.advance(12); pixels = new Uint8ClampedArray(24 * 24 * 4).fill(200); frame();
+    assert.deepEqual(h.sent('move').at(-1), { t: 'move', x: 0.25, y: 0.5 }, 'the pointer goes back');
+    h.advance(200); frame();
+  }
+  assert.deepEqual([...h.run('window.ponteProbe.results')], Array(10).fill(42));
+  assert.match(h.run('lastProbe'), /^42 ms \(p95 42 ms, n=10\)$/);
+  // A picture that keeps changing under the patch is not a measurement.
+  h.run('startProbe()');
+  for (let i = 0; i < 9; i++) { pixels = new Uint8ClampedArray(24 * 24 * 4).fill(i * 25); frame(); }
+  assert.equal(h.run('lastProbe'), 'background moves too much');
+});
+
 test('ping syncs the clock with the lowest round trip; stats go to the server every second with mean and p95 over 5 s', async () => {
   const h = await harness().connect();
   const pings = h.sent('ping');

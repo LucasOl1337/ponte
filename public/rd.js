@@ -805,7 +805,7 @@ function probeFrame(frame, drawnAt) {
     // A few still frames tell how much the patch changes on its own.
     if (probe.baseline) probe.quiet.push(patchDifference(probe.baseline, patch));
     probe.baseline = patch;
-    if (probe.quiet.length < 4) return;
+    if (probe.quiet.length < 8) return;
     probe.noise = Math.max(...probe.quiet);
     if (probe.noise > 20) { finishProbe(t('fundo animado demais')); return; }
     probe.phase = 'wait';
@@ -830,10 +830,13 @@ function probeFrame(frame, drawnAt) {
 
 function finishProbe(failure) {
   const results = probe.results.slice().sort((a, b) => a - b);
-  if (results.length) {
+  // A failed run says so, even with a few rounds done: on a moving picture
+  // (the lab pattern) those rounds timed the pattern, not the pointer.
+  if (failure) lastProbe = results.length ? `${failure} (n=${results.length})` : failure;
+  else if (results.length) {
     const mean = results.reduce((sum, value) => sum + value, 0) / results.length;
     lastProbe = `${ms(mean)} (p95 ${ms(results[Math.min(results.length - 1, Math.ceil(results.length * 0.95) - 1)])}, n=${results.length})`;
-  } else lastProbe = failure || t('sem resultado');
+  } else lastProbe = t('sem resultado');
   window.ponteProbe = { results, failure: failure || null };
   probe = null;
   note(`${t('Sonda')}: ${lastProbe}`);
