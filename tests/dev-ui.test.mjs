@@ -88,8 +88,9 @@ test('Dev lists agent sessions first, renders the ansi read, and every bar key s
   for (const button of h.el('#dev-keys').querySelectorAll('button')) { button.click(); await flush(); }
   const sent = h.writes().filter(call => call.path === `/api/terminals/${claude.id}/input`).map(call => JSON.parse(call.body));
   assert.deepEqual(sent, [
-    { key: 'Escape' }, { key: 'ShiftTab' }, { key: 'Tab' }, { key: 'ArrowUp' }, { key: 'ArrowDown' }, { key: 'ArrowLeft' }, { key: 'ArrowRight' }, { key: 'Enter' }, { key: 'Interrupt' },
-    { text: '1' }, { text: '2' }, { text: '3' }, { text: '/' }, { text: '@' }, { text: '!' },
+    // The 1/2/3 menu answers come right after Esc (owner's choice).
+    { key: 'Escape' }, { text: '1' }, { text: '2' }, { text: '3' }, { key: 'ShiftTab' }, { key: 'Tab' }, { key: 'ArrowUp' }, { key: 'ArrowDown' }, { key: 'ArrowLeft' }, { key: 'ArrowRight' }, { key: 'Enter' }, { key: 'Interrupt' },
+    { text: '/' }, { text: '@' }, { text: '!' },
     { key: 'PageUp' }, { key: 'PageDown' }, { key: 'Ctrl+O' }, { key: 'Ctrl+R' }, { key: 'Ctrl+D' }, { key: 'Ctrl+L' },
   ]);
   // The next read asks only for changes since what is on screen, soon after input.
@@ -163,6 +164,16 @@ test('Open on the PC asks first, then calls the open route once', async () => {
   assert.equal(h.writes().some(call => call.path.endsWith('/open')), false);
   h.el('#dev-open-pc').click(); h.el('#dev-open-confirm').click(); await flush();
   assert.deepEqual(h.writes().filter(call => call.path.endsWith('/open')).map(call => [call.path, call.body]), [[`/api/terminals/${claude.id}/open`, '{}']]);
+  // Confirmed once for this session: the next tap opens without asking.
+  h.el('#dev-open-pc').click(); await flush();
+  assert.equal(h.el('#dev-open-dialog').open, false);
+  assert.equal(h.writes().filter(call => call.path.endsWith('/open')).length, 2);
+});
+
+test('Claude Code symbols missing from phone fonts become one-cell look-alikes', () => {
+  const h = harness();
+  const html = h.run("ansiToHtml('\u23f5\u23f5 bypass \u23f8 plan \u23bf  Read \u23fa done', {x: 3, y: 0, visible: true}, 1)");
+  assert.equal(html, '▸▸ <span class="dev-cursor">b</span>ypass ‖ plan └  Read ● done');
 });
 
 test('A−/A+ change and remember the font within bounds', async () => {
