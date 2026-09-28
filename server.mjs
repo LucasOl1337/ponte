@@ -332,7 +332,8 @@ export async function createApp(options = {}) {
       if (req.method === 'POST' && (pathname === '/api/terminals' || terminalRoute?.[2])) {
         if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
         await limits.only('body', 8, async () => {
-          const body = await readBody(req, 24 * 1024);
+          // Typed input may carry up to 16000 characters of several lines.
+          const body = await readBody(req, terminalRoute?.[2] === 'input' ? 72 * 1024 : 24 * 1024);
           let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
           const result = terminalRoute ? await terminals[terminalRoute[2]](terminalRoute[1], value) : await terminals.create(value);
           json(res, terminalRoute ? 200 : 201, result);

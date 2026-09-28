@@ -11,6 +11,7 @@ export const TERMINAL_TEXT_LIMIT = 64 * 1024;
 // A coloured capture (format=ansi) keeps its SGR codes, so it gets more room.
 export const TERMINAL_ANSI_LIMIT = 192 * 1024;
 export const PROJECT_LIMIT = 8;
+export const TERMINAL_INPUT_LIMIT = 16000;
 const idPattern = /^[a-f0-9]{24}$/;
 const panePattern = /^%\d+$/;
 const windowPattern = /^@\d+$/;
@@ -50,6 +51,12 @@ function dimensions(value, extra = []) {
 
 function validText(text) {
   return typeof text === 'string' && text.length >= 1 && text.length <= 4000 && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(text) && text.isWellFormed();
+}
+
+// Typed input may hold line breaks (a request of several lines for an
+// agent); every other control character is still refused.
+function validInput(text) {
+  return typeof text === 'string' && text.length >= 1 && text.length <= TERMINAL_INPUT_LIMIT && !/[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]/u.test(text) && text.isWellFormed();
 }
 
 // What a new session starts: which agent, an optional first request, and an
@@ -238,6 +245,7 @@ export function createTerminals(dataDir, options = {}) {
     // contain only fixed words and verified pane IDs, never input text.
     const output = await command(['if-shell', '-F', '-t', item.paneId, '#{pane_in_mode}', 'display-message -p PONTE_INPUT_BLOCKED', args.join(' ')]);
     if (output.trim() === 'PONTE_INPUT_BLOCKED') throw new ApiError(409, 'TERMINAL_IN_COPY_MODE');
+    if (output.trim() === 'PONTE_NO_BRACKETED_PASTE') throw new ApiError(409, 'MULTILINE_NOT_SUPPORTED');
     if (output.trim()) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
   }
 
@@ -245,7 +253,7 @@ export function createTerminals(dataDir, options = {}) {
     // One character is typed as a key, not pasted: a TUI in bracketed-paste
     // mode takes a pasted "1" as text, never as the answer to its 1/2/3 menu.
     // Its UTF-8 bytes go as hex words, so no input text reaches tmux parsing.
-    if ([...text].length === 1) {
+    if ([...text].length === 1 && text !== '\n') {
       await sendToPane(item, ['send-keys', '-H', '-t', item.paneId, ...[...Buffer.from(text)].map(byte => byte.toString(16).padStart(2, '0'))]);
       if (enter) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
       return;
@@ -255,7 +263,14 @@ export function createTerminals(dataDir, options = {}) {
     const buffer = 'ponte_input';
     try {
       await command(['load-buffer', '-b', buffer, '-'], text);
-      await sendToPane(item, ['paste-buffer', '-d', '-p', '-r', '-b', buffer, '-t', item.paneId]);
+      const paste = ['paste-buffer', '-d', '-p', '-r', '-b', buffer, '-t', item.paneId];
+      // Several lines go only to a program that asked for bracketed paste right
+      // now (a prompt reading input): it receives them as one paste. Without
+      // it a shell would run each line as it arrives. The flag is tested in
+      // the same tmux command as the paste, so it cannot change in between.
+      // (Quoted: in a tmux command string an unquoted # starts a comment.)
+      if (text.includes('\n')) await sendToPane(item, ['if-shell', '-F', '-t', item.paneId, "'#{bracket_paste_flag}'", '{', ...paste, '}', '{', 'display-message', '-p', 'PONTE_NO_BRACKETED_PASTE', '}']);
+      else await sendToPane(item, paste);
       if (enter) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
     }
     catch (error) { await command(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
@@ -396,7 +411,7 @@ export function createTerminals(dataDir, options = {}) {
       if (textInput === keyInput) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
       if (keyInput && Object.hasOwn(value, 'enter')) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
       if (Object.hasOwn(value, 'enter') && typeof value.enter !== 'boolean') throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
-      if (textInput && !validText(value.text)) throw new ApiError(400, 'INVALID_TEXT');
+      if (textInput && !validInput(value.text)) throw new ApiError(400, 'TERMINAL_TEXT_INVALID');
       if (keyInput && (typeof value.key !== 'string' || !Object.hasOwn(keys, value.key))) throw new ApiError(400, 'KEY_NOT_ALLOWED');
       return run(async available => {
         const item = await target(id, available);
