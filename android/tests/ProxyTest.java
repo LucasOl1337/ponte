@@ -21,6 +21,8 @@ public final class ProxyTest {
         final AtomicReference<String> origin = new AtomicReference<>();
         final AtomicReference<String> referer = new AtomicReference<>();
         final AtomicReference<String> language = new AtomicReference<>();
+        final AtomicReference<String> acceptEncoding = new AtomicReference<>();
+        final AtomicReference<String> ifNoneMatch = new AtomicReference<>();
         final AtomicReference<String> method = new AtomicReference<>();
         final AtomicReference<String> target = new AtomicReference<>();
         final AtomicReference<byte[]> body = new AtomicReference<>();
@@ -39,6 +41,8 @@ public final class ProxyTest {
                 hits.incrementAndGet(); auth.set(exchange.getRequestHeaders().getFirst("Authorization"));
                 origin.set(exchange.getRequestHeaders().getFirst("Origin")); referer.set(exchange.getRequestHeaders().getFirst("Referer"));
                 language.set(exchange.getRequestHeaders().getFirst("Accept-Language"));
+                acceptEncoding.set(exchange.getRequestHeaders().getFirst("Accept-Encoding"));
+                ifNoneMatch.set(exchange.getRequestHeaders().getFirst("If-None-Match"));
                 method.set(exchange.getRequestMethod()); target.set(exchange.getRequestURI().toString());
                 body.set(exchange.getRequestBody().readAllBytes());
                 if (redirect.get()) { exchange.getResponseHeaders().set("Location", "/api/audio"); exchange.sendResponseHeaders(302, -1); exchange.close(); return; }
@@ -52,6 +56,21 @@ public final class ProxyTest {
                     } catch (IOException expectedOnCancel) { }
                     return;
                 }
+                if (exchange.getRequestURI().getPath().equals("/app.js")) {
+                    exchange.getResponseHeaders().set("ETag", "W/\"v1\""); exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+                    exchange.getResponseHeaders().set("Vary", "Accept-Encoding, Accept-Language");
+                    if ("W/\"v1\"".equals(exchange.getRequestHeaders().getFirst("If-None-Match"))) { exchange.sendResponseHeaders(304, -1); exchange.close(); return; }
+                    byte[] script = STATIC_SCRIPT.getBytes(StandardCharsets.UTF_8);
+                    String accepted = exchange.getRequestHeaders().getFirst("Accept-Encoding");
+                    if (accepted != null && accepted.contains("gzip")) {
+                        ByteArrayOutputStream packed = new ByteArrayOutputStream();
+                        try (java.util.zip.GZIPOutputStream zip = new java.util.zip.GZIPOutputStream(packed)) { zip.write(script); }
+                        script = packed.toByteArray(); exchange.getResponseHeaders().set("Content-Encoding", "gzip");
+                    }
+                    exchange.getResponseHeaders().set("Content-Type", "text/javascript"); exchange.sendResponseHeaders(200, script.length);
+                    try (OutputStream output = exchange.getResponseBody()) { output.write(script); }
+                    return;
+                }
                 byte[] bytes = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json"); exchange.sendResponseHeaders(200, bytes.length);
                 try (OutputStream output = exchange.getResponseBody()) { output.write(bytes); }
@@ -60,6 +79,31 @@ public final class ProxyTest {
         }
         URI uri(String host) { return URI.create("https://" + host + ":" + server.getAddress().getPort()); }
         public void close() { releaseStream.countDown(); server.stop(0); workers.shutdownNow(); }
+    }
+
+    static final String STATIC_SCRIPT = "const ponte = 'static';\n".repeat(64);
+    /** Static files cross the tailnet compressed and are revalidated, not refetched. */
+    static void staticRevalidation(LoopbackProxy proxy, Remote remote) throws Exception {
+        HttpURLConnection plain = (HttpURLConnection) new URL(proxy.origin() + "/app.js").openConnection();
+        plain.setRequestProperty("Accept-Encoding", "identity");
+        check(plain.getResponseCode() == 200 && "identity".equals(remote.acceptEncoding.get()), "identity request stays identity upstream");
+        check(plain.getHeaderField("Content-Encoding") == null && new String(plain.getInputStream().readAllBytes(), StandardCharsets.UTF_8).equals(STATIC_SCRIPT), "identity body unchanged");
+        plain.disconnect();
+        HttpURLConnection packed = (HttpURLConnection) new URL(proxy.origin() + "/app.js").openConnection();
+        packed.setRequestProperty("Accept-Encoding", "gzip, deflate");
+        check(packed.getResponseCode() == 200 && "gzip, deflate".equals(remote.acceptEncoding.get()), "WebView Accept-Encoding reaches the server");
+        check("gzip".equals(packed.getHeaderField("Content-Encoding")), "Content-Encoding reaches the WebView");
+        check("W/\"v1\"".equals(packed.getHeaderField("ETag")) && "no-cache".equals(packed.getHeaderField("Cache-Control")), "validator and cache policy reach the WebView");
+        check(packed.getHeaderField("Vary") != null && packed.getHeaderField("Vary").contains("Accept-Encoding"), "Vary reaches the WebView");
+        try (InputStream body = new java.util.zip.GZIPInputStream(packed.getInputStream())) {
+            check(new String(body.readAllBytes(), StandardCharsets.UTF_8).equals(STATIC_SCRIPT), "compressed bytes are copied, not decoded twice");
+        }
+        packed.disconnect();
+        String cached = raw(proxy, request(proxy, "GET", "/app.js", "If-None-Match: W/\"v1\"\r\n"));
+        check("W/\"v1\"".equals(remote.ifNoneMatch.get()), "If-None-Match reaches the server");
+        check(cached.startsWith("HTTP/1.1 304") && cached.toLowerCase(Locale.ROOT).contains("\r\netag: w/\"v1\"\r\n") && cached.endsWith("Content-Length: 0\r\n\r\n"), "304 relayed without a body");
+        raw(proxy, request(proxy, "GET", "/api/state", ""));
+        check("identity".equals(remote.acceptEncoding.get()) && remote.ifNoneMatch.get() == null, "no encoding unless the WebView asked for it");
     }
 
     static String raw(LoopbackProxy proxy, String request) throws Exception {
@@ -188,6 +232,7 @@ public final class ProxyTest {
             check("Bearer test-only".equals(remote.auth.get()), "bearer preserved exactly");
             check(remote.origin.get() == null && remote.referer.get() == null, "local Origin and Referer removed upstream");
             terminalRoutes(proxy, remote);
+            staticRevalidation(proxy, remote);
             powerAndRegionRoutes(proxy, remote);
             check(raw(proxy, request(proxy, "GET", "/api/state", "Origin: https://evil.example\r\n")).startsWith("HTTP/1.1 403"), "foreign Origin denied");
             check(raw(proxy, "GET /api/state HTTP/1.1\r\nHost: evil.example\r\n\r\n").startsWith("HTTP/1.1 403"), "foreign Host denied");
