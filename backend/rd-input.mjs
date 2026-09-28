@@ -78,7 +78,7 @@ const clampInt = (value, limit) => Math.max(-limit, Math.min(limit, Math.round(N
 // One helper process per session. Messages are queued in its stdin pipe and
 // each is acknowledged, which gives the time from here to the evdev write.
 export function createRdInput({ python = 'python3', helper = HELPER, dryRun = false, logFile, watchdog, mapping = 'layout', env = process.env, spawn = spawnChild, now = () => performance.now(), log = console } = {}) {
-  let child = null, seq = 0, ready = false, lastAlive = 0;
+  let child = null, seq = 0, ready = false, lastAlive = 0, failures = 0;
   const sentAt = new Map();
   const stats = { sent: 0, acked: 0, timed: 0, lastMs: null, maxMs: 0, totalMs: 0, restarts: 0 };
   let monitors = [];
@@ -112,6 +112,7 @@ export function createRdInput({ python = 'python3', helper = HELPER, dryRun = fa
     current.once('error', () => { if (child === current) child = null; });
     current.once('close', code => {
       if (child === current) child = null;
+      if (code) failures++; // three failed starts (no evdev, no /dev/uinput) and the helper stays down
       sentAt.clear();
       if (code && err.trim()) log.error?.(`[rd] input helper exited ${code}: ${err.trim().split('\n').pop()}`);
     });
@@ -119,6 +120,7 @@ export function createRdInput({ python = 'python3', helper = HELPER, dryRun = fa
   }
 
   function send(message) {
+    if (!child && failures >= 3) return false;
     const current = child || start();
     const s = ++seq;
     sentAt.set(s, ready ? now() : null);
