@@ -985,9 +985,14 @@ def mesh_main(argv, sleep=time.sleep):
     result = local_api(config_file, 'POST', '/mesh/pair', {'peer': args.device})
     peer = result.get('peer') or {}
     if result.get('status') == 'paired':
+        if emit:
+            return emit(result)
         print(f"Already paired with {peer.get('name')}.")
         return
-    print(f"Code {result.get('code')}: approve it on {peer.get('name')} (Devices card, or ./ponte mesh approve {result.get('code')} there).")
+    if emit and args.no_wait:
+        return emit(result)
+    # With --json the code goes to stderr, so stdout stays one JSON document.
+    print(f"Code {result.get('code')}: approve it on {peer.get('name')} (Devices card, or ./ponte mesh approve {result.get('code')} there).", file=sys.stderr if emit else sys.stdout)
     if args.no_wait:
         return
     deadline = time.monotonic() + 10 * 60
@@ -996,6 +1001,8 @@ def mesh_main(argv, sleep=time.sleep):
         listing = local_api(config_file, 'GET', '/mesh')
         entry = next((item for item in listing.get('peers') or [] if item.get('id') == peer.get('id')), {})
         if entry.get('paired'):
+            if emit:
+                return emit({'ok': True, 'status': 'paired', 'peer': {'id': entry.get('id'), 'name': entry.get('name')}})
             print(f"Paired: this device now controls {peer.get('name')}.")
             return
         status = (entry.get('pairing') or {}).get('status')

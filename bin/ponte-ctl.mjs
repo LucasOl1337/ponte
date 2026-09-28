@@ -13,6 +13,7 @@ const globals = {
   url: { type: 'string', description: 'HTTP loopback or verified HTTPS origin.' },
   'token-file': { type: 'string', description: 'Private pairing-token file, never the token itself.' },
   'ca-file': { type: 'string', description: 'PEM CA for remote HTTPS.' },
+  node: { type: 'string', maxLength: 64, pattern: String.raw`^[^\u0000-\u001f\u007f<>]+(?![\s\S])`, description: 'Paired device (name or id from ponte mesh list): the home node relays the command there.' },
   timeout: { type: 'integer', min: 1, max: 120000, description: 'Whole HTTP request deadline in milliseconds (default 15000).' },
   'dry-run': { type: 'boolean', description: 'Validate and print a redacted request without connecting.' },
   yes: { type: 'boolean', description: 'Confirm a destructive operation without a prompt.' },
@@ -219,6 +220,34 @@ function redacted(request) {
   return safe;
 }
 
+const NODE_ID = /^[a-f0-9]{16}$/;
+
+// --node NAME|ID: the home node's paired devices come from /api/mesh (owner
+// only); a 16-hex id is taken as is, so it also works without that route.
+async function resolveNode(client, value) {
+  if (NODE_ID.test(value)) return { id: value, name: null };
+  const listing = await client.request({ method: 'GET', path: '/api/mesh' });
+  const self = listing?.self || {};
+  const wanted = value.toLowerCase();
+  if (String(self.name || '').toLowerCase() === wanted) return { id: null, name: self.name };
+  const peers = Array.isArray(listing?.peers) ? listing.peers : [];
+  const named = peers.filter(peer => String(peer?.name || '').toLowerCase() === wanted);
+  const matches = named.filter(peer => peer.paired);
+  if (matches.length > 1) throw new CliError('MESH_PEER_AMBIGUOUS', 'More than one paired device has this name. Use its id (ponte mesh list).', 2);
+  if (!matches.length) {
+    if (named.length) throw new CliError('MESH_PEER_NOT_PAIRED', `${named[0].name} is on the tailnet but not paired with this device: ponte mesh pair ${named[0].name}, then approve it there.`, 2);
+    const known = peers.filter(peer => peer?.paired).map(peer => peer.name).join(', ');
+    throw new CliError('MESH_PEER_NOT_FOUND', `No paired device called ${JSON.stringify(value)} (${known ? `paired: ${known}` : 'none is paired yet'}).`, 2);
+  }
+  return { id: matches[0].id, name: matches[0].name };
+}
+
+function withNode(request, id) {
+  if (!id) return request;
+  const separator = request.path.includes('?') ? '&' : '?';
+  return { ...request, path: `${request.path}${separator}node=${id}` };
+}
+
 async function main() {
   const { words, opts, options } = parse(process.argv.slice(2));
   if (options.url !== undefined) validateOrigin(options.url);
@@ -256,9 +285,15 @@ async function main() {
     if (command.confirm && !options.yes && !options['dry-run']) throw new CliError('CONFIRMATION_REQUIRED', 'This command requires --yes. Inspect it with --dry-run first.', 2);
     request = await namedRequest(command, opts, options['dry-run']);
   }
-  if (options['dry-run']) { emit({ ok: true, data: { dryRun: true, requiresConfirmation: !!command.confirm, ...redacted(request) } }); return; }
+  if (options.node !== undefined && command.name === 'health') fail('health is not relayed: it needs no pairing. Use state --node instead.');
+  if (options['dry-run']) {
+    // Offline: a node id goes into the path as is; a name is resolved only when connected.
+    const node = options.node === undefined ? {} : NODE_ID.test(options.node) ? { path: withNode(request, options.node).path } : { node: options.node };
+    emit({ ok: true, data: { dryRun: true, requiresConfirmation: !!command.confirm, ...redacted(request), ...node } }); return;
+  }
   if (command.confirm && !options.yes) throw new CliError('CONFIRMATION_REQUIRED', 'This command requires --yes. Inspect it with --dry-run first.', 2);
   const client = await createClient({ url: options.url, tokenFile: options['token-file'], caFile: options['ca-file'], timeout: options.timeout ?? Math.max(15000, (request.durationMs || 0) + 5000), signal: controller.signal });
+  if (options.node !== undefined) request = withNode(request, (await resolveNode(client, options.node)).id);
   mutation = request.method !== 'GET';
   const result = await client.request(request);
   if (command.select && !Object.hasOwn(result, command.select)) throw new CliError('INVALID_RESPONSE', 'Server response is missing the requested state field.', 6);

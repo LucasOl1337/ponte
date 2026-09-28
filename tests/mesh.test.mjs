@@ -368,6 +368,80 @@ test('./ponte mesh lists, pairs, approves and revokes through the local server',
   assert.equal(offline.code, 1); assert.match(offline.stderr, /not answering/);
 });
 
+test('./ponte mesh --json pair prints one JSON document, pending or paired', async t => {
+  const { a, b } = await twoNodes(t);
+  const root = path.dirname(path.dirname(new URL(import.meta.url).pathname));
+  const cliFor = async target => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'ponte-mesh-json-'));
+    t.after(() => rm(home, { recursive: true, force: true }));
+    const config = path.join(home, 'config.json');
+    await writeFile(config, JSON.stringify({ schemaVersion: 1, dataDir: target.dataDir, http: { host: '127.0.0.1', port: target.httpPort }, trustedHosts: [] }), { mode: 0o600 });
+    const env = { HOME: home, PATH: process.env.PATH, PONTE_CONFIG: config, http_proxy: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9' };
+    return args => run('python3', [path.join(root, 'ponte'), 'mesh', ...args], { env, timeout: 15000 }).catch(error => error);
+  };
+  const onA = await cliFor(a), onB = await cliFor(b);
+  // Waiting: the code goes to stderr and stdout carries only the final answer.
+  const waiting = onA(['--json', 'pair', 'notebook-teste']);
+  const request = await until(async () => (await json(await b.local('/api/mesh'))).body.requests[0], 'the request on B');
+  assert.equal((await json(await b.local('/api/action', { method: 'POST', body: { type: 'mesh.approve', code: request.code } }))).status, 200);
+  const paired = await waiting;
+  assert.equal(paired.code ?? 0, 0, paired.stderr);
+  assert.match(paired.stderr, new RegExp(`Code ${request.code}`));
+  assert.deepEqual(JSON.parse(paired.stdout), { ok: true, status: 'paired', peer: { id: b.mesh.id, name: 'notebook-teste' } });
+  const again = await onA(['--json', 'pair', 'notebook-teste']);
+  assert.equal(JSON.parse(again.stdout).status, 'paired');
+  // --no-wait, the other way round: the pending answer with its code.
+  const pending = await onB(['--json', 'pair', 'pc-teste', '--no-wait']);
+  assert.equal(pending.code ?? 0, 0, pending.stderr);
+  const asked = JSON.parse(pending.stdout);
+  assert.equal(asked.status, 'pending');
+  assert.match(asked.code, /^\d{6}$/);
+  assert.equal(asked.peer.name, 'pc-teste');
+});
+
+test('./ponte ctl --node drives a paired device through the home node, by name or id', async t => {
+  const { a, b } = await twoNodes(t);
+  const root = path.dirname(path.dirname(new URL(import.meta.url).pathname));
+  const home = await mkdtemp(path.join(os.tmpdir(), 'ponte-ctl-node-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const tokenFile = path.join(home, 'token');
+  await writeFile(tokenFile, TOKENS.a, { mode: 0o600 });
+  const env = { HOME: home, PATH: process.env.PATH, PONTE_CONFIG: path.join(home, 'missing.json'), PONTE_NODE: process.execPath, LANG: 'C.UTF-8' };
+  const ctl = async args => {
+    const result = await run('python3', [path.join(root, 'ponte'), 'ctl', '--url', `http://127.0.0.1:${a.httpPort}`, '--token-file', tokenFile, ...args], { env, timeout: 15000 }).catch(error => error);
+    return { code: result.code ?? 0, body: JSON.parse(result.stdout) };
+  };
+  const unpaired = await ctl(['state', '--node', 'notebook-teste']);
+  assert.equal(unpaired.code, 2);
+  assert.equal(unpaired.body.error.code, 'MESH_PEER_NOT_PAIRED');
+  assert.match(unpaired.body.error.message, /ponte mesh pair notebook-teste/);
+  assert.match((await ctl(['state', '--node', 'tablet'])).body.error.message, /none is paired yet/);
+  await pairAtoB(a, b);
+
+  assert.equal((await ctl(['state', '--node', 'notebook-teste'])).body.data.hostname, 'notebook-teste');
+  assert.equal((await ctl(['state', '--node', 'NOTEBOOK-TESTE'])).body.data.node.id, b.mesh.id, 'names match without case');
+  assert.equal((await ctl(['state', '--node', b.mesh.id])).body.data.hostname, 'notebook-teste', 'an id needs no lookup');
+  assert.equal((await ctl(['state', '--node', 'pc-teste'])).body.data.hostname, 'pc-teste', 'the home node by its own name stays local');
+  assert.equal((await ctl(['state'])).body.data.hostname, 'pc-teste');
+
+  const before = a.calls.length;
+  assert.deepEqual((await ctl(['volume', 'set', '--value', '0.25', '--node', 'notebook-teste'])).body, { schemaVersion: 1, ok: true, data: { ok: true } });
+  assert.ok(b.calls.some(call => call.join(' ') === 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.250'), 'the action ran on B');
+  assert.equal(a.calls.slice(before).some(call => call[0] === 'wpctl'), false, 'and not on A');
+
+  const missing = await ctl(['state', '--node', 'tablet']);
+  assert.equal(missing.code, 2);
+  assert.match(missing.body.error.message, /paired: notebook-teste/);
+  const health = await ctl(['health', '--node', 'notebook-teste']);
+  assert.equal(health.code, 2);
+  assert.match(health.body.error.message, /state --node/);
+  const byId = await ctl(['volume', 'mute', '--node', b.mesh.id, '--dry-run']);
+  assert.equal(byId.body.data.path, `/api/action?node=${b.mesh.id}`);
+  const byName = await ctl(['volume', 'mute', '--node', 'notebook-teste', '--dry-run']);
+  assert.equal(byName.body.data.path, '/api/action');
+  assert.equal(byName.body.data.node, 'notebook-teste', 'a name is resolved only when connected');
+});
+
 // A fake screen on B: one keyframe with its SPS every 30 ms, and an input
 // device that only records what it was told.
 function fakeRd() {
