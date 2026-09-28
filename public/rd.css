@@ -22,7 +22,7 @@ body.rd.controlling .rd-hint{color:var(--lime)}
 .rd-stage{position:relative;flex:1;min-height:0;overflow:hidden;background:#000;cursor:default}
 body.rd.controlling.rel .rd-stage{cursor:none}
 .rd-stage canvas{position:absolute;left:0;top:0;image-rendering:auto}
-.rd-overlay{position:absolute;inset:0;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;color:var(--muted);font-size:14px;pointer-events:none}
+.rd-overlay{position:absolute;inset:0;background:#000000b8;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;color:var(--muted);font-size:14px;pointer-events:none}
 .rd-overlay[hidden]{display:none}
 .rd-overlay button{pointer-events:auto}
 .rd-note{position:absolute;right:14px;bottom:12px;padding:6px 11px;border-radius:10px;background:#151714d9;border:1px solid var(--border);color:var(--muted);font-size:11px;pointer-events:none}

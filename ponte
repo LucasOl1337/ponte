@@ -993,7 +993,8 @@ def rd_main(argv):
     private_dir(profile)
     # Its own profile, never the owner's browser; GPU stays on (WebCodecs decodes
     # in hardware and the canvas presents without waiting for vsync).
-    command = [browser, f'--app={url}', f'--user-data-dir={profile}', '--class=ponte-rd', '--no-first-run', '--no-default-browser-check']
+    # The profile keeps no passwords: basic store, so no keyring prompt appears.
+    command = [browser, f'--app={url}', f'--user-data-dir={profile}', '--class=ponte-rd', '--no-first-run', '--no-default-browser-check', '--password-store=basic']
     subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     print(f"Remote desktop opening for {args.device or 'this PC'} (profile {profile}). Release the control with Ctrl+Alt+Shift or by holding Esc.")
 

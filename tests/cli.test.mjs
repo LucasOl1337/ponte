@@ -477,7 +477,7 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
     calls = (await readFile(f.log, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse);
   }
   const profile = path.join(f.env.XDG_STATE_HOME, 'ponte/rd-chromium');
-  assert.deepEqual(calls.find(call => call[0] === 'chromium'), ['chromium', `--app=${base}`, `--user-data-dir=${profile}`, '--class=ponte-rd', '--no-first-run', '--no-default-browser-check']);
+  assert.deepEqual(calls.find(call => call[0] === 'chromium'), ['chromium', `--app=${base}`, `--user-data-dir=${profile}`, '--class=ponte-rd', '--no-first-run', '--no-default-browser-check', '--password-store=basic']);
   assert.equal((await stat(profile)).mode & 0o777, 0o700);
   for (const flag of ['--disable-gpu', '--headless', '--remote-debugging-port', '--enable-automation']) assert.equal(calls.flat().some(arg => arg.startsWith(flag)), false, flag);
 });
