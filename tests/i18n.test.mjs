@@ -266,6 +266,39 @@ test('the command composer sends text with an atomic Enter, records reusable his
  assert.ok(h.calls.filter(call=>call.path.endsWith('/input')).every(call=>call.options.method==='POST'));
 });
 
+test('Terminal reader keeps the line being read when old lines scroll off, waits for a finger or fling, and still follows the tail',async()=>{
+ const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'synthetic attachment'};
+ const lines=(from,to)=>Array.from({length:to-from},(_,i)=>`line ${from+i}`).join('\n');
+ let text=lines(0,100);
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async path=>({ok:true,json:async()=>path==='/api/terminals'?{available:true,sessions:[session],limit:4}:path.startsWith('/api/terminals/')?{...session,text}:path==='/api/audio'?{recordings:[]}:fixture})});await flush();
+ h.run("navigate('terminais')");await flush();await flush();
+ const output=h.el('#terminal-output');
+ assert.equal(output.textContent,lines(0,100));
+ const read=async()=>{await h.run('readTerminals(terminalGeneration)');await flush();};
+ // Reading back: 20 px lines, the reader sits at line 20. Five lines scroll off the top.
+ output.scrollHeight=2000;output.clientHeight=200;output.scrollTop=400;
+ text=lines(5,105);await read();
+ assert.equal(output.textContent,lines(5,105));
+ assert.equal(output.scrollTop,300,'line 20 stays under the reader');
+ // A cut first line (byte cap) still lines up.
+ text='ne 8\n'+lines(9,106);await read();
+ assert.equal(output.scrollTop,240);
+ // A finger on the output (or a fling still running) holds the text as it is.
+ output.dispatchEvent({type:'touchstart'});
+ text=lines(20,120);await read();
+ assert.notEqual(output.textContent,lines(20,120),'no replacement under the finger');
+ output.dispatchEvent({type:'touchend'});await read();
+ assert.notEqual(output.textContent,lines(20,120),'a fling after lifting is left alone');
+ h.run('terminalScrolledAt=0');await read();
+ assert.equal(output.textContent,lines(20,120),'settled: the text catches up');
+ // At the bottom it keeps following new output.
+ output.scrollTop=output.scrollHeight-output.clientHeight;
+ text=lines(21,121);await read();
+ assert.equal(output.scrollTop,output.scrollHeight);
+ assert.equal(h.run("terminalLinesDropped('a\\nb\\nc\\nd\\ne','c\\nd\\ne\\nf')"),2);
+ assert.equal(h.run("terminalLinesDropped('a\\nb','x\\ny\\nz')"),0,'unrelated text never jumps');
+});
+
 test('Terminal text remains readable above empty pane rows and relocalizes without losing input or pause',async()=>{
  const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'synthetic attachment'};
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async path=>({ok:true,json:async()=>path==='/api/terminals'?{available:true,sessions:[session],limit:4}:path.startsWith('/api/terminals/')?{...session,text:'Output belongs to the session\n$ '+ '\n'.repeat(23)}:fixture})});await flush();

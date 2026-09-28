@@ -1433,6 +1433,35 @@ function selectTerminal(id) {
   $('#terminal-size').value = String(session?.cols || 40);
   terminalSessionOptions();
 }
+// Reading back in the session: a finger on the output, a fling still running
+// or a text selection keeps the text as it is until the next read, and new
+// output that pushes old lines off the top keeps the line being read in place.
+let terminalTouching = false, terminalScrolledAt = 0, terminalOwnScrollTop = -1;
+const TERMINAL_SCROLL_SETTLE_MS = 700;
+function terminalReaderBusy(output) {
+  if (terminalTouching || Date.now() - terminalScrolledAt < TERMINAL_SCROLL_SETTLE_MS) return true;
+  const selection = window.getSelection?.();
+  return !!(selection && !selection.isCollapsed && output.contains?.(selection.anchorNode));
+}
+// The first line may be cut by the byte cap, so the match starts one line in.
+function terminalLinesDropped(before, after) {
+  if (!before || !after) return 0;
+  const old = before.split('\n'), next = after.split('\n');
+  for (let line = 1; line < old.length; line++) {
+    const count = Math.min(3, old.length - line, next.length - 1);
+    if (count < Math.min(2, next.length - 1)) break;
+    let same = true;
+    for (let i = 0; i < count && same; i++) same = old[line + i] === next[1 + i];
+    if (same) return line - 1;
+  }
+  return 0;
+}
+{
+  const output = $('#terminal-output');
+  output.addEventListener('touchstart', () => { terminalTouching = true; }, { passive: true });
+  for (const name of ['touchend','touchcancel']) output.addEventListener(name, () => { terminalTouching = false; terminalScrolledAt = Date.now(); }, { passive: true });
+  output.addEventListener('scroll', () => { if (Math.abs(output.scrollTop - terminalOwnScrollTop) > 1) terminalScrolledAt = Date.now(); }, { passive: true });
+}
 async function readTerminals(generation) {
   if (!terminalVisible() || generation !== terminalGeneration) return;
   const requestToken = token;
@@ -1455,10 +1484,15 @@ async function readTerminals(generation) {
       const output = $('#terminal-output');
       const followsTail = output.scrollHeight-output.scrollTop-output.clientHeight < 48;
       const text = view.text.replace(/\n+$/,'');
-      if (terminalText !== text) {
+      if (terminalText !== text && !terminalReaderBusy(output)) {
+        const before = terminalText, lineHeight = before ? output.scrollHeight / before.split('\n').length : 0;
+        const dropped = followsTail ? 0 : terminalLinesDropped(before, text);
+        const top = output.scrollTop;
         terminalText = text;
         output.textContent = text;
         if (followsTail) output.scrollTop = output.scrollHeight;
+        else if (dropped) output.scrollTop = Math.max(0, top - dropped * lineHeight);
+        terminalOwnScrollTop = output.scrollTop;
       }
     }
   } catch (error) {

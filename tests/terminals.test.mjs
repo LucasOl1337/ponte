@@ -131,6 +131,7 @@ test('capture is plain and bounded; resize and deletion only target the verified
   const session = await terminals.create({ cols: 80, rows: 24 });
   mock.setCapture('x'.repeat(100000) + '\x00\x1b\x7f\x85END\n');
   const capture = await terminals.read(session.id);
+  assert.deepEqual(mock.calls.filter(call => call.args[0] === 'capture-pane').at(-1).args.slice(-2), ['-S', '-1000'], 'the reader gets the whole tmux history');
   assert.equal(Buffer.byteLength(capture.text), TERMINAL_TEXT_LIMIT);
   assert.ok(capture.text.endsWith('END\n'));
   assert.equal(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(capture.text), false);
