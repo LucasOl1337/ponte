@@ -1,7 +1,11 @@
 // Screen capture for remote desktop: gpu-screen-recorder (or, in the lab, an
 // ffmpeg test pattern) writes H.264 in MPEG-TS to stdout, and this module takes
 // the TS apart into H.264 access units in Annex B, ready for WebCodecs.
-import { spawn as spawnChild } from 'node:child_process';
+import { spawn as spawnChild, spawnSync } from 'node:child_process';
+import { closeSync, constants as fsConstants, mkdtempSync, openSync, rmSync } from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 
 const TS = 188;
 export const BAND = { bits: 44, cell: 16 }; // lab time band: 44 cells of 16x16 px, top-left, MSB first, white = 1
@@ -241,6 +245,21 @@ export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1
     '-tune', 'performance', '-keyint', String(keyint), '-cursor', 'yes', '-v', 'no']];
 }
 
+// gpu-screen-recorder opens /dev/stdout by path, and on the socketpair Node
+// gives a child for 'pipe' that open() fails with ENXIO. A FIFO is a real pipe:
+// both ends are opened here (the read end non-blocking, so it is polled like a
+// socket and never parks a threadpool thread) and its name is gone at once.
+export function realPipe() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ponte-rd-'));
+  try {
+    const fifo = path.join(dir, 'video');
+    if (spawnSync('mkfifo', ['-m', '600', fifo]).status !== 0) throw new Error('mkfifo failed');
+    const readFd = openSync(fifo, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const writeFd = openSync(fifo, fsConstants.O_WRONLY);
+    return { readFd, writeFd };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 // One running encoder at a time. restart() swaps monitor, bitrate or fps; the
 // new process always opens with a keyframe. onUnit gets each access unit with
 // the parameters of the run that made it.
@@ -252,16 +271,24 @@ export function createCapture({ mode = 'gsr', env = process.env, spawn = spawnCh
     const [command, args] = captureCommand({ mode, ...params });
     const run = ++generation;
     const startedAt = performance.now();
-    const current = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
+    const { readFd, writeFd } = realPipe();
+    let current;
+    try { current = spawn(command, args, { stdio: ['ignore', writeFd, 'pipe'], env }); }
+    catch (error) { closeSync(readFd); throw error; }
+    finally { closeSync(writeFd); }
     child = current;
+    const video = new net.Socket({ fd: readFd, readable: true, writable: false });
+    current.video = video;
     const demuxer = new TsDemuxer(unit => { if (run === generation) onUnit({ ...unit, params, startedAt }); });
     current.demuxer = demuxer;
     let stderr = '';
-    current.stdout.on('data', chunk => demuxer.push(chunk));
+    video.on('data', chunk => demuxer.push(chunk));
+    video.on('error', () => {});
     current.stderr?.on('data', chunk => { stderr = (stderr + chunk).slice(-2000); });
-    current.once('error', error => { if (run === generation) { child = null; onExit({ code: null, error, stderr }); } });
+    current.once('error', error => { video.destroy(); if (run === generation) { child = null; onExit({ code: null, error, stderr }); } });
     current.once('close', (code, signal) => {
-      demuxer.end();
+      // A helper the encoder spawned may still hold the write end: do not wait for EOF.
+      setTimeout(() => { video.destroy(); demuxer.end(); }, 50);
       if (run !== generation) return;
       child = null;
       if (stderr.trim()) log.error?.(`[rd] ${command} exited (${code ?? signal}): ${stderr.trim().split('\n').slice(-3).join(' | ')}`);
