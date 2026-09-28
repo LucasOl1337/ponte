@@ -51,9 +51,9 @@ test('Terminals shows one list: agents with state, place, folder and age, plain 
   const cards = h.el('#agent-list').querySelectorAll('.agent-card');
   const text = cards.map(card => card.textContent.replace(/\s+/g, ' ').trim());
   assert.equal(cards.length, 5, text.join('\n'));
-  assert.match(text[0], /Claude.*Nexsales trabalhos.*Window on workspace 2 · ~\/nexunio\/nexsales · 3 min ago.*Waiting for you/);
-  assert.match(text[1], /Claude.*Trilho.*Maestri · ~\/Projects\/ponte-wt\/agentes · just now.*Working/);
-  assert.match(text[2], /Codex.*agentes.*Ponte session · Terminal 1 · ~ · 2 h ago.*Idle/);
+  assert.match(text[0], /Claude.*Nexsales trabalhos.*Window on workspace 2 · 3 min ago · ~\/nexunio\/nexsales.*Waiting for you/);
+  assert.match(text[1], /Claude.*Trilho.*Maestri · just now · ~\/Projects\/ponte-wt\/agentes.*Working/);
+  assert.match(text[2], /Codex.*agentes.*Ponte session · Terminal 1 · 2 h ago · ~.*Idle/);
   assert.match(text[3], /Terminal.*lol@lol:~.*Focus and view on monitor.*Open/);
   // The Ponte session with the Codex inside is not listed twice; the other one is.
   assert.match(text[4], /Terminal 2.*Ponte session.*Open/);
@@ -94,6 +94,7 @@ test('tapping an agent opens a readable transcript; reply is explicit, one line,
   h.el('#agent-reply-form').dispatchEvent({ type: 'submit', target: h.el('#agent-reply-form'), preventDefault() {} }); await flush(); await flush();
   assert.deepEqual(posted, [{ text: 'sim, pode seguir' }]);
   assert.equal(h.el('#agent-reply-text').value, '');
+  assert.equal(h.el('#agent-reply-status').textContent, 'Sent to the agent.', 'feedback shows inside the modal, not behind it');
   assert.ok(!h.calls.some(call => call.path === '/api/action'), 'the reply goes through the agent route, not raw desktop actions');
   // A Maestri agent is read-only here.
   h.run('closeAgent()');

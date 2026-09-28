@@ -1383,7 +1383,7 @@ function agentWhere(item) {
   if (where.type === 'app') return t('Dentro de {app}',{app:where.app || where.class || ''});
   return item.headless ? t('Sem janela (automático)') : t('Sem janela');
 }
-function agentSummary(item) { return [agentWhere(item), item.cwd, agentAgo(item.since)].filter(Boolean).join(' · '); }
+function agentSummary(item) { return [agentWhere(item), agentAgo(item.since), item.cwd].filter(Boolean).join(' · '); }
 function agentCard(attributes, kind, title, state, stateLabel, detail) {
   return `<button class="agent-card" ${attributes} data-state="${escaped(state)}"><span><span class="agent-kind">${escaped(kind)}</span><strong>${escaped(title)}</strong><small>${escaped(detail)}</small></span><span class="agent-state" data-state="${escaped(state)}">${escaped(stateLabel)}</span></button>`;
 }
@@ -1464,7 +1464,7 @@ function openAgent(id) {
   agentOpenId = id;
   const box = $('#agent-transcript');
   box.innerHTML = `<p class="hint">${h('Carregando conversa…')}</p>`; agentTranscriptHtml = '';
-  $('#agent-reply-text').value = '';
+  $('#agent-reply-text').value = ''; $('#agent-reply-status').textContent = '';
   renderAgentHeader();
   if (!$('#agent-dialog').open) $('#agent-dialog').showModal();
   readAgentTranscript(id);
@@ -1508,9 +1508,9 @@ $('#agent-reply-form').addEventListener('submit', async event => {
   try {
     await api(`/agents/${encodeURIComponent(id)}/reply`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
     if (box.value.replace(/[\r\n\t]+/g, ' ').trim() === text) box.value = '';
-    toast(t('Enviado para o agente.'));
+    $('#agent-reply-status').textContent = t('Enviado para o agente.');
     setTimeout(() => readAgentTranscript(id), 1200);
-  } catch (error) { toast(error, true); }
+  } catch (error) { i18n.write($('#agent-reply-status'),error); }
   finally { agentReplyBusy = false; if (agentOpenId) renderAgentHeader(); }
 });
 function terminalSessionOptions() {
