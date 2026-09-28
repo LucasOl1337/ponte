@@ -14,4 +14,5 @@ The synthetic monitor shows a coordinate grid, targets A/B (text fields: a left 
 
 - `tap-test.py --serial SERIAL` taps at known fractions of the streamed image (found on the device screenshot) and compares with the cursor the server placed. Independent of the page's own numbers.
 - `cdp.mjs` needs a debuggable Chrome (`adb forward tcp:9222 localabstract:chrome_devtools_remote`): `rect`, `pinch`, `tap`, `tap-check LABEL`, `drag`, `two-drag`, `text`, `key`, `click SELECTOR`, `eval JS`.
+- `bin/claude` and `bin/codex` stand in for the agent CLIs: a session started from Home runs them, and they print the request they got as argv (also logged to `events.jsonl`), then echo each typed line. No model is called.
 - `pinch.py` sends a two-finger gesture through `sendevent` (rooted emulator only).

@@ -27,6 +27,22 @@ export const messages = {
     "en": "Send either text or one terminal key.",
     "pt": "Envie texto ou uma tecla do terminal."
   },
+  "AGENT_NOT_ALLOWED": {
+    "en": "Choose Claude, Codex or Terminal to start a session.",
+    "pt": "Escolha Claude, Codex ou Terminal para começar uma sessão."
+  },
+  "AGENT_UNAVAILABLE": {
+    "en": "{agent} is not installed on the PC.",
+    "pt": "{agent} não está instalado no PC."
+  },
+  "INVALID_PROMPT": {
+    "en": "The request must have 1–4000 characters of plain text, not starting with a dash.",
+    "pt": "O pedido deve ter de 1 a 4000 caracteres de texto simples, sem começar com hífen."
+  },
+  "PROJECT_NOT_ALLOWED": {
+    "en": "That folder is not a project in ~/Projects.",
+    "pt": "Essa pasta não é um projeto em ~/Projects."
+  },
   "HOST_NOT_ALLOWED": {
     "en": "This host is not allowed.",
     "pt": "Host não autorizado."

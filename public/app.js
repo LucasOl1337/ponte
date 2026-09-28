@@ -282,6 +282,7 @@ function renderVisiblePage() {
   if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
   else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
   else if (currentPage === 'tela') renderScreenWorkspaces();
+  if (currentPage === 'inicio') loadStartProjects();
 }
 // Omarchy lives on numbered workspaces (Super+1…0). The screen gets the same
 // row: the workspace the streamed monitor shows is lit, a dot marks the ones
@@ -2155,6 +2156,59 @@ $('#terminal-dictate').addEventListener('click', () => {
     if (text) { const box = $('#terminal-input'); box.value = box.value ? `${box.value} ${text}` : text; growComposer(); box.focus(); }
     return text;
   });
+});
+// Home "Start working": one request opens a phone text session already running
+// Claude, Codex or a shell, then shows it on the Terminals page. The request is
+// typed or dictated into the field first, so it can be reviewed before starting.
+let startAgent = ['claude','codex','shell'].indexOf(savedPreference('ponte-start-agent')) >= 0 ? savedPreference('ponte-start-agent') : 'claude';
+let startBusy = false;
+let startProjectsToken = '';
+// Recent ~/Projects folders are fetched once per pairing, when Home shows.
+async function loadStartProjects() {
+  if (!token || startProjectsToken === token) return;
+  const requestToken = startProjectsToken = token;
+  try {
+    const { projects } = await (await api('/terminals?projects=1',{timeout:8000})).json();
+    if (requestToken !== token || !Array.isArray(projects)) return;
+    const select = $('#start-project'), wanted = select.value || savedPreference('ponte-start-project');
+    select.innerHTML = `<option value="" data-i18n="Pasta pessoal (~)">${escaped(t('Pasta pessoal (~)'))}</option>${projects.map(name => `<option value="${escaped(name)}">${escaped(name)}</option>`).join('')}`;
+    select.value = projects.indexOf(wanted) >= 0 ? wanted : '';
+  } catch { if (requestToken === token) startProjectsToken = ''; }
+}
+$('#start-project').addEventListener('change',event => savePreference('ponte-start-project',event.target.value));
+function renderStartAgents() {
+  $$('[data-start-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.startAgent === startAgent)));
+  $('#start-go').disabled = startBusy;
+}
+$$('[data-start-agent]').forEach(button => button.addEventListener('click',() => { startAgent = button.dataset.startAgent; savePreference('ponte-start-agent',startAgent); renderStartAgents(); }));
+renderStartAgents();
+$('#start-dictate').addEventListener('click',() => {
+  toggleDictation($('#start-dictate'), $('#start-dictate-status'), async blob => {
+    const text = await uploadDictation('/dictate', blob);
+    if (text) { const box = $('#start-prompt'); box.value = box.value ? `${box.value} ${text}` : text; }
+    return text;
+  });
+});
+$('#start-go').addEventListener('click',async () => {
+  if (startBusy) return;
+  if (!connected || !token) { toast(t("Reconecte ao PC para usar este controle."), true); return; }
+  // A shell runs its first line as typed, so it goes as one line.
+  const raw = $('#start-prompt').value;
+  const prompt = (startAgent === 'shell' ? raw.replace(/\s*\n\s*/g,' ') : raw).trim();
+  const body = {cols:40,rows:24,agent:startAgent};
+  if (prompt) body.prompt = prompt;
+  if ($('#start-project').value) body.project = $('#start-project').value;
+  startBusy = true; renderStartAgents();
+  dictationStatus($('#start-dictate-status'),'');
+  const requestToken = token;
+  try {
+    const session = await (await api('/terminals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    if (token !== requestToken) return;
+    if ($('#start-prompt').value === raw) $('#start-prompt').value = '';
+    toast(t('Abrindo {title}…',{title:session.title}));
+    terminalSessions.push(session); selectTerminal(session.id); terminalPaused = false; navigate('terminais');
+  } catch (error) { if (token === requestToken) dictationStatus($('#start-dictate-status'),error,true); }
+  finally { startBusy = false; renderStartAgents(); }
 });
 window.addEventListener('popstate', () => { const page = location.hash.slice(1); if (token && page) navigate(page); });
 

@@ -505,7 +505,18 @@
   "Você disse: {text}": "You said: {text}",
   "ativo na placa de rede": "enabled on the network card",
   "desativado na placa de rede": "disabled on the network card",
-  "estado desconhecido": "unknown state"
+  "estado desconhecido": "unknown state",
+  "COMEÇAR TRABALHO": "START WORKING",
+  "Chame um agente": "Call an agent",
+  "Onde começar": "Where to start",
+  "Pedido": "Request",
+  "O que é pra fazer? Digite ou fale (opcional)": "What should it do? Type or speak (optional)",
+  "Falar o pedido": "Speak the request",
+  "Começar": "Start",
+  "Abre uma sessão de texto no PC, sem mexer no foco, e leva você direto pra ela.": "Opens a text session on the PC without changing focus and takes you straight to it.",
+  "Abrindo {title}…": "Opening {title}…",
+  "PASTA": "FOLDER",
+  "Pasta pessoal (~)": "Home folder (~)"
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
@@ -844,6 +855,22 @@
   "INVALID_TERMINAL_INPUT": {
     "en": "Send either text or one terminal key.",
     "pt": "Envie texto ou uma tecla do terminal."
+  },
+  "AGENT_NOT_ALLOWED": {
+    "en": "Choose Claude, Codex or Terminal to start a session.",
+    "pt": "Escolha Claude, Codex ou Terminal para começar uma sessão."
+  },
+  "AGENT_UNAVAILABLE": {
+    "en": "{agent} is not installed on the PC.",
+    "pt": "{agent} não está instalado no PC."
+  },
+  "INVALID_PROMPT": {
+    "en": "The request must have 1–4000 characters of plain text, not starting with a dash.",
+    "pt": "O pedido deve ter de 1 a 4000 caracteres de texto simples, sem começar com hífen."
+  },
+  "PROJECT_NOT_ALLOWED": {
+    "en": "That folder is not a project in ~/Projects.",
+    "pt": "Essa pasta não é um projeto em ~/Projects."
   },
   "INVALID_POWER_STATE": {
     "en": "Power state must be either on or off.",

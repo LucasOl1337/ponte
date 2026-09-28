@@ -3,25 +3,57 @@ import net from 'node:net';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, lstat, open, rename, realpath } from 'node:fs/promises';
+import { mkdir, lstat, open, readdir, rename, realpath, stat } from 'node:fs/promises';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 
 export const TERMINAL_LIMIT = 4;
 export const TERMINAL_TEXT_LIMIT = 64 * 1024;
+export const PROJECT_LIMIT = 8;
 const idPattern = /^[a-f0-9]{24}$/;
 const panePattern = /^%\d+$/;
 const windowPattern = /^@\d+$/;
 const format = '#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_in_mode}';
+// A session can start an agent CLI instead of a bare shell. Only these fixed
+// program names run; the phone chooses a key, never a command.
+const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' } });
+const titlePattern = /^(Terminal|Claude|Codex) [1-4]$/;
+const projectPattern = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
+// The agent runs as the pane's own argv (tmux execs it without a shell): the
+// program and the prompt are "$@", never parsed as shell text. When the agent
+// exits, the pane falls back to the user's login shell instead of vanishing.
+const agentLauncher = ['/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent'];
 const keys = Object.freeze({ Enter: 'Enter', Tab: 'Tab', Escape: 'Escape', BackSpace: 'BSpace', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Interrupt: 'C-c' });
 
 function fields(value, names, code) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !names.includes(key))) throw new ApiError(400, code);
 }
 
-function dimensions(value) {
-  fields(value, ['cols', 'rows'], 'INVALID_TERMINAL_SIZE');
+function dimensions(value, extra = []) {
+  fields(value, ['cols', 'rows', ...extra], 'INVALID_TERMINAL_SIZE');
   if (!Number.isInteger(value.cols) || value.cols < 20 || value.cols > 240 || !Number.isInteger(value.rows) || value.rows < 8 || value.rows > 100) throw new ApiError(400, 'INVALID_TERMINAL_SIZE');
   return value;
+}
+
+function validText(text) {
+  return typeof text === 'string' && text.length >= 1 && text.length <= 4000 && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(text) && text.isWellFormed();
+}
+
+// What a new session starts: which agent, an optional first request, and an
+// optional project folder by name. Everything is checked before tmux runs.
+function sessionStart(value) {
+  const agent = Object.hasOwn(value, 'agent') ? value.agent : 'shell';
+  if (typeof agent !== 'string' || !Object.hasOwn(agents, agent)) throw new ApiError(400, 'AGENT_NOT_ALLOWED');
+  let prompt;
+  if (Object.hasOwn(value, 'prompt')) {
+    prompt = value.prompt;
+    // An agent receives the request as one argv word, so line breaks are safe
+    // there; a shell gets it typed like the composer, one line only. A leading
+    // dash would be read by the agent CLI as an option, not as the request.
+    const text = typeof prompt === 'string' && agent !== 'shell' ? prompt.replace(/\n/g, ' ') : prompt;
+    if (!validText(text) || !prompt.trim() || (agent !== 'shell' && /^\s*-/.test(prompt))) throw new ApiError(400, 'INVALID_PROMPT');
+  }
+  if (Object.hasOwn(value, 'project') && (typeof value.project !== 'string' || !projectPattern.test(value.project))) throw new ApiError(400, 'PROJECT_NOT_ALLOWED');
+  return { agent, prompt, project: value.project };
 }
 
 function validateId(id) {
@@ -61,6 +93,7 @@ export function createTerminals(dataDir, options = {}) {
   delete env.TMUX; delete env.TMUX_PANE;
   for (const name of Object.keys(env)) if (name.startsWith('OMARCHY_REMOTE_')) delete env[name];
   const shellDirectory = path.isAbsolute(env.HOME || '') ? env.HOME : os.homedir();
+  const projectsDirectory = options.projectsDir || path.join(shellDirectory, 'Projects');
   const directory = path.join(dataDir, 'terminals');
   const socketPath = path.join(directory, 'tmux.sock');
   const registryPath = path.join(directory, 'sessions.json');
@@ -85,7 +118,7 @@ export function createTerminals(dataDir, options = {}) {
     const handle = await open(registryPath, constants.O_RDONLY | constants.O_NOFOLLOW);
     let saved;
     try { saved = JSON.parse(await handle.readFile('utf8')); } finally { await handle.close(); }
-    if (saved.schemaVersion !== 1 || !Array.isArray(saved.sessions) || saved.sessions.length > TERMINAL_LIMIT || saved.sessions.some(item => !item || !idPattern.test(item.id) || !panePattern.test(item.paneId) || !windowPattern.test(item.windowId) || !/^Terminal [1-4]$/.test(item.title)) || new Set(saved.sessions.map(item => item.id)).size !== saved.sessions.length) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+    if (saved.schemaVersion !== 1 || !Array.isArray(saved.sessions) || saved.sessions.length > TERMINAL_LIMIT || saved.sessions.some(item => !item || !idPattern.test(item.id) || !panePattern.test(item.paneId) || !windowPattern.test(item.windowId) || !titlePattern.test(item.title)) || new Set(saved.sessions.map(item => item.id)).size !== saved.sessions.length) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
     registry = saved.sessions.map(({ id, title, paneId, windowId }) => ({ id, title, paneId, windowId }));
   }
 
@@ -154,6 +187,17 @@ export function createTerminals(dataDir, options = {}) {
     attachCommand: `env -u TMUX -u TMUX_PANE tmux -u -S ${shellQuote(socketPath)} -f /dev/null attach-session -t ${shellQuote(`=ponte_${id}`)}`,
   });
 
+  // A project is a direct child folder of ~/Projects, after resolving links.
+  async function projectDirectory(name) {
+    if (name === undefined) return shellDirectory;
+    try {
+      const parent = await realpath(projectsDirectory);
+      const resolved = await realpath(path.join(parent, name));
+      if (path.dirname(resolved) === parent && (await stat(resolved)).isDirectory()) return resolved;
+    } catch {}
+    throw new ApiError(400, 'PROJECT_NOT_ALLOWED');
+  }
+
   async function sendToPane(item, args) {
     // -F tests a tmux format, without invoking a shell. The command branches
     // contain only fixed words and verified pane IDs, never input text.
@@ -161,30 +205,62 @@ export function createTerminals(dataDir, options = {}) {
     if (output.trim() === 'PONTE_INPUT_BLOCKED') throw new ApiError(409, 'TERMINAL_IN_COPY_MODE');
     if (output.trim()) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
   }
+
+  async function pasteText(item, text, enter) {
+    // Serialized operations reuse one private buffer, so an interrupted
+    // client cannot accumulate unbounded named tmux buffers.
+    const buffer = 'ponte_input';
+    try {
+      await command(['load-buffer', '-b', buffer, '-'], text);
+      await sendToPane(item, ['paste-buffer', '-d', '-p', '-r', '-b', buffer, '-t', item.paneId]);
+      if (enter) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
+    }
+    catch (error) { await command(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
+  }
   return {
+    // The most recently changed project folders, by name only, for the phone
+    // to offer as the new session's folder. It never needs tmux.
+    async projects() {
+      let parent, entries;
+      try { parent = await realpath(projectsDirectory); entries = await readdir(parent, { withFileTypes: true }); } catch { return { projects: [] }; }
+      const dated = await Promise.all(entries.filter(entry => entry.isDirectory() && projectPattern.test(entry.name)).map(async entry => {
+        try { return { name: entry.name, changed: (await stat(path.join(parent, entry.name))).mtimeMs }; } catch { return null; }
+      }));
+      return { projects: dated.filter(Boolean).sort((a, b) => b.changed - a.changed || a.name.localeCompare(b.name)).slice(0, PROJECT_LIMIT).map(item => item.name) };
+    },
     list() {
       return run(async available => ({ available, sessions: available ? (await sessions()).filter(item => item.valid).map(summary) : [], limit: TERMINAL_LIMIT }));
     },
     create(value) {
-      const { cols, rows } = dimensions(value);
+      const { cols, rows } = dimensions(value, ['agent', 'prompt', 'project']);
+      const start = sessionStart(value);
+      const { program } = agents[start.agent];
       return run(async available => {
         if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
         await sessions();
         if (liveSessionCount >= TERMINAL_LIMIT) throw new ApiError(409, 'TERMINAL_LIMIT_REACHED');
+        const directory = await projectDirectory(start.project);
+        if (program && !await exists(program, env)) throw new ApiError(503, 'AGENT_UNAVAILABLE', { agent: agents[start.agent].title });
         const id = randomBytes(12).toString('hex');
-        const title = [1, 2, 3, 4].map(number => `Terminal ${number}`).find(title => !registry.some(item => item.title === title));
+        // One number per slot, whatever runs in it: Claude 1, Terminal 2, Codex 3.
+        const number = [1, 2, 3, 4].find(number => !registry.some(item => item.title.endsWith(` ${number}`)));
+        const title = `${agents[start.agent].title} ${number}`;
+        const launch = program ? ['--', ...agentLauncher, program, ...(start.prompt === undefined ? [] : [start.prompt])] : [];
         let pane;
         try {
           const output = await command([
             'start-server', ';', 'set-option', '-g', 'set-clipboard', 'off',
             ';', 'set-option', '-g', 'history-limit', '1000', ';', 'set-option', '-g', 'status', 'off',
-            ';', 'new-session', '-d', '-P', '-F', format, '-s', `ponte_${id}`, '-n', 'terminal', '-c', shellDirectory, '-x', String(cols), '-y', String(rows),
+            ';', 'new-session', '-d', '-P', '-F', format, '-s', `ponte_${id}`, '-n', 'terminal', '-c', directory, '-x', String(cols), '-y', String(rows), ...launch,
           ]);
           const parsed = parsePanes(output);
           [pane] = parsed;
           if (parsed.length !== 1 || pane.name !== `ponte_${id}`) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
           registry.push({ id, title, paneId: pane.paneId, windowId: pane.windowId });
           await save();
+          // A shell's first line is typed like the composer does; the pty holds
+          // it until the shell reads its input, then Enter runs it.
+          if (!program && start.prompt !== undefined) await pasteText(pane, start.prompt, true);
         } catch (error) {
           registry = registry.filter(item => item.id !== id);
           await discardNewSession(id);
@@ -217,22 +293,13 @@ export function createTerminals(dataDir, options = {}) {
       if (textInput === keyInput) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
       if (keyInput && Object.hasOwn(value, 'enter')) throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
       if (Object.hasOwn(value, 'enter') && typeof value.enter !== 'boolean') throw new ApiError(400, 'INVALID_TERMINAL_INPUT');
-      if (textInput && (typeof value.text !== 'string' || value.text.length < 1 || value.text.length > 4000 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(value.text) || !value.text.isWellFormed())) throw new ApiError(400, 'INVALID_TEXT');
+      if (textInput && !validText(value.text)) throw new ApiError(400, 'INVALID_TEXT');
       if (keyInput && (typeof value.key !== 'string' || !Object.hasOwn(keys, value.key))) throw new ApiError(400, 'KEY_NOT_ALLOWED');
       return run(async available => {
         const item = await target(id, available);
         if (item.inMode) throw new ApiError(409, 'TERMINAL_IN_COPY_MODE');
-        if (textInput) {
-          // Serialized operations reuse one private buffer, so an interrupted
-          // client cannot accumulate unbounded named tmux buffers.
-          const buffer = 'ponte_input';
-          try {
-            await command(['load-buffer', '-b', buffer, '-'], value.text);
-            await sendToPane(item, ['paste-buffer', '-d', '-p', '-r', '-b', buffer, '-t', item.paneId]);
-            if (value.enter === true) await sendToPane(item, ['send-keys', '-t', item.paneId, 'Enter']);
-          }
-          catch (error) { await command(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
-        } else await sendToPane(item, ['send-keys', '-t', item.paneId, keys[value.key]]);
+        if (textInput) await pasteText(item, value.text, value.enter === true);
+        else await sendToPane(item, ['send-keys', '-t', item.paneId, keys[value.key]]);
         return { ok: true };
       });
     },

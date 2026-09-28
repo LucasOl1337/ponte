@@ -281,3 +281,40 @@ test('Terminal text remains readable above empty pane rows and relocalizes witho
  assert.equal(h.el('#terminal-input').value,'Unsent terminal draft');
  assert.ok(h.calls.every(call=>!call.options.method||call.options.method==='GET'));
 });
+
+test('Home start-work opens an agent session with the reviewed request and lands on it in Terminals',async()=>{
+ const session={id:'abcdef0123456789abcdef01',title:'Codex 1',cols:40,rows:24,inMode:false,attachCommand:'x'};
+ const created=[];let refuse=false;
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path,options)=>{
+  if(path==='/api/terminals'&&options.method==='POST'){created.push(JSON.parse(options.body));if(refuse)return{ok:false,status:503,json:async()=>({errorCode:'AGENT_UNAVAILABLE',errorParameters:{agent:'Claude'},error:'Claude is not installed on the PC.'})};return{ok:true,json:async()=>session};}
+  if(path==='/api/terminals?projects=1')return{ok:true,json:async()=>({projects:['ponte','dailywork']})};
+  if(path==='/api/terminals')return{ok:true,json:async()=>({available:true,sessions:created.length?[session]:[],limit:4})};
+  if(path.startsWith('/api/terminals/'))return{ok:true,json:async()=>({...session,text:'codex> '})};
+  return{ok:true,json:async()=>fixture};
+ }});await flush();
+ h.run("navigate('inicio')");await flush();
+ assert.equal(h.el('[data-start-agent="claude"]').getAttribute('aria-checked'),'true','Claude is the default');
+ h.el('[data-start-agent="codex"]').click();
+ assert.equal(h.el('[data-start-agent="codex"]').getAttribute('aria-checked'),'true');
+ assert.equal(h.saved.get('ponte-start-agent'),'codex');
+ assert.deepEqual(h.el('#start-project').querySelectorAll('option').map(option=>option.getAttribute('value')),['','ponte','dailywork']);
+ assert.equal(h.calls.filter(call=>call.path==='/api/terminals?projects=1').length,1,'projects are fetched once');
+ h.el('#start-project').value='ponte';
+ const box=h.el('#start-prompt');box.value='  corrige o teste\nque falha  ';
+ h.el('#start-go').click();await flush();await flush();
+ assert.deepEqual(created.at(-1),{cols:40,rows:24,agent:'codex',prompt:'corrige o teste\nque falha',project:'ponte'});
+ assert.equal(h.run('currentPage'),'terminais');
+ assert.equal(h.run('terminalId'),session.id);
+ assert.equal(box.value,'','the request is cleared once the session exists');
+ // A shell gets one line; an empty request is simply omitted.
+ h.run("navigate('inicio')");h.el('#start-project').value='';h.el('[data-start-agent="shell"]').click();
+ box.value='git status\n  && ls';h.el('#start-go').click();await flush();await flush();
+ assert.deepEqual(created.at(-1),{cols:40,rows:24,agent:'shell',prompt:'git status && ls'});
+ h.run("navigate('inicio')");h.el('[data-start-agent="claude"]').click();box.value='   ';
+ refuse=true;h.el('#start-go').click();await flush();await flush();
+ assert.deepEqual(created.at(-1),{cols:40,rows:24,agent:'claude'});
+ assert.equal(h.run('currentPage'),'inicio','a refused start stays on Home');
+ assert.equal(h.el('#start-dictate-status').hidden,false);
+ assert.match(h.el('#start-dictate-status').textContent,/Claude is not installed on the PC/);
+ assert.equal(h.el('#start-go').disabled,false);
+});

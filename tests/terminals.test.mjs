@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { mkdtemp, mkdir, readFile, writeFile, stat, rm, access, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, stat, rm, access, symlink, realpath, chmod } from 'node:fs/promises';
 import { createTerminals, TERMINAL_TEXT_LIMIT } from '../backend/terminals.mjs';
 import { createApp } from '../server.mjs';
 import { ApiError, commandExists, runCommand } from '../backend/process.mjs';
@@ -94,6 +94,77 @@ test('explicit create is serialized, limited to four, uses a private socket and 
   const restored = createTerminals(root, mock);
   assert.deepEqual(await restored.list(), list);
   await restored.close();
+});
+
+test('a session can start an allowlisted agent with the request as one argv word, never shell text', async t => {
+  const { root, mock, terminals } = await fixture(t);
+  const looked = [];
+  const agentTerminals = createTerminals(root, { ...mock, exists: async (name, env) => { looked.push(name); assert.equal(env.TMUX, undefined); return true; } });
+  t.after(() => agentTerminals.close());
+  const prompt = "revisa o README; $(touch /tmp/pwned) `id` #{pane_id} -- -t %9\nsegunda linha";
+  const claude = await agentTerminals.create({ cols: 80, rows: 24, agent: 'claude', prompt });
+  const codex = await agentTerminals.create({ cols: 80, rows: 24, agent: 'codex' });
+  const shell = await agentTerminals.create({ cols: 80, rows: 24, agent: 'shell' });
+  assert.deepEqual([claude.title, codex.title, shell.title], ['Claude 1', 'Codex 2', 'Terminal 3']);
+  assert.deepEqual(looked, ['tmux', 'claude', 'tmux', 'codex', 'tmux']);
+  const launches = mock.calls.filter(call => call.args.includes('new-session')).map(call => call.args.slice(call.args.indexOf('-y') + 2));
+  assert.deepEqual(launches, [
+    ['--', '/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent', 'claude', prompt],
+    ['--', '/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent', 'codex'],
+    [],
+  ]);
+  // The request is only ever the last argv word; nothing is typed or buffered.
+  assert.equal(mock.calls.some(call => ['load-buffer', 'paste-buffer', 'send-keys'].some(word => call.argv.includes(word))), false);
+  await agentTerminals.remove(claude.id);
+  assert.equal((await agentTerminals.create({ cols: 80, rows: 24, agent: 'codex' })).title, 'Codex 1');
+  await agentTerminals.close();
+  const restored = createTerminals(root, mock);
+  t.after(() => restored.close());
+  assert.deepEqual((await restored.list()).sessions.map(item => item.title), ['Codex 2', 'Terminal 3', 'Codex 1']);
+});
+
+test('agents, requests and projects outside the allowlist fail before any command', async t => {
+  const { mock, terminals } = await fixture(t);
+  const base = { cols: 80, rows: 24 };
+  for (const agent of ['bash', 'sh', 'Claude', 'claude ', 'claude; rm -rf ~', '__proto__', 'toString', '', 1, null, ['claude']]) {
+    assert.throws(() => terminals.create({ ...base, agent }), { code: 'AGENT_NOT_ALLOWED' });
+  }
+  for (const [agent, prompt] of [['claude', ''], ['claude', '   '], ['claude', '-p leak'], ['codex', ' --yolo'], ['claude', 'a\rb'], ['claude', '\x1b[2J'], ['claude', 'x'.repeat(4001)], ['claude', '\ud800'], ['claude', 42], ['shell', 'a\nb'], ['shell', ''], [undefined, null]]) {
+    assert.throws(() => terminals.create({ ...base, ...(agent ? { agent } : {}), prompt }), { code: 'INVALID_PROMPT' }, `${agent} ${JSON.stringify(prompt)}`);
+  }
+  for (const project of ['', '.', '..', '../etc', 'a/b', '.ssh', '-x', 'x'.repeat(65), 5, null]) {
+    assert.throws(() => terminals.create({ ...base, agent: 'claude', project }), { code: 'PROJECT_NOT_ALLOWED' });
+  }
+  assert.throws(() => terminals.create({ ...base, agent: 'claude', command: 'sh' }), { code: 'INVALID_TERMINAL_SIZE' });
+  assert.equal(mock.calls.length, 0);
+});
+
+test('a missing agent or project starts nothing, and a project resolves inside ~/Projects only', async t => {
+  const root = await temporary(t), mock = mockedTmux();
+  const projects = path.join(root, 'Projects');
+  await mkdir(path.join(projects, 'ponte'), { recursive: true });
+  await mkdir(path.join(root, 'outside'));
+  await symlink(path.join(root, 'outside'), path.join(projects, 'escape'));
+  await writeFile(path.join(projects, 'notes.txt'), '');
+  const terminals = createTerminals(root, { ...mock, projectsDir: projects, exists: async name => name === 'tmux' });
+  t.after(() => terminals.close());
+  await assert.rejects(terminals.create({ cols: 80, rows: 24, agent: 'codex' }), { code: 'AGENT_UNAVAILABLE', message: 'Codex is not installed on the PC.' });
+  for (const project of ['escape', 'notes.txt', 'missing']) await assert.rejects(terminals.create({ cols: 80, rows: 24, project }), { code: 'PROJECT_NOT_ALLOWED' });
+  assert.equal(mock.calls.some(call => call.args.includes('new-session')), false);
+  await terminals.create({ cols: 80, rows: 24, project: 'ponte' });
+  const created = mock.calls.find(call => call.args.includes('new-session')).args;
+  assert.equal(created[created.indexOf('-c') + 1], path.join(await realpath(projects), 'ponte'));
+});
+
+test('a shell started with a first line types it through the buffer and runs it', async t => {
+  const { mock, terminals } = await fixture(t);
+  const session = await terminals.create({ cols: 80, rows: 24, agent: 'shell', prompt: 'git status; $(echo x)' });
+  assert.equal(session.title, 'Terminal 1');
+  assert.equal(mock.calls.find(call => call.args[0] === 'load-buffer').options.input, 'git status; $(echo x)');
+  assert.equal(mock.calls.some(call => call.argv.some(arg => arg.includes('echo x'))), false);
+  const pasteIndex = mock.calls.findIndex(call => call.argv.includes('paste-buffer'));
+  const enterIndex = mock.calls.findIndex(call => call.argv.includes('send-keys') && call.argv.includes('Enter'));
+  assert.ok(pasteIndex >= 0 && enterIndex > pasteIndex);
 });
 
 test('literal input goes through stdin and isolated tmux buffer, with no implicit Enter', async t => {
@@ -323,6 +394,12 @@ test('terminal HTTP endpoints inherit authentication, origin, content bounds and
   assert.deepEqual(await (await request(`/api/terminals/${session.id}/input`, 'POST', { text: 'hello' })).json(), { ok: true });
   assert.equal((await request(`/api/terminals/${session.id}/resize`, 'POST', { cols: 40, rows: 16 })).status, 200);
   assert.equal((await request(`/api/terminals/${session.id}`, 'DELETE')).status, 200);
+  const agent = await request('/api/terminals', 'POST', { cols: 40, rows: 24, agent: 'codex', prompt: 'olá' });
+  assert.equal(agent.status, 201);
+  assert.equal((await agent.json()).title, 'Codex 1');
+  const refused = await request('/api/terminals', 'POST', { cols: 40, rows: 24, agent: 'bash' }, { 'Accept-Language': 'pt' });
+  assert.equal(refused.status, 400);
+  assert.deepEqual(await refused.json(), { errorCode: 'AGENT_NOT_ALLOWED', errorParameters: {}, error: 'Escolha Claude, Codex ou Terminal para começar uma sessão.' });
 });
 
 test('real isolated tmux proves Unicode, no implicit execution, resize, reopen and cleanup', async t => {
@@ -372,4 +449,71 @@ test('real isolated tmux proves Unicode, no implicit execution, resize, reopen a
   const replacement = await reopened.create({ cols: 60, rows: 20 });
   assert.notEqual(replacement.id, session.id);
   await reopened.remove(replacement.id);
+});
+
+test('real isolated tmux runs a fake agent with the literal request in its project, then keeps a shell', async t => {
+  if (!await commandExists('tmux')) { t.skip('tmux is not installed'); return; }
+  const root = await temporary(t, false);
+  const bin = path.join(root, 'bin');
+  await mkdir(bin); await mkdir(path.join(root, 'Projects', 'demo'), { recursive: true });
+  // A stand-in for the agent CLI: records its argv and folder, then exits.
+  await writeFile(path.join(bin, 'claude'), '#!/bin/sh\nprintf "%s" "$PWD" > "$HOME/agent-cwd"\nfor word in "$@"; do printf "[%s]" "$word"; done > "$HOME/agent-argv"\n');
+  await chmod(path.join(bin, 'claude'), 0o700);
+  const env = { PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_RUNTIME_DIR: root, SHELL: '/bin/sh', TERM: 'xterm-256color', LANG: 'C.UTF-8' };
+  const socketPath = path.join(root, 'terminals', 'tmux.sock');
+  const terminals = createTerminals(root, { env });
+  t.after(async () => {
+    await terminals.close();
+    await runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', 'kill-server'], { env }).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  });
+  const marker = path.join(root, 'pwned');
+  const prompt = `corrige o bug; $(touch '${marker}') \`touch '${marker}'\` "aspas" 'simples' $HOME\ncom quebra`;
+  const session = await terminals.create({ cols: 80, rows: 24, agent: 'claude', prompt, project: 'demo' });
+  assert.equal(session.title, 'Claude 1');
+  let argv;
+  for (let tries = 0; tries < 80 && argv === undefined; tries++) {
+    try { argv = await readFile(path.join(root, 'agent-argv'), 'utf8'); } catch { await new Promise(resolve => setTimeout(resolve, 25)); }
+  }
+  assert.equal(argv, `[${prompt}]`);
+  assert.equal(await readFile(path.join(root, 'agent-cwd'), 'utf8'), path.join(await realpath(root), 'Projects', 'demo'));
+  await assert.rejects(access(marker), { code: 'ENOENT' });
+  // The agent exited; the session is still there with a usable shell.
+  const after = await terminals.list();
+  assert.deepEqual(after.sessions.map(item => item.id), [session.id]);
+  const done = path.join(root, 'shell-ok');
+  await terminals.input(session.id, { text: `touch '${done}'`, enter: true });
+  for (let tries = 0; tries < 80; tries++) { try { await access(done); break; } catch { await new Promise(resolve => setTimeout(resolve, 25)); } }
+  await access(done);
+  await terminals.remove(session.id);
+});
+
+test('projects lists recent ~/Projects folders by name only, without tmux, and HTTP serves them on request', async t => {
+  const root = await temporary(t), mock = mockedTmux();
+  const projects = path.join(root, 'Projects');
+  await mkdir(projects);
+  const { utimes } = await import('node:fs/promises');
+  for (const [index, name] of ['old', 'ponte', 'new-one', '.hidden', 'com espaço'].entries()) {
+    await mkdir(path.join(projects, name));
+    await utimes(path.join(projects, name), 1000 + index, 1000 + index);
+  }
+  await writeFile(path.join(projects, 'notes.txt'), '');
+  await mkdir(path.join(root, 'outside'));
+  await symlink(path.join(root, 'outside'), path.join(projects, 'link'));
+  const terminals = createTerminals(root, { ...mock, projectsDir: projects });
+  t.after(() => terminals.close());
+  assert.deepEqual(await terminals.projects(), { projects: ['new-one', 'ponte', 'old'] });
+  assert.equal(mock.calls.length, 0);
+  const missing = createTerminals(root, { ...mock, projectsDir: path.join(root, 'none') });
+  assert.deepEqual(await missing.projects(), { projects: [] });
+  await mkdir(path.join(root, 'public'));
+  await writeFile(path.join(root, 'public', 'index.html'), '<title>Test</title>');
+  const token = 'synthetic_terminal_token_abcdefghijklmnopqrstuvwxyz';
+  const app = await createApp({ rootDir: root, dataDir: path.join(root, 'state'), token, terminals, desktop: { close() {} }, audio: { close() {} } });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => app.close());
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  assert.equal((await fetch(`${base}/api/terminals?projects=1`)).status, 401);
+  assert.deepEqual(await (await fetch(`${base}/api/terminals?projects=1`, { headers: { Authorization: `Bearer ${token}` } })).json(), { projects: ['new-one', 'ponte', 'old'] });
+  assert.deepEqual(await (await fetch(`${base}/api/terminals`, { headers: { Authorization: `Bearer ${token}` } })).json(), { available: true, sessions: [], limit: 4 });
 });
