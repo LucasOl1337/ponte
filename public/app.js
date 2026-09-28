@@ -52,13 +52,25 @@ function toast(message, error = false) {
   toastTimer = setTimeout(() => { element.hidden = true; }, error ? 6500 : 3300);
 }
 
+// The device being controlled: empty is the node serving this page. Any other
+// id makes every /api call carry node=<id>, which that node relays over its
+// pinned link. This is the one place the choice is applied; `home` keeps a
+// call (the mesh actions) on the serving node.
+let targetNode = '';
+let meshInfo = null;
+function apiUrl(path, home = false) {
+  if (!targetNode || home) return `/api${path}`;
+  return `/api${path}${path.includes('?') ? '&' : '?'}node=${encodeURIComponent(targetNode)}`;
+}
+const monitorKey = () => targetNode ? `ponte-monitor:${targetNode}` : 'ponte-monitor';
+
 async function api(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeout || 15000);
   const requestToken = token;
   const headers = {'Accept-Language':i18n.locale,Authorization: `Bearer ${requestToken}`, ...options.headers};
   try {
-    const response = await fetch(`/api${path}`, { ...options, headers, signal: controller.signal, cache: 'no-store' });
+    const response = await fetch(apiUrl(path, options.home), { ...options, headers, signal: controller.signal, cache: 'no-store' });
     if (!response.ok) {
       let message = t("Não foi possível concluir a ação.");
       let details;
@@ -123,6 +135,102 @@ async function lightsAction(type, payload = {}, feedback = '') {
     return true;
   } catch (error) { toast(error, true); setTimeout(pollState, 180); return false; }
 }
+
+// ------------------------------------------------------------------- devices
+// The home node lists the other Ponte nodes on the tailnet (inside /api/state,
+// the only route the phone's proxy has for it) and runs the mesh.* actions.
+let meshSignature = '';
+const meshSelf = () => meshInfo?.self || null;
+const meshPeer = id => (meshInfo?.peers || []).find(peer => peer.id === id) || null;
+function targetName() {
+  if (!targetNode) return meshSelf()?.name || state?.hostname || '';
+  return meshPeer(targetNode)?.name || state?.node?.name || targetNode;
+}
+function renderMesh() {
+  const peers = meshInfo?.peers || [];
+  const requests = meshInfo?.requests || [];
+  const controllers = meshInfo?.controllers || [];
+  const signature = JSON.stringify([meshInfo, targetNode, i18n.language]);
+  if (signature === meshSignature) return;
+  meshSignature = signature;
+  const self = meshSelf();
+  const paired = peers.filter(peer => peer.paired);
+  // The selector: this device plus paired ones, online or not.
+  const select = $('#node-select');
+  $('#node-choice').hidden = !self || (!paired.length && !targetNode);
+  if (self) {
+    select.innerHTML = [`<option value="">${escaped(t('{name} · este aparelho',{name:self.name}))}</option>`]
+      .concat(paired.map(peer => `<option value="${escaped(peer.id)}">${escaped(peer.online ? peer.name : t('{name} · offline',{name:peer.name}))}</option>`)).join('');
+    select.value = targetNode;
+  }
+  const badge = $('#node-badge');
+  badge.hidden = !targetNode;
+  if (targetNode) { badge.textContent = targetName(); badge.setAttribute('aria-label',t('Controlando {name}. Trocar de aparelho',{name:targetName()})); badge.setAttribute('title',t('Controlando {name}',{name:targetName()})); }
+  $('#mesh-card').hidden = !self;
+  if (!self) return;
+  $('#mesh-requests').innerHTML = requests.map(item => `<div class="mesh-row mesh-request"><div><strong>${escaped(t('{name} pede para controlar este aparelho',{name:item.name}))}</strong><span>${escaped(t('Código {code}',{code:item.code}))}</span></div><div class="mesh-buttons"><button type="button" class="button small primary" data-mesh-approve="${escaped(item.code)}">${h('Aprovar')}</button><button type="button" class="button small" data-mesh-deny="${escaped(item.code)}">${h('Negar')}</button></div></div>`).join('');
+  $('#mesh-peers').innerHTML = peers.length ? peers.map(peer => {
+    const status = peer.pairing?.status === 'pending' ? t('Aguardando aprovação · código {code}',{code:peer.pairing.code})
+      : peer.pairing?.status === 'denied' ? t('Pedido negado.') : peer.pairing?.status === 'expired' ? t('Pedido expirou.')
+      : peer.paired ? (peer.online ? t('Emparelhado · online') : t('Emparelhado · offline')) : t('Disponível');
+    const buttons = peer.paired
+      ? `${peer.id === targetNode ? '' : `<button type="button" class="button small primary" data-mesh-control="${escaped(peer.id)}">${h('Controlar')}</button>`}<button type="button" class="button small danger-subtle" data-mesh-revoke="${escaped(peer.id)}">${h('Revogar')}</button>`
+      : peer.pairing?.status === 'pending' ? '' : `<button type="button" class="button small primary" data-mesh-pair="${escaped(peer.id)}">${h('Pedir acesso')}</button>`;
+    return `<div class="mesh-row${peer.id === targetNode ? ' current' : ''}"><div><strong>${escaped(peer.name)}</strong><span>${escaped(status)}</span></div><div class="mesh-buttons">${buttons}</div></div>`;
+  }).join('') : `<p class="hint">${h('Nenhum outro aparelho com Ponte no seu Tailscale.')}</p>`;
+  $('#mesh-controllers').innerHTML = controllers.length ? `<span class="small-label">${h('QUEM CONTROLA ESTE APARELHO')}</span>` + controllers.map(item => `<div class="mesh-row"><div><strong>${escaped(item.name)}</strong><span>${escaped(item.ip || '')}</span></div><div class="mesh-buttons"><button type="button" class="button small danger-subtle" data-mesh-revoke="${escaped(item.id)}">${h('Revogar')}</button></div></div>`).join('') : '';
+}
+function setTargetNode(id) {
+  const next = id && id !== meshSelf()?.id ? id : '';
+  if (next === targetNode) return;
+  const restart = !!liveSession || liveWanted;
+  targetNode = next;
+  // Everything on screen belonged to the other device: start clean there.
+  stopLive(); cancelSnapshot(); clearScreenImage(); setScreenStatus('idle');
+  monitorSignature = ''; windowSignature = ''; workspaceSignature = ''; screenWorkspaceSignature = ''; renderedAllOnce = false;
+  $('#monitor-select').innerHTML = '';
+  clearTimeout(terminalTimer); terminalGeneration++; terminalDrafts.clear(); terminalId = ''; terminalSessions = []; terminalText = null;
+  clearTimeout(devTimer); devGeneration++; devId = ''; devSessions = []; devHash = ''; devHashId = '';
+  liveWanted = restart;
+  renderMesh();
+  toast(t('Agora controlando {name}.',{name:targetName()}));
+  updateTerminalNavigation(); updateDevNavigation();
+  pollState();
+}
+async function meshAction(type, payload) {
+  try {
+    const response = await api('/action', { method:'POST', home:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify({type,...payload}) });
+    const result = await response.json();
+    setTimeout(pollState, 150);
+    return result;
+  } catch (error) { toast(error, true); return null; }
+}
+$('#node-select').addEventListener('change', event => setTargetNode(event.target.value));
+$('#node-badge').addEventListener('click', () => { navigate('inicio'); $('#mesh-card').scrollIntoView?.({block:'start'}); });
+document.addEventListener('click', async event => {
+  const control = event.target.closest('[data-mesh-control]');
+  if (control) { setTargetNode(control.dataset.meshControl); navigate('tela'); return; }
+  const button = event.target.closest('[data-mesh-pair],[data-mesh-approve],[data-mesh-deny],[data-mesh-revoke]');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    if (button.dataset.meshPair) {
+      const peer = meshPeer(button.dataset.meshPair);
+      const result = await meshAction('mesh.pair', { peer: button.dataset.meshPair });
+      if (result?.code) toast(t('Código {code}: aprove no {name}.',{code:result.code,name:result.peer?.name || peer?.name || ''}));
+    } else if (button.dataset.meshApprove) {
+      const result = await meshAction('mesh.approve', { code: button.dataset.meshApprove });
+      if (result?.approved) toast(t('Aprovado: {name} já pode controlar este aparelho.',{name:result.approved.name}));
+    } else if (button.dataset.meshDeny) {
+      const result = await meshAction('mesh.deny', { code: button.dataset.meshDeny });
+      if (result?.denied) toast(t('Pedido de {name} negado.',{name:result.denied.name}));
+    } else if (button.dataset.meshRevoke) {
+      const id = button.dataset.meshRevoke;
+      const result = await meshAction('mesh.revoke', { peer: id });
+      if (result?.revoked) { toast(t('Acesso com {name} revogado.',{name:result.revoked.name})); if (targetNode === id) setTargetNode(''); }
+    }
+  } finally { button.disabled = false; }
+});
 
 function showPairing(error = '') {
   leaveScreen(); clearScreenImage(); cancelPendingRecording();
@@ -214,10 +322,10 @@ function renderState() {
   const nextMonitorSignature = JSON.stringify([monitors,i18n.language]);
   if (monitorSignature !== nextMonitorSignature) {
     monitorSignature = nextMonitorSignature;
-    const selected = $('#monitor-select').value || savedPreference('ponte-monitor');
+    const selected = $('#monitor-select').value || savedPreference(monitorKey());
     $('#monitor-select').innerHTML = monitors.length ? monitors.map(m => `<option value="${escaped(m.name)}">${escaped(m.name)} · ${Number(m.width)} × ${Number(m.height)}${m.focused ? t(" · em foco") : ''}</option>`).join('') : `<option value="">${escaped(t("Nenhum monitor disponível"))}</option>`;
     const next = monitors.find(m => m.name === selected) || monitors.find(m => m.focused) || monitors[0];
-    if (next) { $('#monitor-select').value = next.name; if (!savedPreference('ponte-monitor')) savePreference('ponte-monitor',next.name); }
+    if (next) { $('#monitor-select').value = next.name; if (!savedPreference(monitorKey())) savePreference(monitorKey(),next.name); }
     if (selected && next?.name !== selected) { liveWanted = false; stopLive(t("Monitor alterado. Inicie a transmissão do monitor escolhido.")); cancelSnapshot(); clearScreenImage(); }
     $('#viewer-monitor-name').textContent = next?.name || t("Nenhum monitor");
   }
@@ -283,13 +391,15 @@ async function pollState() {
   // While the Android app is paused its proxy refuses requests; a poll then
   // would only mark the PC offline. Resume polls again.
   if (!token || polling || document.hidden || nativePaused) return;
-  const requestToken = token;
+  const requestToken = token, requestNode = targetNode;
   polling = true;
   try {
     const response = await api('/state', {timeout:10000});
     const nextState = await response.json();
-    if (requestToken !== token) return;
+    if (requestToken !== token || requestNode !== targetNode) return;
     state = nextState;
+    if (state.mesh) meshInfo = state.mesh;
+    renderMesh();
     if (state.version && state.version !== UI_VERSION && typeof location.reload === 'function') {
       let guard = '';
       try { guard = sessionStorage.getItem('ponte-reloaded-for') || ''; } catch {}
@@ -301,8 +411,12 @@ async function pollState() {
     if (currentPage === 'voz' && !audioLoaded) loadAudio();
     if (typeof state.textInput?.focused === 'boolean') markTextFocus(state.textInput.focused);
     if (currentPage === 'terminais') renderDesktopTerminals();
-  } catch (error) { if (token && requestToken === token) setConnection(false, error); }
-  finally { polling = false; }
+  } catch (error) {
+    // The link to that device is gone (revoked there, or forgotten here): back home.
+    if (targetNode && requestNode === targetNode && ['PEER_REVOKED','MESH_PEER_NOT_FOUND'].includes(error.errorCode)) { setTargetNode(''); toast(error, true); return; }
+    if (token && requestToken === token && requestNode === targetNode) setConnection(false, error);
+  }
+  finally { polling = false; if (requestNode !== targetNode) setTimeout(pollState, 0); }
 }
 
 // Each poll used to rebuild every page's lists (windows, workspaces, lights,
@@ -894,7 +1008,7 @@ function leaveScreen() { resetRemoteInput(); stopLive(); cancelSnapshot(); close
 async function screenResponse(path,controller) {
   const requestToken = token;
   let response;
-  try { response = await fetch(`/api${path}`,{headers:{'Accept-Language':i18n.locale,Authorization:`Bearer ${requestToken}`},signal:controller.signal,cache:'no-store'}); }
+  try { response = await fetch(apiUrl(path),{headers:{'Accept-Language':i18n.locale,Authorization:`Bearer ${requestToken}`},signal:controller.signal,cache:'no-store'}); }
   catch (error) { if (error instanceof TypeError) throw new Error(t('Sem resposta do PC. Confira o Tailscale e a conexão.')); throw error; }
   if (!response.ok) {
     let message = t("Não foi possível abrir o monitor.");
@@ -1002,7 +1116,7 @@ function startLive() {
 }
 $('#monitor-select').addEventListener('change',() => {
   const restart = !!liveSession || liveWanted;
-  savePreference('ponte-monitor',$('#monitor-select').value);
+  savePreference(monitorKey(),$('#monitor-select').value);
   screenScale = 1; screenPanX = screenPanY = 0;
   stopLive(); cancelSnapshot(); clearScreenImage();
   $('#viewer-monitor-name').textContent = $('#monitor-select').value || t("Monitor do PC");
@@ -1730,7 +1844,7 @@ $('#agent-view').addEventListener('click', async () => {
   closeAgent();
   if (await action('window.focus',{address:item.where.address})) {
     const monitor = (state && state.monitors || []).filter(m => m.id === item.where.monitor)[0];
-    if (monitor) { $('#monitor-select').value = monitor.name; savePreference('ponte-monitor',monitor.name); }
+    if (monitor) { $('#monitor-select').value = monitor.name; savePreference(monitorKey(),monitor.name); }
     navigate('tela');
   }
 });
@@ -2115,7 +2229,7 @@ document.addEventListener('click',async event => {
     const target = (state?.windows || []).find(w => w.address === preview.dataset.previewWindow);
     if (target && await action('window.focus',{address:target.address})) {
       const monitor = (state.monitors || []).find(m => m.id === target.monitor);
-      if (monitor) { $('#monitor-select').value = monitor.name; savePreference('ponte-monitor',monitor.name); }
+      if (monitor) { $('#monitor-select').value = monitor.name; savePreference(monitorKey(),monitor.name); }
       navigate('tela');
     }
   }

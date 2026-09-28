@@ -21,3 +21,11 @@ The synthetic monitor shows a coordinate grid, targets A/B (text fields: a left 
 - Lights: the lab never runs the owner's Magma controller (it drives the real RGB). `PONTE_LAB_MAGMA=<folder with a controller.py copy>` runs that copy through `magma.py` with its state and `telinha` under `$PONTE_LAB_DIR/magma-home`, against the fake `openrgb`, which behaves like 1.0rc3: one missing `--device` aborts the whole call. `PONTE_LAB_OPENRGB_DEVICES` ('|'-separated) is what is on the bus (default: this PC without the sleeping G515 keyboard); `PONTE_LAB_OPENRGB_FAIL` names devices whose write fails; `PONTE_LAB_OPENRGB_DELAY=5` adds the per-call detection time of the real CLI.
 
 `uwsm-app` (the Dev tab's "Abrir no PC") only logs the attach argv and never opens a window; `omarchy-shell lock isLocked` and `omarchy-system-lock` read and set `locked` in the lab's `state.json`, never the real PC's lock.
+
+## Two nodes (mesh)
+
+```sh
+node tools/lab/mesh.mjs      # pc-teste on 127.0.0.1:8799, notebook-teste on :8797, each prints its #pair= URL
+```
+
+Two real servers in one process, each with its own data, CA (`.work/lab-mesh/a|b/tls`), owner token and fake desktop; the synthetic monitor is titled with the node's name (`PONTE_LAB_TITLE`) and notebook-teste's is 1366x768. Their tailnet TLS listeners sit on 127.0.0.1:8798 and :8796, discovery points each at the other and the whois stand-in says "same owner" for 127.0.0.1, so pairing, the pinned CA and the `?node=` relay run the production code. On pc-teste: Home → Devices → Ask for access; approve the code on notebook-teste's own page; then pick notebook-teste in the selector and open the screen. `PONTE_LAB_MESH_DIR` and `PONTE_LAB_PORT_A|B`, `PONTE_LAB_NATIVE_A|B` move it.

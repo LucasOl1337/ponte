@@ -622,7 +622,33 @@
   "Novo Claude em {project}": "New Claude in {project}",
   "Texto longo demais: até {max} caracteres.": "Text too long: up to {max} characters.",
   "Imagem anexada: o caminho foi colado na sessão.": "Image attached: its path was pasted into the session.",
-  "Aberta numa janela do PC.": "Opened in a PC window."
+  "Aberta numa janela do PC.": "Opened in a PC window.",
+  "Controlar qual aparelho": "Control which device",
+  "APARELHOS": "DEVICES",
+  "{name} · este aparelho": "{name} · this device",
+  "{name} · offline": "{name} · offline",
+  "Controlando {name}": "Controlling {name}",
+  "Controlando {name}. Trocar de aparelho": "Controlling {name}. Switch device",
+  "{name} pede para controlar este aparelho": "{name} asks to control this device",
+  "Código {code}": "Code {code}",
+  "Aprovar": "Approve",
+  "Negar": "Deny",
+  "Aguardando aprovação · código {code}": "Waiting for approval · code {code}",
+  "Pedido negado.": "Request denied.",
+  "Pedido expirou.": "Request expired.",
+  "Emparelhado · online": "Paired · online",
+  "Emparelhado · offline": "Paired · offline",
+  "Controlar": "Control",
+  "Revogar": "Revoke",
+  "Pedir acesso": "Ask for access",
+  "Nenhum outro aparelho com Ponte no seu Tailscale.": "No other device with Ponte on your Tailscale.",
+  "QUEM CONTROLA ESTE APARELHO": "WHO CONTROLS THIS DEVICE",
+  "Agora controlando {name}.": "Now controlling {name}.",
+  "Código {code}: aprove no {name}.": "Code {code}: approve it on {name}.",
+  "Aprovado: {name} já pode controlar este aparelho.": "Approved: {name} can now control this device.",
+  "Pedido de {name} negado.": "{name}'s request denied.",
+  "Acesso com {name} revogado.": "Access with {name} revoked.",
+  "Aprovar e negar só no aparelho que vai ser controlado, nunca a partir de outro.": "Approve or deny only on the device that will be controlled, never from another one."
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
@@ -1089,6 +1115,58 @@
   "AUTOPAIR_DENIED": {
     "en": "This device is not on your tailnet, so it needs the pairing key.",
     "pt": "Este aparelho não está no seu tailnet, então precisa da chave de pareamento."
+  },
+  "MESH_NOT_OWNER": {
+    "en": "Only a device of this computer's owner on the tailnet, without tags, can ask for access.",
+    "pt": "Só um aparelho do dono deste computador no tailnet, sem tag, pode pedir acesso."
+  },
+  "MESH_INVALID_REQUEST": {
+    "en": "Invalid pairing request.",
+    "pt": "Pedido de pareamento inválido."
+  },
+  "MESH_TOO_MANY_REQUESTS": {
+    "en": "There are already 5 pending requests. Approve or deny one, or wait 10 minutes.",
+    "pt": "Já há 5 pedidos pendentes. Aprove ou negue um, ou espere 10 minutos."
+  },
+  "MESH_REQUEST_NOT_FOUND": {
+    "en": "This access request no longer exists. Ask again.",
+    "pt": "Este pedido de acesso não existe mais. Peça de novo."
+  },
+  "MESH_CODE_NOT_FOUND": {
+    "en": "No pending request has this code.",
+    "pt": "Nenhum pedido pendente tem esse código."
+  },
+  "MESH_OWNER_ONLY": {
+    "en": "Only this device's owner manages pairings, never another device.",
+    "pt": "Só o dono deste aparelho gerencia pareamentos, nunca outro aparelho."
+  },
+  "MESH_CHAIN_DENIED": {
+    "en": "A paired device cannot relay to a third device.",
+    "pt": "Um aparelho pareado não pode repassar para um terceiro."
+  },
+  "MESH_PEER_ADDRESS": {
+    "en": "This device key works only from the device it was approved for.",
+    "pt": "Esta chave de aparelho só vale do aparelho para o qual foi aprovada."
+  },
+  "MESH_PEER_NOT_FOUND": {
+    "en": "This device is not paired or was not found on the tailnet.",
+    "pt": "Este aparelho não está pareado ou não foi encontrado no tailnet."
+  },
+  "MESH_PEER_AMBIGUOUS": {
+    "en": "More than one device has this name. Use its id.",
+    "pt": "Mais de um aparelho tem esse nome. Use o id."
+  },
+  "PEER_OFFLINE": {
+    "en": "{name} is not answering. Check that it is on and on Tailscale.",
+    "pt": "{name} não está respondendo. Confira se está ligado e no Tailscale."
+  },
+  "PEER_REVOKED": {
+    "en": "{name} no longer accepts this device. Pair again.",
+    "pt": "{name} não aceita mais este aparelho. Pareie de novo."
+  },
+  "PEER_UNTRUSTED": {
+    "en": "{name} presented a certificate that does not match the one saved when pairing.",
+    "pt": "{name} apresentou um certificado diferente do salvo no pareamento."
   },
   "WOL_INSTRUCTIONS": {
     "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",
