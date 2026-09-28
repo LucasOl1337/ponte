@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { runCommand, ApiError } from './process.mjs';
 
 // Identity-based auto-pairing. A device already on the owner's tailnet does not
@@ -19,22 +20,55 @@ export function normalizePeerAddress(remoteAddress) {
   return isIP(address) ? address : null;
 }
 
-export function createTailscaleIdentity({ runner = runCommand, selfAddress, env = process.env, ttl = 15000, timeout = 2500, retryInterval = 5000 } = {}) {
+const isLoopback = address => address === '::1' || /^127\.\d+\.\d+\.\d+$/.test(address || '');
+
+// Browser auto-pairing through `tailscale serve`. Serve terminates HTTPS on the
+// tailnet name, proxies to the loopback listener and adds Tailscale-User-Login
+// for the tailnet user behind the request. It strips any copy the client sent,
+// and Funnel (public) traffic never carries it. On its own the header could be
+// forged by any local process, so it only counts when the other end of the
+// loopback connection is a socket owned by root, which here is tailscaled.
+// /proc/net/tcp lists that socket with our listener as its remote end.
+export function loopbackSocketOwner(peerPort, serverPort, read = readFileSync) {
+  if (!Number.isInteger(peerPort) || !Number.isInteger(serverPort)) return null;
+  const loopbackHex = /^([0-9A-F]{6}7F|0{16}FFFF0000[0-9A-F]{6}7F|0{24}01000000)$/i;
+  for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text;
+    try { text = read(file, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n').slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 8) continue;
+      const [localAddress, localPort] = fields[1].split(':');
+      const [remoteAddress, remotePort] = fields[2].split(':');
+      if (parseInt(localPort, 16) !== peerPort || parseInt(remotePort, 16) !== serverPort) continue;
+      if (!loopbackHex.test(localAddress) || !loopbackHex.test(remoteAddress)) continue;
+      const uid = Number(fields[7]);
+      return Number.isInteger(uid) ? uid : null;
+    }
+  }
+  return null;
+}
+
+export function createTailscaleIdentity({ runner = runCommand, selfAddress, env = process.env, ttl = 15000, timeout = 2500, retryInterval = 5000, socketOwner = loopbackSocketOwner } = {}) {
   const binary = env.PONTE_TAILSCALE_BIN || 'tailscale';
   const disabled = env.PONTE_TAILSCALE_AUTO === '0';
   let ownerUserId = null;
+  let ownerLogin = null;
   let ownerResolved = false;
   let ownerAttemptAt = 0;
   const cache = new Map();
 
-  async function whoisUser(address) {
+  async function whoisProfile(address) {
     const raw = await runner(binary, ['whois', '--json', address], { env, timeout, maxBuffer: 256 * 1024 });
     const parsed = JSON.parse(raw);
     // Tagged devices (servers, CI) have no human owner and must not auto-pair.
     if (Array.isArray(parsed?.Node?.Tags) && parsed.Node.Tags.length) return null;
     const user = parsed?.Node?.User ?? parsed?.UserProfile?.ID;
-    return typeof user === 'number' && user > 0 ? user : null;
+    if (typeof user !== 'number' || user <= 0) return null;
+    const login = parsed?.UserProfile?.LoginName;
+    return { user, login: typeof login === 'string' && login ? login : null };
   }
+  const whoisUser = async address => (await whoisProfile(address))?.user ?? null;
 
   // The daemon is often still coming up when this service starts at login
   // (the TLS listener itself waits for the tailnet address), so a failed whois
@@ -48,9 +82,11 @@ export function createTailscaleIdentity({ runner = runCommand, selfAddress, env 
     if (now - ownerAttemptAt < retryInterval) return ownerUserId;
     ownerAttemptAt = now;
     try {
-      ownerUserId = await whoisUser(selfAddress);
+      const owner = await whoisProfile(selfAddress);
+      ownerUserId = owner?.user ?? null;
+      ownerLogin = owner?.login ?? null;
       ownerResolved = true;
-    } catch { ownerUserId = null; }
+    } catch { ownerUserId = null; ownerLogin = null; }
     return ownerUserId;
   }
 
@@ -74,7 +110,18 @@ export function createTailscaleIdentity({ runner = runCommand, selfAddress, env 
     return value;
   }
 
-  return { authorize, ready, get available() { return !disabled; }, get ownerUserId() { return ownerUserId; } };
+  // A browser reaching the loopback listener through Serve: the login Serve
+  // stamped on the request must be the PC owner's, and the connection must
+  // come from tailscaled itself (see loopbackSocketOwner).
+  async function authorizeServe({ remoteAddress, remotePort, localPort, login } = {}) {
+    if (disabled || typeof login !== 'string' || !login) return false;
+    if (!isLoopback(normalizePeerAddress(remoteAddress))) return false;
+    if (socketOwner(remotePort, localPort) !== 0) return false;
+    await resolveOwner();
+    return !!ownerLogin && login.toLowerCase() === ownerLogin.toLowerCase();
+  }
+
+  return { authorize, authorizeServe, ready, get available() { return !disabled; }, get ownerUserId() { return ownerUserId; } };
 }
 
 // Kept in one place so the route and its test agree on the shape.

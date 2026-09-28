@@ -279,12 +279,17 @@ export async function createApp(options = {}) {
       // Pairing links may be opened from a different site. Public navigation
       // is allowed; cross-site requests to the private API are still rejected.
       if (pathname.startsWith('/api/') && req.headers['sec-fetch-site'] === 'cross-site') throw new ApiError(403, 'CROSS_SITE_NOT_ALLOWED');
-      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true, version: uiVersion, autoPair: !!req.ponteNative && tailnetIdentity.available }); return; }
+      const serveLogin = req.ponteNative ? undefined : req.headers['tailscale-user-login'];
+      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true, version: uiVersion, autoPair: (!!req.ponteNative || !!serveLogin) && tailnetIdentity.available }); return; }
       if (pathname === '/api/pair' && req.method === 'GET') {
-        // Only over the tailnet TLS listener, and only for a device the daemon
-        // says belongs to this PC's owner. The loopback proxy preserves the
-        // phone's tailnet source address, so this identifies the real peer.
-        if (!req.ponteNative || !await tailnetIdentity.authorize(req.socket?.remoteAddress)) throw pairingRejection();
+        // Over the tailnet TLS listener, only for a device the daemon says
+        // belongs to this PC's owner (the loopback proxy preserves the phone's
+        // tailnet source address). Over the loopback listener, only for a
+        // browser that Tailscale Serve vouched for as the same owner.
+        const allowed = req.ponteNative
+          ? await tailnetIdentity.authorize(req.socket?.remoteAddress)
+          : !!serveLogin && !!await tailnetIdentity.authorizeServe?.({ remoteAddress: req.socket?.remoteAddress, remotePort: req.socket?.remotePort, localPort: req.socket?.localPort, login: serveLogin });
+        if (!allowed) throw pairingRejection();
         json(res, 200, { token: initialized.token }); return;
       }
       if (!pathname.startsWith('/api/')) { await staticFile(req, res, pathname); return; }
