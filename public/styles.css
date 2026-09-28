@@ -275,6 +275,10 @@ body[data-keyboard-open=true] .screen-toolbar > .icon-button { height: 32px; }
 .screen-fabs{position:fixed;right:14px;bottom:calc(96px + env(safe-area-inset-bottom));z-index:45;display:flex;flex-direction:column;align-items:center;gap:10px}
 .screen-fab{width:44px;height:44px;border-radius:50%;background:#24291fe6;border:1px solid #454e38;color:#c3d5af;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px #0008;padding:0}
 .screen-fab svg{width:20px;height:20px}
+.screen-scroll{display:flex;flex-direction:column;border-radius:22px;background:#24291fe6;border:1px solid #454e38;box-shadow:0 6px 24px #0008;overflow:hidden}
+.screen-scroll .screen-fab{border:0;border-radius:0;background:none;box-shadow:none;touch-action:none}
+.screen-scroll .screen-fab+.screen-fab{border-top:1px solid #454e38}
+.screen-scroll .screen-fab:active{background:#3a4530}
 .screen-fab[aria-pressed=true]{background:var(--lime);border-color:var(--lime);color:#222a18}
 .screen-mic{position:static;width:52px;height:52px;border-radius:50%;background:#24291fe6;border:1px solid #454e38;color:var(--lime);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 30px #0009;padding:0}
 .screen-mic svg{width:22px;height:22px}
@@ -294,6 +298,7 @@ body[data-keyboard-open=true] .screen-toolbar > .icon-button { height: 32px; }
   /* While typing, only the keyboard and mic buttons stay; the others would sit
      on top of the (now smaller) monitor. */
   body[data-screen-composer=true] #screen-switch-monitor,body[data-screen-composer=true] #screen-rotate{display:none}
+  body[data-keyboard-open=true] .screen-scroll{display:none}
   .screen-settings-card .screen-selectors{margin:12px 0}
   .screen-settings-card .button.full{margin:4px 0 10px}
 }
@@ -309,6 +314,7 @@ body[data-current-page=tela] .bottom-nav{backdrop-filter:none;background:#24291f
   body[data-current-page=tela] .viewer-page{bottom:0}
   .screen-fabs{right:10px;bottom:10px;gap:8px}
   .screen-fab{width:40px;height:40px}
+  .screen-scroll{border-radius:20px}
   .screen-mic{width:46px;height:46px}
   .screen-dictate-status{right:66px;bottom:16px}
 }
@@ -367,7 +373,7 @@ body[data-keyboard-open=true] .terminal-page{padding-bottom:20px}
 .screen-composer .cmd-chip{min-height:34px;padding:5px 10px}
 .screen-composer-tools{display:flex;gap:6px;padding-top:6px}
 
-.tap-marker{position:absolute;z-index:6;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;border:2px solid var(--lime);box-shadow:0 0 0 1px #0008;pointer-events:none;opacity:0;transform:scale(1.4)}.tap-marker[data-kind=right]{border-color:var(--danger)}.tap-marker.show{animation:tap-marker .45s ease-out forwards}@keyframes tap-marker{0%{opacity:.95;transform:scale(1.3)}70%{opacity:.6;transform:scale(.55)}100%{opacity:0;transform:scale(.45)}}
+.tap-marker{position:absolute;z-index:6;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;border:2px solid var(--lime);box-shadow:0 0 0 1px #0008;pointer-events:none;opacity:0;transform:scale(1.4)}.tap-marker[data-kind=right]{border-color:var(--danger)}.tap-marker[data-kind=scroll]{border-color:#ffbe50;border-style:dashed}.tap-marker.show{animation:tap-marker .45s ease-out forwards}@keyframes tap-marker{0%{opacity:.95;transform:scale(1.3)}70%{opacity:.6;transform:scale(.55)}100%{opacity:0;transform:scale(.45)}}
 .screen-key-row{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:0 0 6px;-webkit-overflow-scrolling:touch;touch-action:pan-x}.screen-key-row::-webkit-scrollbar{display:none}.screen-key-row button{flex:none;min-height:38px;padding:6px 12px;border-radius:10px;background:#2b3124;border:1px solid #3b4531;color:#c3cdb8;font-size:12px;font-variant-numeric:tabular-nums}.screen-key-row button:active{background:#3c4b2e}
 @media(max-height:300px){.screen-key-row{display:none}}
 .screen-workspaces{position:absolute;right:8px;top:8px;z-index:5;display:flex;gap:4px;max-width:calc(100% - 16px);overflow-x:auto;scrollbar-width:none;padding:3px;border-radius:12px;background:#0f140dcc;border:1px solid #3a4534}.screen-workspaces::-webkit-scrollbar{display:none}.screen-workspaces:empty{display:none}.screen-workspace{flex:none;position:relative;min-width:30px;height:30px;padding:0 6px;border-radius:9px;background:transparent;color:#a3aa99;font-size:12px;font-variant-numeric:tabular-nums}.screen-workspace.active{background:var(--lime);color:#242a1a}.screen-workspace i{position:absolute;right:4px;top:4px;width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.7}body[data-screen-keyboard=true] .screen-workspaces{display:none}

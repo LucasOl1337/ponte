@@ -15,7 +15,7 @@ def monitor():
 
 def default_state():
     m = monitor()
-    return {'cursor': {'x': m['width'] // 2, 'y': m['height'] // 2}, 'held': False, 'typed': '', 'clicks': [], 'accel': float(os.environ.get('PONTE_LAB_ACCEL', '1')), 'profile': 'adaptive', 'textFocus': False}
+    return {'cursor': {'x': m['width'] // 2, 'y': m['height'] // 2}, 'held': False, 'typed': '', 'clicks': [], 'accel': float(os.environ.get('PONTE_LAB_ACCEL', '1')), 'profile': 'adaptive', 'textFocus': False, 'scrolls': [], 'wheel': 0}
 
 class locked:
     def __enter__(self):

@@ -273,7 +273,7 @@ export function createTerminals(dataDir, options = {}) {
       validateId(id);
       return run(async available => {
         const item = await target(id, available);
-        const capture = await command(['capture-pane', '-p', '-t', item.paneId, '-S', '-300']);
+        const capture = await command(['capture-pane', '-p', '-t', item.paneId, '-S', '-1000']);
         const clean = capture.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
         const bytes = Buffer.from(clean);
         let offset = Math.max(0, bytes.length - TERMINAL_TEXT_LIMIT);
