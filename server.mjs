@@ -8,6 +8,7 @@ import { mkdir, realpath, lstat, open, chmod, readFile } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises';
 import { createDesktop } from './backend/desktop.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from './backend/audio.mjs';
+import { createImageInbox, MAX_IMAGE_BYTES } from './backend/images.mjs';
 import { ApiError } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
 import { createTerminals } from './backend/terminals.mjs';
@@ -158,6 +159,7 @@ export async function createApp(options = {}) {
   const limits = createLimits();
   const live = createLiveStreaming(desktop);
   const terminals = options.terminals || createTerminals(initialized.dataDir, { env });
+  const images = options.images || await createImageInbox(initialized.dataDir, { env, terminals, clipboard: options.clipboard });
   const transcriber = options.transcriber || createTranscriber(initialized.dataDir, { env });
   const tailnetIdentity = options.tailnetIdentity || createTailscaleIdentity({ env, selfAddress: settings?.nativeTls?.host || env.OMARCHY_REMOTE_NATIVE_BIND });
   const activeRequests = new Set();
@@ -303,6 +305,29 @@ export async function createApp(options = {}) {
           const { file, recording } = await audio.get(audioRoute[1]);
           res.setHeader('Content-Disposition', `inline; filename="audio-${recording.id}"`);
           await serveFile(res, file, recording.mime);
+        }); return;
+      }
+      // Phone → PC images: stored privately, then copied or pasted only on request.
+      if (pathname === '/api/images' && req.method === 'GET') { json(res, 200, await limits.only('image-list', 2, () => images.list())); return; }
+      if (pathname === '/api/images' && req.method === 'POST') {
+        const result = await limits.only('image-write', 1, async () => images.upload(await readBody(req, MAX_IMAGE_BYTES, 60000), req.headers['content-type']));
+        json(res, 201, result); return;
+      }
+      const imageRoute = pathname.match(/^\/api\/images\/([^/]+)(?:\/(copy|paste))?$/);
+      if (imageRoute && !imageRoute[2] && req.method === 'GET') {
+        await limits.only('download', 3, async () => {
+          const { file, image } = await images.get(imageRoute[1]);
+          await serveFile(res, file, image.mime);
+        }); return;
+      }
+      if (imageRoute && !imageRoute[2] && req.method === 'DELETE') { json(res, 200, await limits.only('image-write', 1, () => images.remove(imageRoute[1]))); return; }
+      if (imageRoute && imageRoute[2] === 'copy' && req.method === 'POST') { json(res, 200, await limits.only('clipboard', 1, () => images.copy(imageRoute[1]))); return; }
+      if (imageRoute && imageRoute[2] === 'paste' && req.method === 'POST') {
+        if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
+        await limits.only('body', 8, async () => {
+          const body = await readBody(req, 1024);
+          let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
+          json(res, 200, await images.paste(imageRoute[1], value));
         }); return;
       }
       throw new ApiError(404, 'ROUTE_NOT_FOUND');
