@@ -389,6 +389,7 @@
   "Pronto": "Ready",
   "Mostrar automáticos ({count})": "Show automated ({count})",
   "Avisos de agentes": "Agent alerts",
+  "Permita notificações do Ponte nas configurações pra avisar com o app fechado": "Allow Ponte notifications in Settings to get alerts with the app closed",
   "{title} precisa de você": "{title} needs you",
   "{title} terminou": "{title} finished",
   "Aberto": "Open",

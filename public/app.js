@@ -1549,7 +1549,12 @@ async function readAgents(generation) {
   if (generation === terminalGeneration && terminalVisible()) agentTimer = setTimeout(() => readAgents(generation), 3000);
 }
 function agentVisibleItems() { return (agentItems || []).filter(item => agentShowAuto || !item.headless); }
-function agentNoticesRender() { $('#agent-notices').setAttribute('aria-pressed',String(agentNoticesOn)); }
+function agentNoticesRender() {
+  $('#agent-notices').setAttribute('aria-pressed',String(agentNoticesOn));
+  const hint = $('#agent-notices-hint');
+  hint.hidden = !(agentNoticesOn && agentAlertsNative === 'blocked');
+  hint.textContent = hint.hidden ? '' : t('Permita notificações do Ponte nas configurações pra avisar com o app fechado');
+}
 // Compares with the previous read. The first read, or one after a long gap
 // (app paused, reads failing), only sets the baseline, so a change that
 // happened while nobody was looking never pops up late.
@@ -1614,9 +1619,53 @@ $('#agent-show-auto').addEventListener('click', () => {
 $('#agent-notices').addEventListener('click', () => {
   agentNoticesOn = !agentNoticesOn;
   savePreference('ponte-agent-notices',agentNoticesOn ? 'on' : 'off');
+  agentAlertsSet(agentNoticesOn,agentNoticesOn);
   agentNoticesRender();
   if (!agentNoticesOn) agentNoticeHide();
 });
+// In the Android app the same switch runs a native service that keeps one
+// long-poll to the PC and raises a system notification with the app closed.
+// The shell's own record wins on load ("Turn off" on that notification sets
+// it), so the page and the service never disagree. A browser has no bridge
+// and keeps only the in-app notice.
+let agentAlertsNative = '';
+function agentAlertsBridge() { return window.PonteNative && typeof window.PonteNative.setAgentAlerts === 'function' ? window.PonteNative : null; }
+function agentAlertsSet(on, ask) {
+  const bridge = agentAlertsBridge();
+  if (!bridge || (on && !token)) return;
+  try { bridge.setAgentAlerts(!!on, on ? token : '', !!ask); } catch (error) {}
+}
+function agentAlertsSync() {
+  const bridge = agentAlertsBridge();
+  if (!bridge || !token) return;
+  let native = '';
+  try { native = String(bridge.agentAlerts()); } catch (error) { return; }
+  agentAlertsNative = native;
+  if (native === 'off' && agentNoticesOn) { agentNoticesOn = false; savePreference('ponte-agent-notices','off'); agentNoticeHide(); }
+  else if ((native === 'on' || native === 'blocked') && !agentNoticesOn) { agentNoticesOn = true; savePreference('ponte-agent-notices','on'); }
+  // Android asks for the notification permission once, the first time the
+  // shell learns the switch is on; after that only a tap on the switch asks.
+  if (agentNoticesOn) agentAlertsSet(true, native === 'unset');
+  else if (native === 'unset') agentAlertsSet(false, false);
+  agentNoticesRender();
+}
+function agentAlertsForget() {
+  agentAlertsNative = '';
+  try { if (window.PonteNative && typeof window.PonteNative.forgetAgentAlerts === 'function') window.PonteNative.forgetAgentAlerts(); } catch (error) {}
+}
+// A tapped system alert: the shell holds the agent's id until the page takes it.
+function agentOpenFromNative() {
+  if (!token || !window.PonteNative || typeof window.PonteNative.takeAgentToOpen !== 'function') return;
+  let id = '';
+  try { id = String(window.PonteNative.takeAgentToOpen() || ''); } catch (error) { return; }
+  if (!/^(p-\d{1,10}-\d{1,20}|w-[0-9a-f]{1,32})$/.test(id)) return;
+  agentNoticeHide();
+  navigate('terminais');
+  openAgent(id);
+}
+window.addEventListener('ponte-native-alerts', event => { agentAlertsNative = String(event.detail || ''); agentNoticesRender(); });
+window.addEventListener('ponte-native-agent', agentOpenFromNative);
+window.addEventListener('ponte-native-resume', () => { agentAlertsSync(); agentOpenFromNative(); });
 agentNoticesRender();
 function agentOpenItem() { return (agentItems || []).filter(item => item.id === agentOpenId)[0] || null; }
 function renderAgentHeader() {
@@ -2510,6 +2559,7 @@ $('#unpair-button').addEventListener('click', async () => {
   $$('audio').forEach(audio => { audio.pause(); audio.removeAttribute('src'); });
   token = ''; connected = false; state = null;
   try { localStorage.removeItem(storageKey); } catch {}
+  agentAlertsForget();
   if (screenshotURL) URL.revokeObjectURL(screenshotURL);
   screenshotURL = null; $('#screen-image').removeAttribute('src'); $('#screen-image').hidden = true; $('#screen-empty').hidden = false;
   for (const url of audioURLs.values()) URL.revokeObjectURL(url);
@@ -3180,6 +3230,7 @@ function enterApp(page) {
   showApp(); setConnection(false,t("Conectando ao seu computador…"));
   const first = page || location.hash.slice(1) || 'tela';
   if (first === 'tela') { navigate('inicio'); navigate('tela'); } else navigate(first);
+  agentAlertsSync(); agentOpenFromNative();
   pollState();
 }
 updateInstalledState();
