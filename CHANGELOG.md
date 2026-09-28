@@ -2,6 +2,61 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.27 (2026-09-28)
+
+The mesh on real hardware: this PC drives the notebook (and back) by agent API and by remote desktop, and the two computers reach each other over SSH with no browser check. The APK does not change (still versionCode 21).
+
+- **`ponte ctl --node NAME|ID`.** Any `ctl` command except `health` goes to a paired
+  device through the home node, with the home node's own key. A name is looked up in
+  `/api/mesh` among paired devices (without case); a 16-hex id is used as is. A device
+  on the tailnet that is not paired gets `MESH_PEER_NOT_PAIRED` with the pair command
+  to run. `--dry-run` shows the relayed path for an id, offline.
+- **The input helper opens its uinput devices write-only.** python-evdev read each new
+  device back through `/dev/input/event*` and retried for two seconds when it could
+  not open it, which is the case for a service started before its user joined the
+  `input` group. On the notebook the first keys of a session arrived about 4 s late
+  and all at once; the helper is now ready in ~130 ms.
+- **`ponte mesh --json pair`** printed nothing. It prints the server answer (pending
+  with its code under `--no-wait`, or paired), with the code on stderr while waiting.
+- **`ponte doctor`** reported `[fail] auto-pairing denied (403)` on every computer
+  since alpha.25, where the refusal is the intended answer. It now expects it and
+  names the tailnet owner the phone's pairing depends on.
+- **Docs:** agents through `--node` in the CLI guide and in `docs/mesh.md`, and the
+  key-only OpenSSH on port 2222 between the owner's computers (tailnet only), which
+  avoids Tailscale SSH's browser check.
+
+Verified with `npm test` (355, 1 skip), including a two-node test where `ctl --node`
+reads B's state and runs an action on B only, by name and by id.
+
+Measured on the real pair, the PC (NVIDIA, 3 monitors) driving the notebook (Radeon
+680M, eDP-1 1920x1200 at scale 1.5, Hyprland 0.56, br layout under fcitx5) through
+the PC's own node, Tailscale direct on the LAN (2 ms ping):
+- **Agent API:** `state`, `windows`, `volume` and `terminals list` with `--node` from
+  the PC to the notebook, by name and by id; `state --node` from the notebook to the PC.
+- **Video:** VAAPI H.264 (`avc1.640c32`) at 60 fps. First keyframe 0.47 s after the
+  hello. Frame age from the notebook's send to arrival here (two NTP clocks):
+  - idle screen: p50 3 ms, p99 22 ms, ~1.2 Mbps;
+  - a terminal pattern redrawn every frame over half the screen: p50 4 ms, p99 17 ms,
+    ~12.5 Mbps (the bitrate ceiling).
+  Round trip over the WebSocket: 3 ms p50.
+- **Key to pixels:** 14 letters typed into a test terminal on the notebook, the H.264
+  that came back decoded with ffmpeg and diffed: 44 to 62 ms from the key leaving this
+  PC to the frame with the letter arriving (p50 52 ms, one clock). Browser decode and
+  display are not included.
+- **Keys:** evdev timestamps on the notebook 2 to 4 ms after each send (one at 30 ms),
+  in order. Super+8 and Super+9 switched workspaces, Hyprland's socket2 reporting
+  the switch 3 to 4 ms after the key.
+  The text `ola ponte ç á A / @ / ẽ`, AltGr and dead keys included, arrived through
+  the br layout and fcitx5 as typed.
+- **Pointer:** absolute positions (0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.1, 0.9)
+  and (0.5, 0.5) landed on the exact logical pixel (1280x800 at scale 1.5).
+- **Clipboard:** text went both ways in one session, PC to notebook and notebook to PC.
+- **SSH:** `ssh notebook` and `ssh pc` log in by key on 2222 with no prompt; 2222 is
+  closed on both LAN addresses.
+
+Not yet verified: a slow or relayed (DERP) link, and the Chromium client on the
+notebook driving the PC.
+
 ## 0.1.0-alpha.26 (2026-09-28)
 
 A remote-desktop client for computers: real keyboard and mouse on another Omarchy machine, with low-latency video, instead of the phone's streamed snapshots. The APK does not change (still versionCode 21).
