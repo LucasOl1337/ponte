@@ -20,6 +20,7 @@ export function normalizePeerAddress(remoteAddress) {
   return isIP(address) ? address : null;
 }
 
+const PHONE_OS = new Set(['android', 'ios']);
 const isLoopback = address => address === '::1' || /^127\.\d+\.\d+\.\d+$/.test(address || '');
 
 // Browser auto-pairing through `tailscale serve`. Serve terminates HTTPS on the
@@ -66,9 +67,9 @@ export function createTailscaleIdentity({ runner = runCommand, selfAddress, env 
     const user = parsed?.Node?.User ?? parsed?.UserProfile?.ID;
     if (typeof user !== 'number' || user <= 0) return null;
     const login = parsed?.UserProfile?.LoginName;
-    return { user, login: typeof login === 'string' && login ? login : null };
+    const os = parsed?.Node?.Hostinfo?.OS;
+    return { user, login: typeof login === 'string' && login ? login : null, os: typeof os === 'string' ? os.toLowerCase() : '' };
   }
-  const whoisUser = async address => (await whoisProfile(address))?.user ?? null;
 
   // The daemon is often still coming up when this service starts at login
   // (the TLS listener itself waits for the tailnet address), so a failed whois
@@ -76,7 +77,11 @@ export function createTailscaleIdentity({ runner = runCommand, selfAddress, env 
   // answer is final; a failure is retried on the next request, throttled so a
   // stopped daemon is not hammered on every pairing attempt.
   async function resolveOwner() {
-    if (ownerResolved || disabled) return ownerUserId;
+    if (disabled) return ownerUserId;
+    return resolveOwnerAlways();
+  }
+  async function resolveOwnerAlways() {
+    if (ownerResolved) return ownerUserId;
     if (!selfAddress) { ownerResolved = true; return null; }
     const now = Date.now();
     if (now - ownerAttemptAt < retryInterval) return ownerUserId;
@@ -94,20 +99,33 @@ export function createTailscaleIdentity({ runner = runCommand, selfAddress, env 
   // turn auto-pairing off while the tailnet is actually healthy.
   const ready = resolveOwner().catch(() => null);
 
-  async function authorize(remoteAddress) {
-    if (disabled) return false;
-    const owner = await resolveOwner();
-    if (!owner) return false;
+  // The peer's tailnet profile when it belongs to this PC's owner, else null.
+  async function ownerDevice(remoteAddress) {
+    const owner = await resolveOwnerAlways();
+    if (!owner) return null;
     const address = normalizePeerAddress(remoteAddress);
-    if (!address) return false;
+    if (!address) return null;
     const now = Date.now();
     const hit = cache.get(address);
     if (hit && now - hit.at < ttl) return hit.value;
-    let value = false;
-    try { value = (await whoisUser(address)) === owner; } catch { value = false; }
+    let value = null;
+    try { const profile = await whoisProfile(address); value = profile?.user === owner ? profile : null; } catch { value = null; }
     cache.set(address, { at: now, value });
     if (cache.size > 64) cache.delete(cache.keys().next().value);
     return value;
+  }
+
+  // Another node of the mesh must still be the owner's (explicit pairing
+  // then decides); that check does not depend on key-free auto-pairing.
+  async function sameOwner(remoteAddress) { return !!await ownerDevice(remoteAddress); }
+
+  // The key-free /api/pair hands out the owner token, so only the phone app
+  // gets it. Another computer of the owner (a mesh node) must be approved on
+  // this PC instead: a device controls another only where it was authorized.
+  async function authorize(remoteAddress) {
+    if (disabled) return false;
+    const device = await ownerDevice(remoteAddress);
+    return !!device && PHONE_OS.has(device.os);
   }
 
   // A browser reaching the loopback listener through Serve: the login Serve
@@ -121,7 +139,7 @@ export function createTailscaleIdentity({ runner = runCommand, selfAddress, env 
     return !!ownerLogin && login.toLowerCase() === ownerLogin.toLowerCase();
   }
 
-  return { authorize, authorizeServe, ready, get available() { return !disabled; }, get ownerUserId() { return ownerUserId; } };
+  return { authorize, authorizeServe, sameOwner, ready, get available() { return !disabled; }, get ownerUserId() { return ownerUserId; } };
 }
 
 // Kept in one place so the route and its test agree on the shape.

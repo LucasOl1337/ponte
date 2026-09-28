@@ -20,7 +20,7 @@ It clones or updates `~/Projects/ponte`, checks the dependencies (printing the `
 
 `./ponte mesh list` shows this node, the Ponte nodes on the tailnet, requests waiting here and who controls this node. `./ponte mesh revoke <name>` cuts a link at once, in either direction. A request expires after 10 minutes; at most 5 wait at a time.
 
-Only online, untagged tailnet devices of the same owner as this node can be found or can ask (the same `tailscale whois` rule as the phone's automatic pairing). Discovery asks each of them for `GET /api/mesh/hello` on port 8788 and caches the answer for 30 s.
+Only online, untagged tailnet devices of the same owner as this node can be found or can ask (the same `tailscale whois` rule as the phone's automatic pairing). The phone app keeps its key-free pairing, but since this release only an Android (or iOS) device gets the owner key that way: another computer of the owner is refused by `/api/pair` and has to be paired and approved like any node. Discovery asks each of them for `GET /api/mesh/hello` on port 8788 and caches the answer for 30 s.
 
 ## What a peer token can do
 

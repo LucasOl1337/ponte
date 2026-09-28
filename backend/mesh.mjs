@@ -164,7 +164,7 @@ export async function createMesh({
       if (!peer?.Online || (Array.isArray(peer.Tags) && peer.Tags.length)) continue;
       const ip = (peer.TailscaleIPs || []).find(address => isIPv4(address));
       if (!ip) continue;
-      if (identity && !await identity.authorize(ip).catch(() => false)) continue;
+      if (identity && !await (identity.sameOwner || identity.authorize)(ip).catch(() => false)) continue;
       candidates.push({ ip, port });
     }
     return candidates;
@@ -208,7 +208,7 @@ export async function createMesh({
 
   async function createRequest(remoteAddress, body) {
     const address = normalizePeerAddress(remoteAddress);
-    if (!address || !identity || !await identity.authorize(address).catch(() => false)) throw new ApiError(403, 'MESH_NOT_OWNER');
+    if (!address || !identity || !await (identity.sameOwner || identity.authorize)(address).catch(() => false)) throw new ApiError(403, 'MESH_NOT_OWNER');
     if (!body || typeof body !== 'object' || !ID.test(body.nodeId || '') || !SECRET.test(body.secret || '') || body.nodeId === node.id) throw new ApiError(400, 'MESH_INVALID_REQUEST');
     purge();
     for (const [id, entry] of requests) if (entry.nodeId === body.nodeId && entry.status === 'pending') requests.delete(id);

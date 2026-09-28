@@ -28,7 +28,8 @@ test('a peer owned by the same tailnet user authorizes; others do not, and resul
     calls.push(args[2]);
     const address = args[2];
     if (address === '100.100.100.100') return whois(address, { User: OWNER });        // this PC
-    if (address === '100.111.221.82') return whois(address, { User: OWNER });        // the owner's phone
+    if (address === '100.111.221.82') return whois(address, { User: OWNER, Hostinfo: { OS: 'android' } }); // the owner's phone
+    if (address === '100.88.0.20') return whois(address, { User: OWNER, Hostinfo: { OS: 'linux' } });     // the owner's notebook
     if (address === '100.88.0.9') return whois(address, { User: 55 });               // a shared machine
     if (address === '100.88.0.10') return whois(address, { User: OWNER, Tags: ['tag:server'] }); // tagged, no human owner
     throw new Error('not found');
@@ -40,6 +41,9 @@ test('a peer owned by the same tailnet user authorizes; others do not, and resul
   assert.equal(await identity.authorize('100.88.0.9'), false);
   assert.equal(await identity.authorize('100.88.0.10'), false, 'tagged device never auto-pairs');
   assert.equal(await identity.authorize('bogus'), false);
+  assert.equal(await identity.authorize('100.88.0.20'), false, 'another computer of the owner pairs explicitly, never key-free');
+  assert.equal(await identity.sameOwner('100.88.0.20'), true, 'but it is still the owner\'s for mesh pairing requests');
+  assert.equal(await identity.sameOwner('100.88.0.9'), false);
   const before = calls.length;
   await identity.authorize('100.111.221.82');
   assert.equal(calls.length, before, 'a repeated peer is served from cache');
@@ -60,7 +64,7 @@ test('a daemon that was still starting at boot is retried instead of latching au
   const runner = async (command, args) => {
     calls.push(args[2]);
     if (!up) throw new Error('tailscale not ready');
-    return whois(args[2], { User: OWNER });
+    return whois(args[2], { User: OWNER, Hostinfo: { OS: 'android' } });
   };
   const identity = createTailscaleIdentity({ runner, selfAddress: '100.100.100.100', env: {}, retryInterval: 0 });
   await identity.ready;
