@@ -53,7 +53,7 @@ test('Terminals shows one list: agents with state, place, folder and age, plain 
   assert.equal(cards.length, 5, text.join('\n'));
   assert.match(text[0], /Claude.*Nexsales trabalhos.*Window on workspace 2 · ~\/nexunio\/nexsales · 3 min ago.*Waiting for you/);
   assert.match(text[1], /Claude.*Trilho.*Maestri · ~\/Projects\/ponte-wt\/agentes · just now.*Working/);
-  assert.match(text[2], /Codex.*agentes.*Ponte session · ~ · 2 h ago.*Idle/);
+  assert.match(text[2], /Codex.*agentes.*Ponte session · Terminal 1 · ~ · 2 h ago.*Idle/);
   assert.match(text[3], /Terminal.*lol@lol:~.*Focus and view on monitor.*Open/);
   // The Ponte session with the Codex inside is not listed twice; the other one is.
   assert.match(text[4], /Terminal 2.*Ponte session.*Open/);

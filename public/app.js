@@ -1377,7 +1377,7 @@ function agentAgo(ms) {
 }
 function agentWhere(item) {
   const where = item.where || {};
-  if (where.type === 'ponte') return t('Sessão do Ponte');
+  if (where.type === 'ponte') { const session = terminalSessions.filter(item => item.id === where.session)[0]; return session && session.title ? `${t('Sessão do Ponte')} · ${session.title}` : t('Sessão do Ponte'); }
   if (where.type === 'terminal') return where.workspace && where.workspace.id > 0 ? t('Janela no workspace {workspace}',{workspace:where.workspace.name || where.workspace.id}) : t('Janela no PC');
   if (where.type === 'maestri') return t('Maestri');
   if (where.type === 'app') return t('Dentro de {app}',{app:where.app || where.class || ''});
