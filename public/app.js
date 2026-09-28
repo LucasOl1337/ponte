@@ -1465,12 +1465,21 @@ function terminalLinesDropped(before, after) {
   for (const name of ['touchend','touchcancel']) output.addEventListener(name, () => { terminalTouching = false; terminalScrolledAt = Date.now(); }, { passive: true });
   output.addEventListener('scroll', () => { if (Math.abs(output.scrollTop - terminalOwnScrollTop) > 1) terminalScrolledAt = Date.now(); }, { passive: true });
 }
+// Polling cost: the session list refreshes every 5 s (and on every visit or
+// action), the output is asked with the hash of what is shown so an idle pane
+// answers without its text, and an idle pane is polled less and less often.
+const TERMINAL_LIST_MS = 5000;
+const TERMINAL_POLL_MS = [800, 800, 1200, 1600, 2400, 3000];
+let terminalListedAt = 0, terminalListedGeneration = -1, terminalQuietTicks = 0, terminalHash = '', terminalHashId = '';
 async function readTerminals(generation) {
   if (!terminalVisible() || generation !== terminalGeneration) return;
   const requestToken = token;
   try {
-    const response = await api('/terminals',{timeout:8000});
-    const listing = await response.json();
+    const listDue = terminalListedGeneration !== generation || Date.now() - terminalListedAt >= TERMINAL_LIST_MS;
+    if (terminalListedGeneration !== generation) terminalQuietTicks = 0;
+    const response = listDue ? await api('/terminals',{timeout:8000}) : null;
+    const listing = response ? await response.json() : { available: terminalAvailable, sessions: terminalSessions };
+    if (response) { terminalListedAt = Date.now(); terminalListedGeneration = generation; }
     if (generation !== terminalGeneration || requestToken !== token || !terminalVisible()) return;
     terminalAvailable = listing.available === true;
     terminalSessions = listing.sessions || [];
@@ -1482,12 +1491,19 @@ async function readTerminals(generation) {
     $('#terminal-status').textContent = terminalAvailable ? terminalId ? t('Conectado à sessão de texto.') : t('Crie uma sessão para começar.') : t('Instale tmux no PC para usar sessões de texto.');
     if (terminalId && !terminalPaused) {
       const requestedId = terminalId;
-      const view = await (await api(`/terminals/${encodeURIComponent(requestedId)}`,{timeout:8000})).json();
+      const since = terminalText !== null && terminalHashId === requestedId && terminalHash ? `?since=${encodeURIComponent(terminalHash)}` : '';
+      const view = await (await api(`/terminals/${encodeURIComponent(requestedId)}${since}`,{timeout:8000})).json();
       if (generation !== terminalGeneration || requestedId !== terminalId || requestToken !== token || !terminalVisible()) return;
+      $('#terminal-mode').hidden = !view.inMode;
       const output = $('#terminal-output');
       const followsTail = output.scrollHeight-output.scrollTop-output.clientHeight < 48;
-      const text = view.text.replace(/\n+$/,'');
+      const text = view.unchanged === true || typeof view.text !== 'string' ? terminalText : view.text.replace(/\n+$/,'');
+      terminalQuietTicks = terminalText === text ? terminalQuietTicks + 1 : 0;
+      if (terminalText === text && view.hash) { terminalHash = view.hash; terminalHashId = requestedId; }
+      // The hash is kept only for text actually on screen: text held back
+      // under a finger comes again on the next read.
       if (terminalText !== text && !terminalReaderBusy(output)) {
+        terminalHash = view.hash || ''; terminalHashId = requestedId;
         const before = terminalText, lineHeight = before ? output.scrollHeight / before.split('\n').length : 0;
         const dropped = followsTail ? 0 : terminalLinesDropped(before, text);
         const top = output.scrollTop;
@@ -1501,7 +1517,7 @@ async function readTerminals(generation) {
   } catch (error) {
     if (generation === terminalGeneration && requestToken === token && terminalVisible()) i18n.write($('#terminal-status'),error);
   } finally {
-    if (generation === terminalGeneration && terminalVisible()) terminalTimer = setTimeout(() => readTerminals(generation),terminalPaused ? 2000 : 800);
+    if (generation === terminalGeneration && terminalVisible()) terminalTimer = setTimeout(() => readTerminals(generation),terminalPaused ? 2000 : TERMINAL_POLL_MS[Math.min(terminalQuietTicks, TERMINAL_POLL_MS.length - 1)]);
   }
 }
 function updateTerminalNavigation() {

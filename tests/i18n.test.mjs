@@ -266,6 +266,50 @@ test('the command composer sends text with an atomic Enter, records reusable his
  assert.ok(h.calls.filter(call=>call.path.endsWith('/input')).every(call=>call.options.method==='POST'));
 });
 
+test('Terminal polling lists sessions every 5 s, sends the shown hash, keeps text on unchanged, and backs off while idle',async()=>{
+ const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'synthetic attachment'};
+ let text='$ ls\nfile.txt',hash='h1',unchanged=false,inMode=false;
+ const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async path=>({ok:true,json:async()=>path==='/api/terminals'?{available:true,sessions:[session],limit:4}:path.startsWith('/api/terminals/')?(unchanged?{...session,inMode,hash,unchanged:true}:{...session,inMode,hash,text}):path==='/api/audio'?{recordings:[]}:fixture})});await flush();
+ h.run("navigate('terminais')");await flush();await flush();
+ const output=h.el('#terminal-output');
+ const calls=()=>h.calls.map(call=>call.path).filter(path=>path.startsWith('/api/terminals'));
+ assert.deepEqual(calls(),['/api/terminals',`/api/terminals/${session.id}`],'first visit: list, then a full read');
+ assert.equal(output.textContent,'$ ls\nfile.txt');
+ const tick=async()=>{h.calls.length=0;await h.run('readTerminals(terminalGeneration)');await flush();return calls();};
+ // Same generation, within 5 s: no list; the read carries the hash and the answer is only "unchanged".
+ unchanged=true;
+ assert.deepEqual(await tick(),[`/api/terminals/${session.id}?since=h1`]);
+ assert.equal(output.textContent,'$ ls\nfile.txt','unchanged keeps the text on screen');
+ await tick();await tick();await tick();await tick();
+ assert.equal(h.run('terminalQuietTicks'),5);
+ assert.equal(h.run('TERMINAL_POLL_MS[Math.min(terminalQuietTicks,TERMINAL_POLL_MS.length-1)]'),3000,'idle pane is polled every 3 s at most');
+ // Copy mode shows up from the read itself, without waiting for the list.
+ inMode=true;await tick();
+ assert.equal(h.el('#terminal-mode').hidden,false);
+ // New output: text and hash update, polling is fast again.
+ unchanged=false;text='$ ls\nfile.txt\n$ pwd';hash='h2';
+ await tick();
+ assert.equal(output.textContent,'$ ls\nfile.txt\n$ pwd');
+ assert.equal(h.run('terminalQuietTicks'),0);
+ assert.equal(h.run('TERMINAL_POLL_MS[Math.min(terminalQuietTicks,TERMINAL_POLL_MS.length-1)]'),800);
+ unchanged=true;assert.deepEqual(await tick(),[`/api/terminals/${session.id}?since=h2`]);
+ // After 5 s the list comes back.
+ h.run('terminalListedAt-=5000');
+ assert.deepEqual(await tick(),['/api/terminals',`/api/terminals/${session.id}?since=h2`]);
+ // An action starts a new generation: list at once and full speed.
+ h.run('terminalQuietTicks=4');h.calls.length=0;h.run('updateTerminalNavigation()');await flush();
+ assert.equal(calls()[0],'/api/terminals');
+ assert.ok(h.run('terminalQuietTicks')<=1);
+ // Text held back under a finger keeps the old hash, so it is sent again.
+ unchanged=false;text='held back';hash='h3';
+ output.dispatchEvent({type:'touchstart'});
+ await tick();
+ assert.notEqual(output.textContent,'held back');
+ output.dispatchEvent({type:'touchend'});h.run('terminalScrolledAt=0');
+ assert.deepEqual(await tick(),[`/api/terminals/${session.id}?since=h2`]);
+ assert.equal(output.textContent,'held back');
+});
+
 test('Terminal reader keeps the line being read when old lines scroll off, waits for a finger or fling, and still follows the tail',async()=>{
  const session={id:'123456789abcdef0123456789',title:'Terminal 1',cols:40,rows:24,inMode:false,attachCommand:'synthetic attachment'};
  const lines=(from,to)=>Array.from({length:to-from},(_,i)=>`line ${from+i}`).join('\n');
