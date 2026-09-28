@@ -481,3 +481,29 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
   assert.equal((await stat(profile)).mode & 0o777, 0o700);
   for (const flag of ['--disable-gpu', '--headless', '--remote-debugging-port', '--enable-automation']) assert.equal(calls.flat().some(arg => arg.startsWith(flag)), false, flag);
 });
+
+test('doctor names the tailnet owner the way the server resolves it: a real user, never a tagged node', async () => {
+  const check = String.raw`
+import importlib.machinery, importlib.util, json, subprocess, sys
+loader = importlib.machinery.SourceFileLoader('ponte_cli', sys.argv[1])
+spec = importlib.util.spec_from_loader('ponte_cli', loader)
+cli = importlib.util.module_from_spec(spec); loader.exec_module(cli)
+def answer(value):
+    def runner(*args, capture=False, timeout=30):
+        if isinstance(value, Exception): raise value
+        return subprocess.CompletedProcess(args, 0, stdout=value if isinstance(value, str) else json.dumps(value))
+    return runner
+cases = [
+    {'Node': {'User': 27392147, 'Tags': None}, 'UserProfile': {'ID': 27392147, 'LoginName': 'dono@example.com'}},
+    {'Node': {'User': 27392147, 'Tags': ['tag:server']}, 'UserProfile': {'ID': 27392147, 'LoginName': 'dono@example.com'}},
+    {'Node': {}, 'UserProfile': {'ID': 5}},
+    {'Node': {'User': 0}, 'UserProfile': {}},
+    'not json',
+    FileNotFoundError('tailscale'),
+    subprocess.TimeoutExpired('tailscale', 5),
+]
+print(json.dumps([cli.tailnet_owner('100.64.0.1', runner=answer(case)) for case in cases]))
+`;
+  const { stdout } = await run('python3', ['-c', check, path.join(root, 'ponte')], { timeout: 15000 });
+  assert.deepEqual(JSON.parse(stdout), ['dono@example.com', null, 'user 5', null, null, null, null]);
+});

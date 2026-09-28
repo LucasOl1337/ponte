@@ -754,6 +754,22 @@ def certificate_dates(path):
     return expires, (fingerprint.group(1).strip() if fingerprint else '')
 
 
+def tailnet_owner(address, runner=run):
+    """The login that owns this node on the tailnet, as the server resolves it
+    for key-free pairing (a real user, not a tagged device), or None."""
+    try:
+        answer = json.loads(runner('tailscale', 'whois', '--json', address, capture=True, timeout=5).stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    node, profile = answer.get('Node') or {}, answer.get('UserProfile') or {}
+    if node.get('Tags'):
+        return None
+    user = node.get('User') or profile.get('ID')
+    if not isinstance(user, int) or user <= 0:
+        return None
+    return profile.get('LoginName') or f'user {user}'
+
+
 def doctor(config_file):
     """Check every link between this PC and the phone, in the order they can fail."""
     import hashlib
@@ -844,11 +860,18 @@ def doctor(config_file):
             connection.request('GET', '/api/pair')
             response = connection.getresponse()
             response.read()
-            if response.status == 200:
-                report('ok', 'auto-pairing: this PC is recognized as the tailnet owner')
-            else:
-                report('fail', f'auto-pairing denied ({response.status}): the owner was not resolved; tailscale whois {host} must answer, then ./ponte restart')
             connection.close()
+            # Since 0.1.0-alpha.25 key-free pairing hands the owner key only to
+            # a phone: this computer asking must be refused. Whether the phone
+            # gets in depends on the owner being resolved, which whois answers.
+            if response.status == 200:
+                report('fail', 'key-free pairing handed the owner key to this computer: the service runs code older than 0.1.0-alpha.25; ./ponte restart')
+            else:
+                owner = tailnet_owner(host)
+                if owner:
+                    report('ok', f'tailnet owner {owner}: the phone pairs without a key, computers through ./ponte mesh pair')
+                else:
+                    report('fail', f'the tailnet owner was not resolved: tailscale whois {host} must answer with your user (untagged), then ./ponte restart')
         except (OSError, ssl.SSLError, ValueError) as error:
             report('fail', f'TLS listener unreachable at {host}:{port}: {error}')
 
