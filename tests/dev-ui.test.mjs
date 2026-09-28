@@ -162,7 +162,7 @@ test('Open on the PC asks first, then calls the open route once', async () => {
   h.el('#dev-open-cancel').click(); await flush();
   assert.equal(h.writes().some(call => call.path.endsWith('/open')), false);
   h.el('#dev-open-pc').click(); h.el('#dev-open-confirm').click(); await flush();
-  assert.deepEqual(h.writes().filter(call => call.path.endsWith('/open')).map(call => call.path), [`/api/terminals/${claude.id}/open`]);
+  assert.deepEqual(h.writes().filter(call => call.path.endsWith('/open')).map(call => [call.path, call.body]), [[`/api/terminals/${claude.id}/open`, '{}']]);
 });
 
 test('A−/A+ change and remember the font within bounds', async () => {

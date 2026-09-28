@@ -3032,7 +3032,7 @@ $('#dev-open-cancel').addEventListener('click', () => $('#dev-open-dialog').clos
 $('#dev-open-confirm').addEventListener('click', async () => {
   $('#dev-open-dialog').close();
   if (!devId) return;
-  try { await api(`/terminals/${encodeURIComponent(devId)}/open`,{method:'POST'}); devStatus(t('Aberta numa janela do PC.')); }
+  try { await api(`/terminals/${encodeURIComponent(devId)}/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); devStatus(t('Aberta numa janela do PC.')); }
   catch (error) { devStatus(error, true); }
 });
 // Scrollbars coming and going (a wider PC pane) change the content box but not
