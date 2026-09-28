@@ -39,7 +39,7 @@ class FakeChunk { constructor(init) { Object.assign(this, init); } }
 
 const readyMessage = (extra = {}) => ({ t: 'ready', v: 1, node: { id: '0123456789abcdef', name: 'notebook-teste', os: 'linux' }, monitors: [{ name: 'LAB-1', x: 0, y: 0, width: 1920, height: 1080, scale: 1, focused: true }, { name: 'LAB-2', x: 1920, y: 0, width: 2560, height: 1440, scale: 1, focused: false }], monitor: 'LAB-1', width: 1920, height: 1080, fps: 60, codec: 'avc1.640034', input: { abs: true, rel: true, keys: true, clipboard: true }, ...extra });
 
-function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', stored = {}, mesh = null, clipboard = '', focused = true } = {}) {
+function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', stored = {}, mesh = null, clipboard = '', focused = true, permission = 'granted' } = {}) {
   FakeSocket.all = []; FakeDecoder.all = [];
   const document = makeDocument(html), window = makeWindow();
   const saved = new Map(Object.entries(stored));
@@ -62,7 +62,7 @@ function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', s
   const context = vm.createContext({
     document, window, history: { replaceState: (_, __, url) => history.push(url) },
     localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, String(value)), removeItem: key => saved.delete(key) },
-    navigator: { language: 'en-US', languages: ['en-US'], userAgent: 'Test browser', keyboard, clipboard: { readText: async () => clip.text, writeText: async text => { clip.writes.push(text); clip.text = text; } } },
+    navigator: { language: 'en-US', languages: ['en-US'], userAgent: 'Test browser', keyboard, permissions: { query: async ({ name }) => ({ state: name === 'clipboard-read' ? h.permission : 'denied' }) }, clipboard: { readText: async () => clip.text, writeText: async text => { clip.writes.push(text); clip.text = text; } } },
     location: { protocol: 'http:', host: '127.0.0.1:8787', pathname: '/rd.html', search, hash },
     CustomEvent: class { constructor(type, { detail } = {}) { this.type = type; this.detail = detail; } },
     performance: { timeOrigin: 1_700_000_000_000, now: () => clock },
@@ -75,6 +75,7 @@ function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', s
   });
   vm.runInContext(runtime, context); vm.runInContext(client, context);
   const h = {
+    permission,
     document, window, saved, timers, frames, history, clip, keyboard, stage, canvas, drawn, fetches, context,
     el: selector => document.querySelector(selector),
     run: source => vm.runInContext(source, context),
@@ -257,6 +258,20 @@ test('losing focus or hiding the page sends release; control resumes on focus an
   h.window.dispatchEvent({ type: 'focus' }); await flush();
   assert.equal(h.sent('clip').length, 2);
   assert.match(h.el('#rd-note').textContent, /Clipboard received \(15 characters\)/);
+});
+
+test('the clipboard permission prompt only comes from a plain click, never on entering full screen', async () => {
+  const h = await harness({ clipboard: 'copied', permission: 'prompt' }).connect();
+  await h.run('enterFullscreen()'); await flush();
+  assert.equal(h.sent('clip').length, 0, 'no prompt in full screen (it would take the focus and drop it)');
+  h.window.dispatchEvent({ type: 'focus' }); await flush();
+  assert.equal(h.sent('clip').length, 0);
+  h.run('releaseControl()');
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); await flush();
+  assert.deepEqual(h.sent('clip'), [{ t: 'clip', text: 'copied' }]);
+  const denied = await harness({ clipboard: 'copied', permission: 'denied' }).connect();
+  denied.mouse('mousedown', denied.stage, { clientX: 500, clientY: 294 }); await flush();
+  assert.equal(denied.sent('clip').length, 0);
 });
 
 test('a clipboard from the target waits for focus before being written', async () => {
@@ -443,6 +458,10 @@ test('full screen locks every key (no list), relative mode asks for raw pointer 
   assert.deepEqual(h.keyboard.locks, [[]]);
   assert.deepEqual({ ...h.stage.lockRequests[0] }, { unadjustedMovement: true });
   assert.equal(h.document.body.classList.contains('fullscreen'), true);
+  // The Full screen button keeps the focus after the click: its keys still go out.
+  assert.equal(h.key('keydown', 'MetaLeft', { target: h.el('#rd-fullscreen') }).defaultPrevented, true);
+  h.key('keyup', 'MetaLeft', { target: h.el('#rd-fullscreen') });
+  assert.deepEqual(h.sent('key').map(message => message.code), ['MetaLeft', 'MetaLeft']);
   h.mouse('mousemove', h.stage, { movementX: 3.5, movementY: -1 });
   h.mouse('mousemove', h.stage, { movementX: 1, movementY: -1 });
   h.raf();

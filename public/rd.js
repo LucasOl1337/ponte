@@ -495,11 +495,11 @@ function renderStats(frame = windowStats(frameLatency, nowEpoch()), glass = wind
 
 const inputAllows = kind => session?.input?.[kind] !== false;
 
-function engage() {
+function engage(mayPrompt = false) {
   if (engaged || !session) return;
   engaged = true;
   document.body.classList.add('controlling');
-  clipboardOut();
+  clipboardOut(mayPrompt);
 }
 
 // Drop everything held on the remote side: blur, hidden page, disconnect.
@@ -553,6 +553,7 @@ async function lockPointer() {
 
 async function enterFullscreen() {
   if (!session) return;
+  document.activeElement?.blur?.();
   engage();
   try { await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); } catch { note(t('O navegador recusou a tela cheia.')); return; }
   // No key list: every key, including Super, Alt+Tab and Esc (held 2 s leaves).
@@ -565,7 +566,9 @@ async function enterFullscreen() {
 
 function keyEvent(event) {
   if (!engaged || !session || !inputAllows('keys')) return;
-  if (event.target?.closest?.('.rd-bar')) return;
+  // Only an open selector in the bar keeps its keys; a focused bar button
+  // (Full screen was just clicked) must not swallow them.
+  if (event.target?.tagName === 'SELECT') return;
   event.preventDefault();
   event.stopPropagation?.();
   const code = event.code;
@@ -628,7 +631,7 @@ function mouseMove(event) {
 function mouseDown(event) {
   if (!session || event.target?.closest?.('.rd-bar')) return;
   event.preventDefault();
-  if (!engaged) engage();
+  if (!engaged) engage(!document.fullscreenElement);
   if (mode === 'rel' && inputAllows('rel') && !document.pointerLockElement) { lockPointer(); return; }
   if (event.button < 0 || event.button > 4) return;
   if (mode === 'abs') {
@@ -671,8 +674,19 @@ function cornerToggle(event) {
 
 const utf8Length = text => new TextEncoder().encode(text).length;
 
-async function clipboardOut() {
+// Chrome asks once before the page may read the clipboard, and that prompt
+// takes the focus (which drops full screen). So the first read is only tried
+// from a plain click on the picture; afterwards it runs on every focus.
+async function clipboardReadable(mayPrompt) {
+  try {
+    const state = (await navigator.permissions?.query({ name: 'clipboard-read' }))?.state;
+    return state === 'granted' || (state !== 'denied' && mayPrompt);
+  } catch { return mayPrompt; }
+}
+
+async function clipboardOut(mayPrompt = false) {
   if (!session || !inputAllows('clipboard') || !navigator.clipboard?.readText) return;
+  if (!(await clipboardReadable(mayPrompt))) { if (pendingClip !== null) await clipboardWrite(); return; }
   if (pendingClip !== null) await clipboardWrite();
   let text;
   try { text = await navigator.clipboard.readText(); } catch { return; }
