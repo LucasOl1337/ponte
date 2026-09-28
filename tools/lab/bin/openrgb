@@ -4,14 +4,16 @@
 miss prints 'Error: Cannot find device' and exits 255 with nothing applied.
 PONTE_LAB_OPENRGB_DEVICES ('|'-separated) is what is on the bus: by default
 this PC's list with the Logitech keyboard asleep. PONTE_LAB_OPENRGB_FAIL
-names devices whose write fails."""
-import os, sys
+names devices whose write fails; PONTE_LAB_OPENRGB_DELAY (seconds) stands in
+for the ~5 s of device detection every real call pays."""
+import os, sys, time
 from _lab import log
 
 DEFAULT = 'ENE DRAM|ENE DRAM|Corsair Vengeance RGB DDR5|Corsair Vengeance RGB DDR5|ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC|MSI B650M PROJECT ZERO (MS-7E09)'
 present = [d for d in os.environ.get('PONTE_LAB_OPENRGB_DEVICES', DEFAULT).split('|') if d]
 broken = [d for d in os.environ.get('PONTE_LAB_OPENRGB_FAIL', '').split('|') if d]
 args = sys.argv[1:]
+time.sleep(float(os.environ.get('PONTE_LAB_OPENRGB_DELAY') or 0))
 names = [args[i + 1] for i, v in enumerate(args[:-1]) if v in ('--device', '-d')]
 for name in names:
     if not any(name.lower() in d.lower() for d in present):
