@@ -113,7 +113,7 @@ test('polling slows down while nothing changes and stops entirely outside Dev', 
 
 test('the composer sends several lines with Enter, pastes without it, and explains a shell that cannot take lines', async () => {
   let refuse = false;
-  const h = harness({ respond: (path, options) => path.endsWith('/input') && refuse ? { ok: false, status: 409, json: async () => ({ errorCode: 'MULTILINE_NOT_SUPPORTED', errorParameters: {}, error: 'x' }) } : null });
+  const h = harness({ respond: (path, options) => path.endsWith('/input') && refuse ? { ok: false, status: 409, json: async () => ({ errorCode: 'MULTILINE_NOT_SUPPORTED', errorParameters: {}, error: 'This terminal is not waiting for pasted text now, so several lines would run one by one. Send one line at a time.' }) } : null });
   await flush();
   h.run("navigate('dev')"); await flush();
   const box = h.el('#dev-input');
@@ -123,7 +123,7 @@ test('the composer sends several lines with Enter, pastes without it, and explai
   assert.deepEqual(sent, [{ text: 'line one\nline two\nline three', enter: true }, { text: 'just paste' }], 'a trailing Enter from the keyboard does not turn one line into several');
   assert.equal(box.value, '');
   refuse = true; box.value = 'a\nb'; h.el('#dev-send').click(); await flush();
-  assert.match(h.el('#dev-status').textContent, /does not take several lines at once/);
+  assert.match(h.el('#dev-status').textContent, /not waiting for pasted text now/);
   assert.equal(box.value, 'a\nb', 'a refused text stays to fix');
 });
 

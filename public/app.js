@@ -2919,8 +2919,7 @@ async function devInput(body) {
     devFollow = true; devSchedule(devGeneration);
     return true;
   } catch (error) {
-    if (error && error.errorCode === 'MULTILINE_NOT_SUPPORTED') devStatus(t('Esta sessão não aceita várias linhas de uma vez: o shell rodaria cada uma. Mande uma linha por vez.'), true);
-    else devStatus(error, true);
+    devStatus(error, true);
     return false;
   }
 }
