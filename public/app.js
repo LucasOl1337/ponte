@@ -247,7 +247,9 @@ function renderPowerMonitors() {
 }
 
 async function pollState() {
-  if (!token || polling || document.hidden) return;
+  // While the Android app is paused its proxy refuses requests; a poll then
+  // would only mark the PC offline. Resume polls again.
+  if (!token || polling || document.hidden || nativePaused) return;
   const requestToken = token;
   polling = true;
   try {
