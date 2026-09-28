@@ -14,18 +14,18 @@ const ESC = '\x1b';
 function harness({ sessions = [shell, claude], respond = () => null, window: extra = {} } = {}) {
   const document = makeDocument(html), window = Object.assign(makeWindow(), extra);
   const saved = new Map([['ponte-pair-token', 'synthetic-test-token']]);
-  const calls = [], timers = [];
+  const calls = [], timers = [], pending = [];
   const context = vm.createContext({
     document, window, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) },
     navigator: { language: 'en-US', languages: ['en-US'], userAgent: 'Test browser' }, location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
     CustomEvent: class { constructor(type, { detail } = {}) { this.type = type; this.detail = detail; } },
     Intl, Date, Error, TypeError, TextDecoder, Uint8Array, AbortController, URL, Blob, performance,
-    setTimeout: (callback, ms) => { timers.push(ms); return timers.length; }, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+    setTimeout: (callback, ms) => { timers.push(ms); pending.push({ callback, ms, id: timers.length }); return timers.length; }, clearTimeout: id => { const at = pending.findIndex(item => item.id === id); if (at >= 0) pending.splice(at, 1); }, setInterval: () => 1, clearInterval() {},
     fetch: async (path, options = {}) => {
       calls.push({ path, method: options.method || 'GET', body: options.body });
       const custom = await respond(path, options);
       if (custom) return custom;
-      if (path === '/api/terminals' && (options.method || 'GET') === 'GET') return ok({ available: true, sessions, limit: 4 });
+      if (path === '/api/terminals' && (options.method || 'GET') === 'GET') return ok({ available: true, sessions: sessions.map(session => ({ ...session })), limit: 4 });
       if (path === '/api/terminals' && options.method === 'POST') return ok({ ...claude, id: 'abcdefabcdefabcdefabcdef', ...JSON.parse(options.body) });
       if (path === '/api/terminals?projects=1') return ok({ projects: ['ponte', 'demo'] });
       if (/^\/api\/terminals\/[a-f0-9]{24}\?format=ansi/.test(path)) return ok({ ...claude, hash: 'h1', text: `${ESC}[1mhello${ESC}[0m\n> `, cursor: { x: 2, y: 1, visible: true }, alternate: false });
@@ -34,7 +34,9 @@ function harness({ sessions = [shell, claude], respond = () => null, window: ext
     },
   });
   vm.runInContext(runtime, context); vm.runInContext(app, context);
-  return { document, window, calls, timers, saved, el: selector => document.querySelector(selector), run: source => vm.runInContext(source, context), writes: () => calls.filter(call => call.method !== 'GET') };
+  return { document, window, calls, timers, saved, el: selector => document.querySelector(selector), run: source => vm.runInContext(source, context), writes: () => calls.filter(call => call.method !== 'GET'),
+    // Runs the timers queued with this delay (the 300 ms resize debounce), not the polling.
+    fire: async ms => { const due = pending.filter(item => item.ms === ms); due.forEach(item => pending.splice(pending.indexOf(item), 1)); due.forEach(item => item.callback()); await flush(); } };
 }
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 const ok = value => ({ ok: true, status: 200, json: async () => value });
@@ -191,4 +193,35 @@ test('only a finger stops following the output; a resize keeps following', async
   h.el('#dev-live').click();
   assert.equal(h.run('devFollow'), true);
   assert.equal(h.el('#dev-live').hidden, true);
+});
+
+test('the pane takes the phone grid only on the tab own layout events, never because a read differs', async () => {
+  let pane = { cols: 51, rows: 41 };
+  const h = harness({ sessions: [claude], respond: path => /\?format=ansi/.test(path) ? ok({ ...claude, ...pane, hash: `h${pane.cols}`, text: 'x', cursor: { x: 0, y: 0, visible: true } }) : null });
+  const screen = h.el('#dev-screen'), probe = h.el('#dev-measure');
+  screen.clientWidth = 412; screen.clientHeight = 624; probe.clientWidth = 144; probe.clientHeight = 15;
+  await flush();
+  const resizes = () => h.writes().filter(call => call.path.endsWith('/resize')).map(call => JSON.parse(call.body));
+  // Entering the tab is a layout event: the 51×41 pane becomes the 55×40 grid.
+  h.run("navigate('dev')"); await flush(); await h.fire(300);
+  assert.deepEqual(resizes(), [{ cols: 55, rows: 40 }]);
+  assert.equal(h.el('#dev-size').textContent, '55×40');
+  assert.equal(h.el('#dev-size').disabled, true);
+  // The PC window took the size (window-size latest): reads show it, and never resize back.
+  pane = { cols: 120, rows: 40 };
+  h.run('devRead(devGeneration)'); await flush(); await h.fire(300);
+  h.run('devRefit()'); await h.fire(300);
+  assert.equal(resizes().length, 1, 'a read or an unchanged box does not fight the PC');
+  assert.equal(h.el('#dev-size').textContent, 'PC 120×40 · fit');
+  assert.equal(h.el('#dev-size').disabled, false);
+  // A tap on the badge fits the pane back to the phone.
+  h.el('#dev-size').click(); await h.fire(300);
+  assert.deepEqual(resizes()[1], { cols: 55, rows: 40 });
+  assert.equal(h.el('#dev-size').textContent, '55×40');
+  // So does a font change (the grid itself changed).
+  pane = { cols: 120, rows: 40 };
+  h.run('devRead(devGeneration)'); await flush();
+  probe.clientWidth = 168; probe.clientHeight = 17.5; h.el('#dev-font-up').click(); await h.fire(300);
+  assert.equal(resizes().length, 3);
+  assert.ok(resizes()[2].cols < 55, 'a bigger font fits fewer columns');
 });

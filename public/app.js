@@ -2783,7 +2783,7 @@ function devKeyPayload(button) {
 let devFont = Number(savedPreference('ponte-dev-font', String(DEV_FONT_DEFAULT)));
 if (!(devFont >= DEV_FONT_MIN && devFont <= DEV_FONT_MAX)) devFont = DEV_FONT_DEFAULT;
 let devId = '', devSessions = [], devHash = '', devHashId = '', devTimer, devGeneration = 0, devBusy = false;
-let devLastInput = 0, devIdleDelay = 1000, devFollow = true, devGridNow = null, devResizeTimer, devAgent = 'claude', devProjects = [], devProjectsToken = '';
+let devLastInput = 0, devIdleDelay = 1000, devFollow = true, devGridNow = null, devPane = null, devBox = '', devResizeTimer, devAgent = 'claude', devProjects = [], devProjectsToken = '';
 function devVisible() { return currentPage === 'dev' && !!token && !document.hidden && !nativePaused; }
 function devStatus(message, error = false) { dictationStatus($('#dev-status'), message, error); }
 // The character grid the screen box holds at the current font, or an estimate
@@ -2814,7 +2814,7 @@ function devRenderSessions() {
 }
 function devSelect(id) {
   devId = id; devHash = ''; devHashId = ''; devFollow = true;
-  $('#dev-output').innerHTML = ''; $('#dev-size').textContent = ''; $('#dev-live').hidden = true;
+  devPane = null; $('#dev-output').innerHTML = ''; devRenderSize(); $('#dev-live').hidden = true;
   if (id) savePreference('ponte-dev-session', id);
   devRenderSessions();
 }
@@ -2859,7 +2859,7 @@ async function devRead(generation) {
     const since = devHash && devHashId === id ? `&since=${encodeURIComponent(devHash)}` : '';
     const view = await (await api(`/terminals/${encodeURIComponent(id)}?format=ansi${since}`,{timeout:8000})).json();
     if (generation !== devGeneration || id !== devId || requestToken !== token || !devVisible()) return;
-    $('#dev-size').textContent = view.cols && view.rows ? `${view.cols}×${view.rows}` : '';
+    if (view.cols && view.rows) { devPane = {id, cols:view.cols, rows:view.rows}; devRenderSize(); }
     if (view.unchanged === true || typeof view.text !== 'string') devIdleDelay = Math.min(3000, Math.round(devIdleDelay * 1.5));
     else {
       devIdleDelay = 1000;
@@ -2868,7 +2868,6 @@ async function devRead(generation) {
       if (devFollow) screen.scrollTop = screen.scrollHeight;
     }
     devHash = view.hash || ''; devHashId = id;
-    if (devGridNow && (view.cols !== devGridNow.cols || view.rows !== devGridNow.rows)) devQueueResize();
   } catch (error) {
     if (generation !== devGeneration || requestToken !== token) return;
     if (error && (error.errorCode === 'TERMINAL_NOT_FOUND' || error.errorCode === 'TERMINAL_CHANGED')) { devSelect(''); devLoadSessions(); }
@@ -2881,30 +2880,45 @@ function updateDevNavigation() {
   const generation = ++devGeneration;
   if (!devVisible()) return;
   devApplyFont(); devLoadProjects();
-  devLoadSessions().then(() => { devRefit(); devRead(generation); });
+  devLoadSessions().then(() => { devRefit(true); devRead(generation); });
 }
 function devApplyFont() {
   $('#page-dev').style.setProperty('--dev-font', `${devFont}px`);
   $('#dev-font-down').disabled = devFont <= DEV_FONT_MIN; $('#dev-font-up').disabled = devFont >= DEV_FONT_MAX;
 }
-// Rotating the phone, opening the keyboard or changing the font changes the
-// grid; the pane follows once the box stops changing for 300 ms.
-function devRefit() {
+// The pane takes the phone's grid only on the tab's own layout events: entering
+// the tab, choosing a session, a tap on the size badge (forced), and rotating,
+// the keyboard or the font (the grid changed). A read never resizes: a session
+// opened on the PC follows the PC window until the phone asks for it back.
+function devRefit(force = false) {
   const grid = devMeasure();
   if (!grid) return;
+  const changed = !devGridNow || grid.cols !== devGridNow.cols || grid.rows !== devGridNow.rows;
   devGridNow = grid;
-  devQueueResize();
+  devRenderSize();
+  if (changed || force) devQueueResize();
+}
+// The badge shows the pane size; when it is not the phone's grid (the PC
+// window sized it) the lines scroll sideways and a tap fits the pane back.
+function devRenderSize() {
+  const badge = $('#dev-size'), pane = devPane && devPane.id === devId ? devPane : null, grid = devGridNow;
+  const other = !!(pane && grid && (pane.cols !== grid.cols || pane.rows !== grid.rows));
+  const size = pane ? `${pane.cols}×${pane.rows}` : '';
+  badge.textContent = !other ? size : pane.cols > grid.cols || pane.rows > grid.rows ? t('PC {size} · ajustar',{size}) : t('{size} · ajustar',{size});
+  badge.disabled = !other;
+  badge.classList.toggle('dev-size-other', other);
 }
 function devQueueResize() {
   clearTimeout(devResizeTimer);
   devResizeTimer = setTimeout(async () => {
     const id = devId, grid = devGridNow;
     if (!id || !grid || !devVisible()) return;
-    const session = devSessions.find(item => item.id === id);
-    if (session && session.cols === grid.cols && session.rows === grid.rows) return;
+    const session = devSessions.find(item => item.id === id), pane = devPane && devPane.id === id ? devPane : session;
+    if (pane && pane.cols === grid.cols && pane.rows === grid.rows) return;
     try {
       await api(`/terminals/${encodeURIComponent(id)}/resize`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(grid)});
       if (session) { session.cols = grid.cols; session.rows = grid.rows; }
+      if (devId === id) { devPane = {id, cols:grid.cols, rows:grid.rows}; devRenderSize(); }
       devHash = ''; devLastInput = Date.now();
     } catch (error) { devStatus(error, true); }
   }, 300);
@@ -2952,6 +2966,7 @@ async function devCreate(agent, project) {
 }
 function devRenderAgents() { $$('[data-dev-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.devAgent === devAgent))); }
 $('#dev-session').addEventListener('change', event => { devSelect(event.target.value); updateDevNavigation(); });
+$('#dev-size').addEventListener('click', () => devRefit(true));
 $('#dev-new').addEventListener('click', () => { const panel = $('#dev-new-panel'); panel.hidden = !panel.hidden; $('#dev-new').setAttribute('aria-expanded',String(!panel.hidden)); devLoadProjects(); });
 $$('[data-dev-agent]').forEach(button => button.addEventListener('click', () => { devAgent = button.dataset.devAgent; devRenderAgents(); }));
 $('#dev-create').addEventListener('click', () => devCreate(devAgent, $('#dev-project').value));
@@ -3012,7 +3027,14 @@ $('#dev-open-confirm').addEventListener('click', async () => {
   try { await api(`/terminals/${encodeURIComponent(devId)}/open`,{method:'POST'}); devStatus(t('Aberta numa janela do PC.')); }
   catch (error) { devStatus(error, true); }
 });
-if (typeof ResizeObserver === 'function') new ResizeObserver(() => { if (!devVisible()) return; if (devFollow) $('#dev-screen').scrollTop = $('#dev-screen').scrollHeight; devRefit(); }).observe($('#dev-screen'));
+// Scrollbars coming and going (a wider PC pane) change the content box but not
+// the box itself, so they never count as a layout change.
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => {
+  if (!devVisible()) return;
+  const screen = $('#dev-screen'), box = `${screen.offsetWidth}×${screen.offsetHeight}`;
+  if (devFollow) screen.scrollTop = screen.scrollHeight;
+  if (box !== devBox) { devBox = box; devRefit(); }
+}).observe($('#dev-screen'));
 window.addEventListener('resize', () => { if (devVisible()) devRefit(); });
 document.addEventListener('visibilitychange', updateDevNavigation);
 window.addEventListener('pagehide', () => { clearTimeout(devTimer); devGeneration++; });
