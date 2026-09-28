@@ -11,7 +11,7 @@ import { brotliCompress, constants as zlibConstants, gzip } from 'node:zlib';
 import { createDesktop } from './backend/desktop.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from './backend/audio.mjs';
 import { createImageInbox, MAX_IMAGE_BYTES } from './backend/images.mjs';
-import { ApiError } from './backend/process.mjs';
+import { ApiError, runCommand } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
 import { createTerminals } from './backend/terminals.mjs';
 import { createAgents } from './backend/agents.mjs';
@@ -21,7 +21,9 @@ import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
 import { message, publicErrorParameters, requestLocale } from './backend/i18n.mjs';
 import { readNativeTls } from './backend/tls.mjs';
-import { createMesh } from './backend/mesh.mjs';
+import { createMesh, peerFailure } from './backend/mesh.mjs';
+import { acceptUpgrade, rejectUpgrade, connect as connectWs, pipe as pipeWs } from './backend/ws.mjs';
+import { createRemoteDesktop, RD_VERSION } from './backend/rd.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -235,8 +237,79 @@ export async function createApp(options = {}) {
     value.mesh = { ...mesh.view(), target: peer.peerId };
     return value;
   }
+  const readMonitors = async () => {
+    const list = JSON.parse(await runCommand('hyprctl', ['-j', 'monitors'], { env, timeout: 3000 }));
+    if (!Array.isArray(list)) throw new ApiError(503, 'HYPRLAND_INVALID_RESPONSE');
+    return list;
+  };
+  const rd = options.rd || createRemoteDesktop({ env, readMonitors, node: () => ({ id: mesh.id, name: mesh.name }), ...options.rdOptions });
   const activeRequests = new Set();
   let shuttingDown = false, closingPromise;
+
+  // Who may open a remote-desktop session: today the owner's token. The mesh
+  // extends this with peer tokens (bound to a node id and its tailnet IP).
+  // Returns a principal or null.
+  async function authorizeRd(token, req) {
+    const caller = authenticate(token, req);
+    // Whoever sits at this machine sees that another node took the screen.
+    if (caller?.kind === 'peer') notifyPeerControl(caller.peer);
+    return caller;
+  }
+  function notifyPeerControl(peer) {
+    const text = message('RD_PEER_CONTROL', env.LANG?.startsWith('pt') ? 'pt' : 'en', { name: peer.name || peer.ip });
+    if (options.notify) { options.notify(text); return; }
+    runCommand('notify-send', ['-a', 'Ponte', '-u', 'normal', 'Ponte', text], { env, timeout: 3000 }).catch(() => {});
+  }
+
+  // /api/rd?node=<id>: the owner's browser talks to this node, which checks
+  // the hello, opens its own WebSocket to the paired node with the peer token
+  // (its CA pinned) and, once that node answers, joins the two byte for byte.
+  // A peer's token never gets relayed further (no chains).
+  function relayRd(ws, req, peerId, search) {
+    let state = 'hello', far = null;
+    const early = [];
+    const refuse = (code, closeCode = 1011) => {
+      far?.terminate();
+      if (ws.readyState !== 'open') return;
+      ws.send(JSON.stringify({ t: 'error', code }));
+      ws.close(closeCode, code);
+    };
+    const timer = setTimeout(() => refuse('INVALID_HELLO', 1008), 10000);
+    ws.once('close', () => { clearTimeout(timer); if (state !== 'piped') far?.terminate(); });
+    ws.on('message', (data, binary) => {
+      if (state === 'hello') { state = 'connecting'; open(data, binary); return; }
+      if (state === 'connecting' && !binary && early.length < 256) early.push(data);
+    });
+    async function open(data, binary) {
+      clearTimeout(timer);
+      let hello = null;
+      if (!binary) { try { hello = JSON.parse(data); } catch {} }
+      if (!hello || hello.t !== 'hello' || hello.v !== RD_VERSION) { refuse('INVALID_HELLO', 1002); return; }
+      let caller = null;
+      try { caller = authenticate(hello.token, req); } catch {}
+      if (!caller) { refuse('PAIRING_REQUIRED', 1008); return; }
+      if (caller.kind !== 'owner') { refuse('MESH_CHAIN_DENIED', 1008); return; }
+      let target;
+      try { target = mesh.connection(peerId); } catch (error) { refuse(error.code || 'MESH_PEER_NOT_FOUND'); return; }
+      try {
+        far = await connectWs(`wss://${target.host}:${target.port}/api/rd${search}`, { ca: target.ca, maxMessage: 8 * 1024 * 1024, timeout: 5000 });
+      } catch (error) { refuse(peerFailure(error, target.name).code); return; }
+      if (ws.readyState !== 'open') { far.terminate(); return; }
+      far.once('close', () => { if (state !== 'piped') refuse('PEER_OFFLINE'); });
+      far.once('message', (reply, farBinary) => {
+        let answer = null;
+        if (!farBinary) { try { answer = JSON.parse(reply); } catch {} }
+        // The far node no longer knows our token: the link is dead.
+        if (answer?.t === 'error' && answer.code === 'PAIRING_REQUIRED') { mesh.forget(peerId); refuse('PEER_REVOKED', 1008); return; }
+        if (ws.readyState !== 'open' || far.readyState !== 'open') { refuse('PEER_OFFLINE'); return; }
+        ws.send(reply);
+        for (const text of early.splice(0)) far.send(text);
+        state = 'piped';
+        pipeWs(ws, far);
+      });
+      far.send(JSON.stringify({ ...hello, token: target.token }));
+    }
+  }
 
   async function serveFile(res, file, mime) {
     const metadata = await lstat(file);
@@ -322,7 +395,7 @@ export async function createApp(options = {}) {
       // is allowed; cross-site requests to the private API are still rejected.
       if (pathname.startsWith('/api/') && req.headers['sec-fetch-site'] === 'cross-site') throw new ApiError(403, 'CROSS_SITE_NOT_ALLOWED');
       const serveLogin = req.ponteNative ? undefined : req.headers['tailscale-user-login'];
-      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true, version: uiVersion, autoPair: (!!req.ponteNative || !!serveLogin) && tailnetIdentity.available }); return; }
+      if (pathname === '/api/health' && req.method === 'GET') { json(res, 200, { name: 'Ponte', requiresPairing: true, version: uiVersion, autoPair: (!!req.ponteNative || !!serveLogin) && tailnetIdentity.available, rd: (await rd.capabilities()).rd }); return; }
       if (pathname === '/api/pair' && req.method === 'GET') {
         // Over the tailnet TLS listener, only for a device the daemon says
         // belongs to this PC's owner (the loopback proxy preserves the phone's
@@ -367,7 +440,7 @@ export async function createApp(options = {}) {
       }
       if (pathname === '/api/state' && req.method === 'GET') {
         const state = await limits.only('state', 2, () => desktop.getState({ locale }));
-        if (state?.capabilities) state.capabilities = { ...state.capabilities, stt: await transcriber.available() };
+        if (state?.capabilities) state.capabilities = { ...state.capabilities, stt: await transcriber.available(), rd: (await rd.capabilities()).rd };
         if (state && typeof state === 'object') state.version = uiVersion;
         if (state && typeof state === 'object' && caller.kind === 'owner' && mesh.active()) state.mesh = mesh.view();
         json(res, 200, state); return;
@@ -526,10 +599,41 @@ export async function createApp(options = {}) {
       activeRequests.delete(pending); finishRequest();
     }
   };
+  // /api/rd is the only WebSocket: same Host/Origin guard and rate limit as
+  // the rest of the API; the token comes in the first message (see rd.mjs).
+  const handleUpgrade = (req, socket, head) => {
+    let pathname, query;
+    try {
+      if (shuttingDown) throw new ApiError(503, 'SERVER_RESTARTING');
+      guard(req); limits.request();
+      if (!req.url?.startsWith('/') || req.url.startsWith('//')) throw new ApiError(400, 'INVALID_URL');
+      pathname = req.url.split('?', 1)[0];
+      if (req.headers['sec-fetch-site'] === 'cross-site') throw new ApiError(403, 'CROSS_SITE_NOT_ALLOWED');
+      if (pathname !== '/api/rd') throw new ApiError(404, 'ROUTE_NOT_FOUND');
+      query = new URL(req.url, 'http://localhost').searchParams;
+      if (query.getAll('node').length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
+    } catch (error) {
+      const status = error instanceof ApiError ? error.status : 400;
+      rejectUpgrade(socket, status, status === 403 ? 'Forbidden' : status === 404 ? 'Not Found' : status === 429 ? 'Too Many Requests' : status === 503 ? 'Service Unavailable' : 'Bad Request');
+      return;
+    }
+    const ws = acceptUpgrade(req, socket, head);
+    if (!ws) return;
+    const node = query.get('node');
+    if (node && node !== mesh.id) {
+      query.delete('node');
+      const rest = query.toString();
+      relayRd(ws, req, node, rest ? `?${rest}` : '');
+      return;
+    }
+    rd.accept(ws, req, { authorize: authorizeRd });
+  };
   const server = http.createServer(handleRequest);
+  server.on('upgrade', handleUpgrade);
   // The Android app trusts this PC's dedicated certificate. No public CA,
   // certificate-warning exception or tailnet account login is needed here.
   const nativeServer = nativeTls ? https.createServer({ ...nativeTls, minVersion: 'TLSv1.2', handshakeTimeout: 5000 }, (req, res) => { req.ponteNative = true; handleRequest(req, res); }) : null;
+  nativeServer?.on('upgrade', (req, socket, head) => { req.ponteNative = true; handleUpgrade(req, socket, head); });
   const servers = [server, nativeServer].filter(Boolean);
   const sockets = new Set();
   for (const listener of servers) {
@@ -550,6 +654,7 @@ export async function createApp(options = {}) {
     limits.stop();
     agentEvents.close?.();
     live.close();
+    const rdClosed = rd.close();
     const terminalsClosed = Promise.resolve(terminals.close?.());
     closingPromise = (async () => {
       const closed = Promise.all(servers.map(listener => new Promise(resolve => listener.close(() => resolve()))));
@@ -562,6 +667,7 @@ export async function createApp(options = {}) {
       await Promise.allSettled([...activeRequests]);
       await limits.drain();
       await terminalsClosed;
+      await rdClosed;
       await Promise.resolve(desktop.close?.()).catch(() => {});
       await audio.close?.();
       await mesh.close?.();
@@ -569,7 +675,7 @@ export async function createApp(options = {}) {
     })();
     return closingPromise;
   }
-  return { server, nativeServer, close, dataDir: initialized.dataDir, mesh, authenticate };
+  return { server, nativeServer, close, dataDir: initialized.dataDir, mesh, authenticate, rd };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

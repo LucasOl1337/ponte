@@ -79,7 +79,9 @@ async function fixture(t, overrides = {}) {
 test('pairing protects state and audio; health never reveals token; token persists privately', async t => {
   const f = await fixture(t);
   const health = await fetch(`${f.base}/api/health`);
-  assert.deepEqual(await health.json(), { name: 'Ponte', requiresPairing: true, version: JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version, autoPair: false });
+  const healthBody = await health.json();
+  assert.equal(typeof healthBody.rd, 'boolean'); // remote desktop available (tools present), nothing secret
+  assert.deepEqual(healthBody, { name: 'Ponte', requiresPairing: true, version: JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version, autoPair: false, rd: healthBody.rd });
   for (const url of ['/api/state', '/api/audio', '/api/screenshot', '/api/stream']) {
     const response = await fetch(`${f.base}${url}`);
     assert.equal(response.status, 401);

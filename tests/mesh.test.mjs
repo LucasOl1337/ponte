@@ -10,6 +10,8 @@ import { createApp } from '../server.mjs';
 import { createDesktop } from '../backend/desktop.mjs';
 import { createMesh } from '../backend/mesh.mjs';
 import { createTailscaleIdentity } from '../backend/tailscale.mjs';
+import { connect as connectWs } from '../backend/ws.mjs';
+import { parseVideoHeader } from '../backend/rd.mjs';
 
 const run = promisify(execFile);
 const TOKENS = { a: 'mesh_owner_token_a_with_at_least_32_characters', b: 'mesh_owner_token_b_with_at_least_32_characters' };
@@ -46,7 +48,7 @@ function fakeDesktop(hostname) {
 
 // One node: its own dataDir, CA, owner token, loopback HTTP and tailnet TLS
 // listener (both on 127.0.0.1 here). Discovery and the whois are injected.
-async function node(t, { key, name, discover, identity, meshOptions = {} }) {
+async function node(t, { key, name, discover, identity, meshOptions = {}, rdOptions, notify }) {
   const root = await mkdtemp(path.join(os.tmpdir(), `ponte-mesh-${key}-`));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, 'public'));
@@ -56,7 +58,7 @@ async function node(t, { key, name, discover, identity, meshOptions = {} }) {
   const app = await createApp({
     rootDir: root, dataDir: path.join(root, 'private'), token: TOKENS[key], env: {}, nativeTls: { cert: tls.cert, key: tls.key }, caPem: tls.ca,
     desktop, audio: { close: async () => {} }, tailnetIdentity: identity,
-    meshOptions: { name, enabled: true, discover, pollInterval: 40, ...meshOptions },
+    meshOptions: { name, enabled: true, discover, pollInterval: 40, ...meshOptions }, rdOptions, notify,
   });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   await new Promise(resolve => app.nativeServer.listen(0, '127.0.0.1', resolve));
@@ -97,7 +99,7 @@ async function until(check, what, timeout = 4000) {
 async function twoNodes(t, options = {}) {
   let a, b;
   a = await node(t, { key: 'a', name: 'pc-teste', identity: options.identityA || owner, discover: async () => [{ ip: '127.0.0.1', port: b.nativePort }] });
-  b = await node(t, { key: 'b', name: 'notebook-teste', identity: options.identityB || owner, discover: async () => [{ ip: '127.0.0.1', port: a.nativePort }], meshOptions: options.meshB });
+  b = await node(t, { key: 'b', name: 'notebook-teste', identity: options.identityB || owner, discover: async () => [{ ip: '127.0.0.1', port: a.nativePort }], meshOptions: options.meshB, rdOptions: options.rdB, notify: options.notifyB });
   return { a, b };
 }
 
@@ -364,4 +366,84 @@ test('./ponte mesh lists, pairs, approves and revokes through the local server',
   assert.match((await cli(b, ['revoke', 'pc-teste'])).stdout, /Revoked: pc-teste/);
   const offline = await cli({ dataDir: a.dataDir, httpPort: 9 }, ['list']);
   assert.equal(offline.code, 1); assert.match(offline.stderr, /not answering/);
+});
+
+// A fake screen on B: one keyframe with its SPS every 30 ms, and an input
+// device that only records what it was told.
+function fakeRd() {
+  const input = [];
+  const makeCapture = ({ onUnit }) => {
+    let timer = null;
+    return {
+      running: true,
+      start(params) { this.params = params; timer = setInterval(() => onUnit({ data: Buffer.from([0, 0, 0, 1, 0x65, 1, 2, 3]), keyframe: true, sps: { codec: 'avc1.640034', width: 1920, height: 1080 }, params: { ...this.params, fps: 60, kbps: 4000 }, firstAt: performance.now(), lastAt: performance.now() }), 30); },
+      restart(params) { this.params = { ...this.params, ...params }; },
+      stop() { clearInterval(timer); this.running = false; },
+    };
+  };
+  const createInput = () => ({ setMonitors() {}, start() {}, stop() {}, alive() {}, release() { input.push(['release']); }, key: (code, down) => input.push(['key', code, down]), move() {}, rel() {}, button() {}, wheel() {} });
+  const monitors = [{ name: 'DP-1', x: 0, y: 0, width: 1920, height: 1080, scale: 1, focused: true }];
+  return { input, rdOptions: { makeCapture, createInput, inputMode: 'uinput', exists: async () => true, readMonitors: async () => monitors, clipboard: { watch: () => () => {}, write: async () => {} }, log: { info() {}, error() {} } } };
+}
+
+// The owner's browser on A's loopback, reading messages in order.
+async function rdClient(port, query) {
+  const ws = await connectWs(`ws://127.0.0.1:${port}/api/rd${query}`, { maxMessage: 8 * 1024 * 1024 });
+  const inbox = [], waiters = [];
+  ws.on('message', (data, binary) => { inbox.push(binary ? { video: parseVideoHeader(data) } : JSON.parse(data)); waiters.splice(0).forEach(wake => wake()); });
+  ws.on('close', () => waiters.splice(0).forEach(wake => wake()));
+  const next = async (match, what) => {
+    const started = Date.now();
+    for (;;) {
+      const index = inbox.findIndex(match);
+      if (index >= 0) return inbox.splice(index, 1)[0];
+      if (ws.readyState !== 'open' || Date.now() - started > 4000) throw new Error(`no ${what}: ${JSON.stringify(inbox.slice(0, 3))}`);
+      await new Promise(resolve => { waiters.push(resolve); setTimeout(resolve, 100); });
+    }
+  };
+  return { ws, next };
+}
+
+test('rd relay: the owner on A drives B through /api/rd?node=, B sees a peer and says so; chains, strangers and dead links are refused', async t => {
+  const b1 = fakeRd(), notices = [];
+  const { a, b } = await twoNodes(t, { rdB: b1.rdOptions, notifyB: text => notices.push(text) });
+  const offline = await rdClient(a.httpPort, `?node=${b.mesh.id}`);
+  offline.ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKENS.a }));
+  assert.equal((await offline.next(m => m.t === 'error', 'error')).code, 'MESH_PEER_NOT_FOUND');
+  await pairAtoB(a, b);
+
+  const client = await rdClient(a.httpPort, `?node=${b.mesh.id}&monitor=DP-1`);
+  client.ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKENS.a, maxFps: 60 }));
+  client.ws.send(JSON.stringify({ t: 'key', code: 'KeyA', down: true }));
+  const ready = await client.next(m => m.t === 'ready', 'ready');
+  assert.equal(ready.node.id, b.mesh.id);
+  assert.equal(ready.node.name, 'notebook-teste');
+  assert.equal(ready.monitor, 'DP-1');
+  const frame = await client.next(m => m.video, 'video');
+  assert.equal(frame.video.keyframe, true);
+  client.ws.send(JSON.stringify({ t: 'key', code: 'KeyA', down: false }));
+  client.ws.send(JSON.stringify({ t: 'ping', c: 1 }));
+  assert.equal((await client.next(m => m.t === 'pong', 'pong')).c, 1);
+  assert.deepEqual(b1.input.filter(item => item[0] === 'key'), [['key', 'KeyA', true], ['key', 'KeyA', false]], 'input sent before and after ready reaches B in order');
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /pc-teste/);
+  client.ws.close();
+
+  // A peer token is never relayed further, and the owner token of B means nothing on A.
+  const peerToken = a.mesh.connection(b.mesh.id).token;
+  const chain = await connectWs(`wss://127.0.0.1:${b.nativePort}/api/rd?node=${a.mesh.id}`, { ca: b.tls.ca });
+  const chainReply = new Promise(resolve => chain.once('message', data => resolve(JSON.parse(data))));
+  chain.send(JSON.stringify({ t: 'hello', v: 1, token: peerToken }));
+  assert.equal((await chainReply).code, 'MESH_CHAIN_DENIED');
+  const stranger = await rdClient(a.httpPort, `?node=${b.mesh.id}`);
+  stranger.ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKENS.b }));
+  assert.equal((await stranger.next(m => m.t === 'error', 'error')).code, 'PAIRING_REQUIRED');
+
+  // B revokes: A's next attempt says so and forgets the link.
+  const revoked = await json(await b.local('/api/action', { method: 'POST', body: { type: 'mesh.revoke', peer: 'pc-teste' } }));
+  assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
+  const late = await rdClient(a.httpPort, `?node=${b.mesh.id}`);
+  late.ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKENS.a }));
+  assert.equal((await late.next(m => m.t === 'error', 'error')).code, 'PEER_REVOKED');
+  assert.equal(a.mesh.isPeer(b.mesh.id), false);
 });

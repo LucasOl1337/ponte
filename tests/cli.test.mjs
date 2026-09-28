@@ -438,3 +438,46 @@ test('phone timer installs and removes a managed user timer that keeps the adb l
   assert.match(off.stdout, /removed/);
   await assert.rejects(stat(path.join(units, 'ponte-phone.service')));
 });
+
+test('rd opens Chromium in --app mode on rd.html with its own profile, resolving a device name through /api/mesh', async t => {
+  const f = await fixture(t);
+  const http = await import('node:http');
+  let meshAnswer = { self: { id: 'aaaaaaaaaaaaaaaa', name: 'pc-teste' }, peers: [{ id: 'feedfacecafebeef', name: 'notebook-teste', online: true, paired: true }, { id: 'bbbbbbbbbbbbbbbb', name: 'pedido', paired: false }] };
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization });
+    if (!meshAnswer) { res.writeHead(404).end(); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(meshAnswer));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const port = server.address().port;
+  await f.cli(['setup', '--local-only', '--http-port', String(port)]);
+  const token = (await readFile(path.join(f.dataDir, 'token'), 'utf8')).trim();
+  const base = `http://127.0.0.1:${port}/rd.html#pair=${token}`;
+
+  assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), base);
+  assert.equal(requests.length, 0, 'this PC needs no lookup');
+  assert.equal((await f.cli(['rd', 'Notebook-Teste', '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`);
+  assert.deepEqual(requests.at(-1), { url: '/api/mesh', authorization: `Bearer ${token}` });
+  assert.equal((await f.cli(['rd', 'pc-teste', '--monitor', 'DP-3', '--print-url'])).stdout.trim(), `${base}&monitor=DP-3`);
+  await assert.rejects(f.cli(['rd', 'pedido', '--print-url']), error => /No paired device called 'pedido' \(known: notebook-teste\)/.test(error.stderr));
+  meshAnswer = null;
+  assert.equal((await f.cli(['rd', 'feedfacecafebeef', '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`, 'a node id works without the mesh route');
+  await assert.rejects(f.cli(['rd', 'notebook-teste', '--print-url']), error => /device list is unavailable \(HTTP 404\)/.test(error.stderr));
+
+  await assert.rejects(f.cli(['rd'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
+  await writeFile(path.join(f.bin, 'chromium'), await readFile(path.join(f.bin, 'tailscale'), 'utf8'), { mode: 0o755 });
+  const opened = await f.cli(['rd']);
+  assert.match(opened.stdout, /Ctrl\+Alt\+Shift/);
+  assert.equal(opened.stdout.includes(token), false, 'the key is not printed');
+  let calls = [];
+  for (let i = 0; i < 100 && !calls.some(call => call[0] === 'chromium'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    calls = (await readFile(f.log, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse);
+  }
+  const profile = path.join(f.env.XDG_STATE_HOME, 'ponte/rd-chromium');
+  assert.deepEqual(calls.find(call => call[0] === 'chromium'), ['chromium', `--app=${base}`, `--user-data-dir=${profile}`, '--class=ponte-rd', '--no-first-run', '--no-default-browser-check']);
+  assert.equal((await stat(profile)).mode & 0o777, 0o700);
+  for (const flag of ['--disable-gpu', '--headless', '--remote-debugging-port', '--enable-automation']) assert.equal(calls.flat().some(arg => arg.startsWith(flag)), false, flag);
+});

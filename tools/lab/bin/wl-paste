@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Fake wl-paste: never touches a real clipboard. Reads the lab clipboard
+($PONTE_LAB_DIR/clipboard.bin, written by the fake wl-copy). With --watch CMD
+it runs CMD with the content on stdin at start and on every change (polled),
+like the real one does for the selection."""
+import sys, os, time, subprocess
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _lab
+args = sys.argv[1:]
+path = os.path.join(_lab.LAB, 'clipboard.bin')
+
+def read():
+    try:
+        with open(path, 'rb') as f: return f.read()
+    except OSError: return None
+
+if '--watch' in args:
+    command = args[args.index('--watch') + 1:]
+    last = None
+    while True:
+        try: info = os.stat(path); key = (info.st_mtime_ns, info.st_size)
+        except OSError: key = None
+        if key != last:
+            last = key
+            data = read()
+            if data is not None: subprocess.run(command, input=data)
+        time.sleep(0.2)
+data = read()
+if data is None:
+    sys.stderr.write('Nothing is copied\n'); sys.exit(1)
+sys.stdout.buffer.write(data if ('-n' in args or '--no-newline' in args) else data + b'\n')

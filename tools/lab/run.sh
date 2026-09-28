@@ -34,11 +34,19 @@ export PATH="$root/tools/lab/bin:$PATH"
 # keeps any real clipboard tool away from the owner's session.
 export WAYLAND_DISPLAY=ponte-lab-none
 export PONTE_SUSSURRO_SOCKET='' PONTE_STT_URL=''
+# Remote desktop (/api/rd): an ffmpeg test pattern with the capture-time band
+# instead of the screen, and the input helper in dry-run, which appends the evdev
+# frames it would write to events.jsonl. The lab never creates a uinput device.
+# PONTE_LAB_EXTRA_MONITORS="LAB-2:1280x720" adds outputs for the monitor picker.
+export PONTE_RD_CAPTURE=lab PONTE_RD_INPUT=dry-run PONTE_RD_INPUT_LOG="$PONTE_LAB_DIR/events.jsonl"
 # Never the owner's Magma controller: it drives the real RGB. PONTE_LAB_MAGMA
 # (a folder with a controller.py copy) runs that copy with a lab HOME and the
 # fake openrgb; without it the lab has no lights.
 if [ -n "${PONTE_LAB_MAGMA:-}" ]; then export MAGMA_LIGHTS_CONTROLLER="$root/tools/lab/magma.py"
 else export MAGMA_LIGHTS_CONTROLLER="$PONTE_LAB_DIR/no-magma/controller.py"; fi
 cd "$root"
-( sleep 1.5; if [ -f "$PONTE_LAB_DIR/data/token" ]; then echo "lab: http://127.0.0.1:$port/#pair=$(cat "$PONTE_LAB_DIR/data/token")"; fi ) &
+( sleep 1.5; if [ -f "$PONTE_LAB_DIR/data/token" ]; then
+  echo "lab: http://127.0.0.1:$port/#pair=$(cat "$PONTE_LAB_DIR/data/token")"
+  if [ -f "$root/public/rd.html" ]; then echo "lab rd: http://127.0.0.1:$port/rd.html#pair=$(cat "$PONTE_LAB_DIR/data/token")"; fi
+fi ) &
 exec "${PONTE_NODE:-node}" server.mjs

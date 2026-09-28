@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#151714">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/rd.css">
+  <title data-i18n="Ponte — área de trabalho remota">Ponte — remote desktop</title>
+</head>
+<body class="rd">
+  <header class="rd-bar" id="rd-bar">
+    <span class="brand"><span data-i18n="ponte">ponte</span><span class="brand-dot">.</span></span>
+    <label class="rd-field"><span class="sr-only" data-i18n="Aparelho">Device</span>
+      <select id="rd-node" aria-label="Device" data-i18n-aria-label="Aparelho"></select></label>
+    <label class="rd-field"><span class="sr-only" data-i18n="Monitor">Monitor</span>
+      <select id="rd-monitor" aria-label="Monitor" data-i18n-aria-label="Monitor"></select></label>
+    <div class="rd-segment" role="group" aria-label="Pointer" data-i18n-aria-label="Ponteiro">
+      <button type="button" id="rd-mode-abs" aria-pressed="true" title="Absolute: the pointer goes where you point" data-i18n-title="Absoluto: o ponteiro vai aonde você aponta" data-i18n="Abs">Abs</button>
+      <button type="button" id="rd-mode-rel" aria-pressed="false" title="Relative: pointer lock with raw movement, for games and 3D" data-i18n-title="Relativo: ponteiro travado com movimento cru, pra jogo e 3D" data-i18n="Rel">Rel</button>
+    </div>
+    <button type="button" class="rd-button" id="rd-fullscreen" data-i18n="Tela cheia">Full screen</button>
+    <button type="button" class="rd-button" id="rd-probe" hidden data-i18n="Sonda">Probe</button>
+    <span class="rd-status" id="rd-status" role="status" aria-live="polite"></span>
+    <span class="rd-stats" id="rd-stats" aria-live="off"></span>
+    <span class="rd-hint" id="rd-hint" data-i18n="Soltar: Ctrl+Alt+Shift ou segure Esc">Release: Ctrl+Alt+Shift or hold Esc</span>
+    <label class="language-choice"><span class="sr-only" data-i18n="Idioma">Language</span><select data-language-select aria-label="Language" data-i18n-aria-label="Idioma"><option value="en">EN</option><option value="pt">PT</option></select></label>
+  </header>
+  <main class="rd-stage" id="rd-stage" aria-label="Remote screen. Click to control." data-i18n-aria-label="Tela remota. Clique para controlar.">
+    <canvas id="rd-canvas" width="16" height="9"></canvas>
+    <div class="rd-overlay" id="rd-overlay">
+      <p id="rd-message" data-i18n="Conectando…">Connecting…</p>
+      <button type="button" class="rd-button" id="rd-retry" hidden data-i18n="Retomar o controle">Take control back</button>
+    </div>
+    <p class="rd-note" id="rd-note" hidden></p>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/rd.js"></script>
+</body>
+</html>

@@ -90,7 +90,7 @@ function tlsJson({ ip, port, caPem, method = 'GET', target, token, body, timeout
   });
 }
 
-const peerFailure = (error, name) => new ApiError(502, CERTIFICATE_ERRORS.test(String(error?.code || '')) ? 'PEER_UNTRUSTED' : 'PEER_OFFLINE', { name });
+export const peerFailure = (error, name) => new ApiError(502, CERTIFICATE_ERRORS.test(String(error?.code || '')) ? 'PEER_UNTRUSTED' : 'PEER_OFFLINE', { name });
 
 export async function createMesh({
   dataDir, env = process.env, runner = runCommand, identity, version = 'dev', caPem = null, selfPort = null,
@@ -406,6 +406,13 @@ export async function createMesh({
   }
   function dropAgent(id) { agents.get(id)?.destroy(); agents.delete(id); }
 
+  // A peer that no longer knows our token: forget the link (it shows up again
+  // as a node to ask). `expected` guards against a link re-made meanwhile.
+  function forget(peerId, expected = peers.get(peerId)) {
+    if (!expected || peers.get(peerId) !== expected) return;
+    peers.delete(peerId); dropAgent(peerId); save().catch(() => {});
+  }
+
   function connection(peerId) {
     const peer = peers.get(peerId);
     if (!peer) throw new ApiError(404, 'MESH_PEER_NOT_FOUND');
@@ -451,7 +458,7 @@ export async function createMesh({
         // forgotten and the node shows up again as one to ask.
         if (response.statusCode === 401) {
           response.resume();
-          if (peers.get(peerId) === peer) { peers.delete(peerId); dropAgent(peerId); save().catch(() => {}); }
+          forget(peerId, peer);
           finish(new ApiError(403, 'PEER_REVOKED', { name: peer.name })); return;
         }
         try {
@@ -493,7 +500,7 @@ export async function createMesh({
     get name() { return node.name; },
     get enabled() { return enabled; },
     hello: hellobody, refresh, view, list, active, createRequest, requestStatus, approve, deny, revoke, pair,
-    authorizePeer, relay, connection, isPeer: id => peers.has(id), close,
+    authorizePeer, relay, connection, forget, isPeer: id => peers.has(id), close,
     // mesh.* actions from /api/action (the phone reaches no /api/mesh route).
     async action(value) {
       if (value.type === 'mesh.pair') return pair(value.peer ?? value.id);

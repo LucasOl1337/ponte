@@ -308,7 +308,9 @@ test('ctl authenticated queries return the selected JSON fields and unauthentica
   for (const name of ['windows', 'workspaces', 'monitors', 'volume', 'lights', 'session']) {
     assert.deepEqual(envelope(await f.cli([name])).data, STATE[name], name);
   }
-  assert.deepEqual(envelope(await f.cli(['capabilities'])).data, { ...STATE.capabilities, stt: true });
+  const capabilities = envelope(await f.cli(['capabilities'])).data;
+  assert.equal(typeof capabilities.rd, 'boolean');
+  assert.deepEqual(capabilities, { ...STATE.capabilities, stt: true, rd: capabilities.rd });
   assert.deepEqual(envelope(await f.cli(['textinput'])).data, STATE.textInput);
   assert.deepEqual(envelope(await f.cli(['power'])).data, { monitors: STATE.monitors, power: STATE.power, wakeOnLan: STATE.wakeOnLan });
   assert.equal(envelope(await f.cli(['terminals', 'list'])).data.sessions[0].id, TERMINAL_ID);

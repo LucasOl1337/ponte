@@ -435,6 +435,10 @@ export const messages = {
     "en": "More than one device has this name. Use its id.",
     "pt": "Mais de um aparelho tem esse nome. Use o id."
   },
+  "RD_PEER_CONTROL": {
+    "en": "{name} is controlling this screen through Ponte.",
+    "pt": "{name} está controlando esta tela pela Ponte."
+  },
   "PEER_OFFLINE": {
     "en": "{name} is not answering. Check that it is on and on Tailscale.",
     "pt": "{name} não está respondendo. Confira se está ligado e no Tailscale."
