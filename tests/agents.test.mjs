@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, symlink, rm, utimes } from 'node:fs/promises';
 import { createAgents, parseStat, agentKind, claudeMessages, codexMessages, lastMessages } from '../backend/agents.mjs';
 import { createApp } from '../server.mjs';
 
@@ -112,6 +112,50 @@ test('a Claude Code in a foot window is matched by pid ancestry, its session fil
   assert.ok(!JSON.stringify(items).includes('SECRET') && !JSON.stringify(items).includes('.jsonl'));
   await assert.rejects(agents.transcript('p-1-1'), { code: 'AGENT_NOT_FOUND' });
   await assert.rejects(agents.transcript('../../etc/passwd'), { code: 'AGENT_NOT_FOUND' });
+});
+
+test('an idle Claude that already worked in this process is ready; a fresh one stays idle; order is waiting, working, ready, idle, terminal', async t => {
+  const w = await world(t);
+  // Every process starts 100 s after boot (10000 ticks), so startedAt = BOOT + 100 s.
+  const start = 10000, startedAt = BOOT * 1000 + 100000;
+  const cwd = path.join(w.home, 'work', 'sample');
+  const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  const ids = { fresh: '00000000-0000-4000-8000-0000000000f1', done: '00000000-0000-4000-8000-0000000000f2', resumed: '00000000-0000-4000-8000-0000000000f3', stale: '00000000-0000-4000-8000-0000000000f4', busy: '00000000-0000-4000-8000-0000000000f5', asks: '00000000-0000-4000-8000-0000000000f6' };
+  const claude = async (pid, key, status, { statusUpdatedAt = startedAt + 1000, writtenAt = null } = {}) => {
+    await w.add(pid, 'foot', 1);
+    await w.add(pid + 1, 'bash', pid);
+    await w.add(pid + 2, 'claude', pid + 1, { cwd, start });
+    await w.file(`.claude/sessions/${pid + 2}.json`, line({ pid: pid + 2, sessionId: ids[key], cwd, procStart: String(start), status, statusUpdatedAt, ...(status === 'waiting' ? { waitingFor: 'input needed' } : {}) }));
+    if (writtenAt !== null) {
+      const file = await w.file(`.claude/projects/${encoded}/${ids[key]}.jsonl`, line({ type: 'user', message: { role: 'user', content: 'sample request' } }));
+      await utimes(file, writtenAt / 1000, writtenAt / 1000);
+    }
+  };
+  // Idle, never asked anything: Claude has not created a transcript yet.
+  await claude(1000, 'fresh', 'idle', { statusUpdatedAt: startedAt + 200000 });
+  // Idle after a turn: the transcript was written after the process started.
+  await claude(1100, 'done', 'idle', { statusUpdatedAt: startedAt + 60000, writtenAt: startedAt + 59000 });
+  // Resumed: the transcript is older than the process, but the status moved after the start.
+  await claude(1200, 'resumed', 'idle', { statusUpdatedAt: startedAt + 30000, writtenAt: startedAt - 86400000 });
+  // Old transcript and no status change since the start: nothing done here.
+  await claude(1300, 'stale', 'idle', { statusUpdatedAt: startedAt - 5000, writtenAt: startedAt - 86400000 });
+  await claude(1400, 'busy', 'busy', { writtenAt: startedAt + 1000 });
+  await claude(1500, 'asks', 'waiting', { writtenAt: startedAt + 1000 });
+  // Only Claude has a real idle signal: a quiet Codex with a transcript stays idle.
+  const rolloutDir = '.codex/sessions/2026/09/28';
+  const rollout = await w.file(`${rolloutDir}/rollout-2026-09-28T08-00-00-${CODEX}.jsonl`, line({ type: 'session_meta', payload: { cwd } }));
+  await utimes(rollout, (startedAt + 5000) / 1000, (startedAt + 5000) / 1000);
+  await w.add(1600, 'foot', 1);
+  await w.add(1601, 'bash', 1600);
+  await w.add(1602, 'codex', 1601, { cwd, start, fds: [rollout] });
+  await w.add(1700, 'foot', 1);
+  const clients = [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700].map((pid, index) => foot(pid, `0xe${index}`, pid === 1700 ? 'shell' : 'sample'));
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr(clients).runner, bootMs: BOOT * 1000, now: () => startedAt + 400000 });
+  const { items } = await agents.list();
+  const byPid = pid => items.find(item => item.pid === pid).state;
+  assert.deepEqual([1002, 1102, 1202, 1302, 1402, 1502, 1602].map(byPid), ['idle', 'ready', 'ready', 'idle', 'working', 'waiting', 'idle']);
+  assert.deepEqual(items.map(item => item.state), ['waiting', 'working', 'ready', 'ready', 'idle', 'idle', 'idle', 'terminal']);
+  assert.equal(items.find(item => item.pid === 1102).since, startedAt + 60000);
 });
 
 test('a recycled pid ignores the stale session file; title glyphs then CPU and transcript writes decide the state', async t => {
