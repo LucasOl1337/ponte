@@ -13,7 +13,12 @@ import android.webkit.*;
 import android.widget.*;
 import java.io.*;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 public final class MainActivity extends Activity {
     private static final String NATIVE_PAUSE = "window.dispatchEvent(new Event('ponte-native-pause')); true;";
@@ -43,11 +48,26 @@ public final class MainActivity extends Activity {
     private boolean reloadOnResume;
     private String origin;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    // Images shared from another app (a screenshot from the gallery). They are
+    // read here, held in memory, and each is handed to the page once through
+    // an in-app URL that never reaches the network. Nothing is uploaded until
+    // the user picks a destination on the page.
+    private static final String SHARED_PREFIX = "/__ponte_shared/";
+    private static final int MAX_SHARED_IMAGES = 10;
+    private static final int MAX_SHARED_BYTES = 20 * 1024 * 1024;
+    private static final int FILE_CHOOSER_REQUEST = 7201;
+    private final Map<String, SharedImage> sharedImages = Collections.synchronizedMap(new LinkedHashMap<>());
+    private ValueCallback<Uri[]> fileCallback;
+    private static final class SharedImage {
+        final String mime; final String name; final byte[] bytes;
+        SharedImage(String mime, String name, byte[] bytes) { this.mime = mime; this.name = name; this.bytes = bytes; }
+    }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         preferences = getSharedPreferences("ponte-pairing", MODE_PRIVATE);
         consumePairingIntent(getIntent());
+        consumeShareIntent(getIntent());
         agentSession = getIntent() != null && getIntent().getBooleanExtra("ponte.agent", false);
         if (agentSession && android.os.Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true); }
         getWindow().setStatusBarColor(Color.rgb(21, 23, 20));
@@ -85,6 +105,7 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         boolean paired = consumePairingIntent(intent);
+        consumeShareIntent(intent);
         setIntent(intent);
         if (paired && browser != null) loadHome();
     }
@@ -131,6 +152,8 @@ public final class MainActivity extends Activity {
                 return !ownOrigin(target);
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                WebResourceResponse shared = sharedImageResponse(request);
+                if (shared != null) return shared;
                 return allowedResource(request.getUrl()) ? null : blockedResource();
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, android.net.http.SslError error) { handler.cancel(); }
@@ -186,6 +209,20 @@ public final class MainActivity extends Activity {
                 getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
             }
             @Override public void onHideCustomView() { exitFullscreen(); }
+            // <input type=file> on the page: the system picker, images only.
+            @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (destroyed || paused || !ownOrigin(Uri.parse(view.getUrl() == null ? "" : view.getUrl()))) return false;
+                if (fileCallback != null) fileCallback.onReceiveValue(null);
+                fileCallback = callback;
+                Intent pick = new Intent(Intent.ACTION_GET_CONTENT);
+                pick.addCategory(Intent.CATEGORY_OPENABLE);
+                pick.setType("image/*");
+                pick.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/png", "image/jpeg", "image/webp"});
+                pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
+                try { startActivityForResult(pick, FILE_CHOOSER_REQUEST); }
+                catch (ActivityNotFoundException missing) { fileCallback = null; return false; }
+                return true;
+            }
         });
         root.addView(browser, new FrameLayout.LayoutParams(-1, -1));
     }
@@ -207,7 +244,106 @@ public final class MainActivity extends Activity {
             requestPhoneKeyboard();
         }
     }
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != FILE_CHOOSER_REQUEST || fileCallback == null) return;
+        ValueCallback<Uri[]> callback = fileCallback;
+        fileCallback = null;
+        Uri[] chosen = null;
+        if (resultCode == RESULT_OK && data != null) {
+            List<Uri> uris = new ArrayList<>();
+            if (data.getClipData() != null) for (int index = 0; index < data.getClipData().getItemCount() && uris.size() < MAX_SHARED_IMAGES; index++) uris.add(data.getClipData().getItemAt(index).getUri());
+            else if (data.getData() != null) uris.add(data.getData());
+            chosen = uris.isEmpty() ? null : uris.toArray(new Uri[0]);
+        }
+        callback.onReceiveValue(chosen);
+    }
+    private void consumeShareIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)) return;
+        List<Uri> uris = new ArrayList<>();
+        try {
+            if (Intent.ACTION_SEND.equals(action)) {
+                Uri single = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+                if (single != null) uris.add(single);
+            } else {
+                ArrayList<Uri> many = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                if (many != null) uris.addAll(many);
+            }
+        } catch (RuntimeException invalid) { return; }
+        // Consumed once: a recreated Activity must not offer the same images again.
+        intent.setAction(Intent.ACTION_MAIN);
+        intent.removeExtra(Intent.EXTRA_STREAM);
+        if (uris.isEmpty()) return;
+        final List<Uri> incoming = new ArrayList<>(uris.subList(0, Math.min(uris.size(), MAX_SHARED_IMAGES)));
+        final ContentResolver resolver = getContentResolver();
+        new Thread(() -> {
+            Map<String, SharedImage> read = new LinkedHashMap<>();
+            for (Uri uri : incoming) {
+                SharedImage image = readSharedImage(resolver, uri);
+                if (image != null) read.put(randomId(), image);
+            }
+            runOnUiThread(() -> {
+                if (destroyed || read.isEmpty()) return;
+                synchronized (sharedImages) { sharedImages.clear(); sharedImages.putAll(read); }
+                if (browser != null && ownOrigin(Uri.parse(browser.getUrl() == null ? "" : browser.getUrl()))) {
+                    browser.evaluateJavascript("window.dispatchEvent(new Event('ponte-native-shared')); true;", null);
+                }
+            });
+        }, "ponte-share-read").start();
+    }
+    // Only content:// from another app. A file:// or our own provider could
+    // point at this app's private files (the pairing key), so both are refused.
+    private SharedImage readSharedImage(ContentResolver resolver, Uri uri) {
+        if (uri == null || !"content".equals(uri.getScheme()) || uri.getAuthority() == null || uri.getAuthority().startsWith(getPackageName())) return null;
+        String mime;
+        try { mime = resolver.getType(uri); } catch (RuntimeException error) { return null; }
+        if (!"image/png".equals(mime) && !"image/jpeg".equals(mime) && !"image/webp".equals(mime)) return null;
+        String name = uri.getLastPathSegment();
+        if (name == null || !name.matches("[A-Za-z0-9 ._()-]{1,80}")) name = "image";
+        try (InputStream input = resolver.openInputStream(uri)) {
+            if (input == null) return null;
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = input.read(buffer)) > 0) {
+                if (output.size() + count > MAX_SHARED_BYTES) return null;
+                output.write(buffer, 0, count);
+            }
+            return output.size() == 0 ? null : new SharedImage(mime, name, output.toByteArray());
+        } catch (IOException | RuntimeException error) { return null; }
+    }
+    private static String randomId() {
+        byte[] bytes = new byte[12];
+        new java.security.SecureRandom().nextBytes(bytes);
+        StringBuilder id = new StringBuilder();
+        for (byte value : bytes) id.append(String.format("%02x", value));
+        return id.toString();
+    }
+    private WebResourceResponse sharedImageResponse(WebResourceRequest request) {
+        Uri url = request.getUrl();
+        if (!ownOrigin(url) || url.getPath() == null || !url.getPath().startsWith(SHARED_PREFIX)) return null;
+        SharedImage image = "GET".equals(request.getMethod()) ? sharedImages.remove(url.getPath().substring(SHARED_PREFIX.length())) : null;
+        if (image == null) return blockedResource();
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Cache-Control", "no-store");
+        return new WebResourceResponse(image.mime, null, 200, "OK", headers, new ByteArrayInputStream(image.bytes));
+    }
     private final class PageBridge {
+        // Metadata of the shared images still waiting; their bytes are fetched
+        // once from SHARED_PREFIX + id and then dropped.
+        @JavascriptInterface public String sharedImages() {
+            StringBuilder json = new StringBuilder("[");
+            synchronized (sharedImages) {
+                for (Map.Entry<String, SharedImage> entry : sharedImages.entrySet()) {
+                    if (json.length() > 1) json.append(',');
+                    json.append("{\"id\":\"").append(entry.getKey()).append("\",\"mime\":\"").append(entry.getValue().mime)
+                        .append("\",\"name\":\"").append(entry.getValue().name).append("\",\"bytes\":").append(entry.getValue().bytes.length).append('}');
+                }
+            }
+            return json.append(']').toString();
+        }
         @JavascriptInterface public void showKeyboard() {
             runOnUiThread(() -> requestPhoneKeyboard());
         }
@@ -403,6 +539,8 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onDestroy() {
         destroyed = true; handler.removeCallbacksAndMessages(null);
+        sharedImages.clear();
+        if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
         cancelMicrophonePermission();
         if (proxy != null) proxy.close();
         if (browser != null) { root.removeView(browser); browser.stopLoading(); browser.destroy(); browser = null; }

@@ -77,6 +77,36 @@ public final class ProxyTest {
     static LoopbackProxy proxy(Remote remote, Path cert, String host) throws Exception {
         try (InputStream input = Files.newInputStream(cert)) { return new LoopbackProxy(remote.uri(host), input, 0); }
     }
+    static void imageRoutes(LoopbackProxy proxy, Remote remote) throws Exception {
+        String item = "/api/images/20260928-101500-0a0b0c0d";
+        String[][] allowed = {
+            {"GET", "/api/images", ""}, {"GET", item, ""}, {"DELETE", item, ""},
+            {"POST", item + "/copy", ""}, {"POST", item + "/paste", "{\"terminal\":\"0123456789abcdef01234567\"}"}
+        };
+        for (String[] route : allowed) {
+            int before = remote.hits.get();
+            String headers = "Authorization: Bearer image-test-only\r\nOrigin: " + proxy.origin() + "\r\nContent-Type: application/json\r\nContent-Length: " + route[2].length() + "\r\n";
+            String response = raw(proxy, request(proxy, route[0], route[1], headers) + route[2]);
+            check(response.startsWith("HTTP/1.1 200"), "image route forwarded: " + route[0] + " " + route[1]);
+            check(remote.hits.get() == before + 1 && route[0].equals(remote.method.get()) && route[1].equals(remote.target.get()), "image method and target preserved");
+            check(Arrays.equals(route[2].getBytes(StandardCharsets.UTF_8), remote.body.get()), "image request bytes preserved");
+        }
+        int before = remote.hits.get();
+        String[][] denied = {
+            {"PUT", "/api/images"}, {"DELETE", "/api/images"}, {"POST", item}, {"GET", item + "/copy"}, {"DELETE", item + "/copy"},
+            {"POST", item + "/open"}, {"GET", "/api/images/"}, {"GET", "/api/images/../token"},
+            {"GET", "/api/images/20260928-101500-0A0B0C0D"}, {"GET", "/api/images/20260928-101500-0a0b0c0d.png"},
+            {"POST", "/api/images/2026092-101500-0a0b0c0d/copy"}, {"GET", "/__ponte_shared/abc"}
+        };
+        for (String[] route : denied) check(raw(proxy, request(proxy, route[0], route[1], "")).startsWith("HTTP/1.1 404"), "unlisted image method/path/ID denied: " + route[0] + " " + route[1]);
+        check(remote.hits.get() == before, "denied image requests never reach upstream");
+        HttpURLConnection upload = (HttpURLConnection) new URL(proxy.origin() + "/api/images").openConnection();
+        byte[] image = new byte[3 * 1024 * 1024]; new Random(6).nextBytes(image); image[0] = (byte) 0x89; image[1] = 'P'; image[2] = 'N'; image[3] = 'G';
+        upload.setRequestMethod("POST"); upload.setDoOutput(true); upload.setFixedLengthStreamingMode(image.length);
+        upload.setRequestProperty("Content-Type", "image/png"); upload.setReadTimeout(5000);
+        try (OutputStream output = upload.getOutputStream()) { output.write(image); }
+        check(upload.getResponseCode() == 200 && Arrays.equals(image, remote.body.get()), "image bytes stream unchanged"); upload.disconnect();
+    }
     static void terminalRoutes(LoopbackProxy proxy, Remote remote) throws Exception {
         String item = "/api/terminals/0123456789abcdef01234567";
         String[][] allowed = {
@@ -188,6 +218,7 @@ public final class ProxyTest {
             check("Bearer test-only".equals(remote.auth.get()), "bearer preserved exactly");
             check(remote.origin.get() == null && remote.referer.get() == null, "local Origin and Referer removed upstream");
             terminalRoutes(proxy, remote);
+            imageRoutes(proxy, remote);
             powerAndRegionRoutes(proxy, remote);
             check(raw(proxy, request(proxy, "GET", "/api/state", "Origin: https://evil.example\r\n")).startsWith("HTTP/1.1 403"), "foreign Origin denied");
             check(raw(proxy, "GET /api/state HTTP/1.1\r\nHost: evil.example\r\n\r\n").startsWith("HTTP/1.1 403"), "foreign Host denied");
