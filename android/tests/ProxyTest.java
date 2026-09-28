@@ -77,6 +77,27 @@ public final class ProxyTest {
     static LoopbackProxy proxy(Remote remote, Path cert, String host) throws Exception {
         try (InputStream input = Files.newInputStream(cert)) { return new LoopbackProxy(remote.uri(host), input, 0); }
     }
+    static void agentRoutes(LoopbackProxy proxy, Remote remote) throws Exception {
+        String agent = "/api/agents/p-56788-58269", window = "/api/agents/w-5a3f0c";
+        String[][] allowed = {
+            {"GET", "/api/agents", ""}, {"GET", agent + "/transcript", ""}, {"GET", window + "/transcript?lang=pt", ""},
+            {"POST", agent + "/reply", "{\"text\":\"sim\"}"}
+        };
+        for (String[] route : allowed) {
+            int before = remote.hits.get();
+            String headers = "Authorization: Bearer agent-test-only\r\nContent-Type: application/json\r\nContent-Length: " + route[2].length() + "\r\n";
+            check(raw(proxy, request(proxy, route[0], route[1], headers) + route[2]).startsWith("HTTP/1.1 200"), "agent route forwarded: " + route[0] + " " + route[1]);
+            check(remote.hits.get() == before + 1 && route[0].equals(remote.method.get()) && route[1].equals(remote.target.get()), "agent method and target preserved");
+        }
+        int before = remote.hits.get();
+        String[][] denied = {
+            {"POST", "/api/agents"}, {"DELETE", agent}, {"GET", agent}, {"GET", agent + "/reply"}, {"POST", agent + "/transcript"},
+            {"GET", "/api/agents/"}, {"GET", "/api/agents/p-1/transcript"}, {"GET", "/api/agents/x-1-2/transcript"},
+            {"GET", "/api/agents/w-5A3F/transcript"}, {"GET", "/api/agents/p-1-2/transcript/"}, {"GET", "/api/agents/../state"}
+        };
+        for (String[] route : denied) check(raw(proxy, request(proxy, route[0], route[1], "")).startsWith("HTTP/1.1 404"), "unlisted agent method/path/ID denied: " + route[0] + " " + route[1]);
+        check(remote.hits.get() == before, "denied agent requests never reach upstream");
+    }
     static void terminalRoutes(LoopbackProxy proxy, Remote remote) throws Exception {
         String item = "/api/terminals/0123456789abcdef01234567";
         String[][] allowed = {
@@ -188,6 +209,7 @@ public final class ProxyTest {
             check("Bearer test-only".equals(remote.auth.get()), "bearer preserved exactly");
             check(remote.origin.get() == null && remote.referer.get() == null, "local Origin and Referer removed upstream");
             terminalRoutes(proxy, remote);
+            agentRoutes(proxy, remote);
             powerAndRegionRoutes(proxy, remote);
             check(raw(proxy, request(proxy, "GET", "/api/state", "Origin: https://evil.example\r\n")).startsWith("HTTP/1.1 403"), "foreign Origin denied");
             check(raw(proxy, "GET /api/state HTTP/1.1\r\nHost: evil.example\r\n\r\n").startsWith("HTTP/1.1 403"), "foreign Host denied");
