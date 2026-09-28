@@ -77,7 +77,7 @@ function getEthernetWolInfo(env = process.env) {
   return best ? { mac: best.mac, interface: best.name } : { mac: null, interface: null };
 }
 
-export function createDesktop({ runner = runCommand, exists = commandExists, env = process.env, dragTimeout = 1800 } = {}) {
+export function createDesktop({ runner = runCommand, exists = commandExists, env = process.env, dragTimeout = 1800, log = console } = {}) {
   const ydotoolEnv = { ...env, YDOTOOL_SOCKET: env.YDOTOOL_SOCKET || path.join(env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`, 'ponte-input.sock') };
   const run = (command, args, options = {}) => runner(command, args, { env: command === 'ydotool' ? ydotoolEnv : env, ...options });
   const readHypr = async (kind, options = {}) => {
@@ -189,6 +189,38 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
   const pythonBin = env.PYTHON_BIN || 'python';
   const lightsController = env.MAGMA_LIGHTS_CONTROLLER || path.join(env.HOME || os.homedir(), '.local/share/magma-lights/controller.py');
   const lightsCommand = (...args) => run(pythonBin, [lightsController, ...args], { timeout: 45000 });
+  // Sleep and restore make one OpenRGB call per device group (~5 s of detection
+  // each), so they get most of the server's 75 s request budget.
+  const LIGHT_LABELS = { 'ENE DRAM': 'RAM ENE', 'Corsair Vengeance RGB DDR5': 'RAM Corsair', 'ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC': 'GPU', 'MSI B650M': 'MSI (fans)', 'G515 LS TKL': 'G515', telinha: 'LCD' };
+  const lightLabel = device => LIGHT_LABELS[device] || String(device).slice(0, 40);
+  const lightsReport = stdout => {
+    try {
+      const report = JSON.parse(String(stdout));
+      if (!report || !Array.isArray(report.devices)) return null;
+      return { ok: report.ok === true, devices: report.devices.filter(item => item && typeof item.device === 'string' && ['ok', 'failed', 'absent'].includes(item.status)).map(item => ({ device: lightLabel(item.device), status: item.status })) };
+    } catch { return null; }
+  };
+  // Runs an RGB action with --json when the installed controller knows it (an
+  // older one rejects the flag in argparse, before touching any device) and logs
+  // the outcome per device to the journal. Throws LIGHTS_FAILED naming them.
+  async function lightsAction(label, ...args) {
+    let stdout;
+    try {
+      try { stdout = await run(pythonBin, [lightsController, ...args, '--json'], { timeout: 70000 }); }
+      catch (error) {
+        if (!/unrecognized arguments: --json/.test(error.detail?.stderr || '')) throw error;
+        stdout = await run(pythonBin, [lightsController, ...args], { timeout: 70000 });
+      }
+    } catch (error) {
+      const report = lightsReport(error.detail?.stdout);
+      const failed = report ? report.devices.filter(item => item.status === 'failed').map(item => item.device) : [];
+      log.error(`[lights] ${label} failed: exit=${error.detail?.exitCode ?? '?'}${error.detail?.timedOut ? ' (timeout)' : ''} ${report ? JSON.stringify(report.devices) : ''} ${error.detail?.stderr || ''}`.trim());
+      throw new ApiError(503, 'LIGHTS_FAILED', { devices: failed.length ? failed.join(', ') : 'RGB' });
+    }
+    const report = lightsReport(stdout);
+    log.log(`[lights] ${label} ok${report ? ` ${JSON.stringify(report.devices)}` : ''}`);
+    return report;
+  }
   let lightsCache = { at: 0, value: null };
   async function lightsInstalled() {
     try { await access(lightsController, constants.R_OK); return true; } catch { return false; }
@@ -199,7 +231,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     let value = null;
     try {
       const last = JSON.parse(await run(pythonBin, [lightsController, 'status'], { timeout: 8000 }))?.last_applied || {};
-      value = { preset: LIGHT_PRESETS.includes(last.preset) ? last.preset : 'custom', sleeping: last.sleeping === true, brightness: Number.isFinite(Number(last.brightness)) ? Number(last.brightness) : null };
+      value = { preset: LIGHT_PRESETS.includes(last.preset) ? last.preset : 'custom', sleeping: last.sleeping === true, brightness: Number.isFinite(Number(last.brightness)) ? Number(last.brightness) : null, incomplete: Array.isArray(last.incomplete) ? last.incomplete.filter(item => typeof item === 'string').map(lightLabel) : [] };
     } catch {}
     lightsCache = { at: Date.now(), value };
     return value;
@@ -468,31 +500,36 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         break;
       }
       case 'power.sleep':
-      case 'power.smart_sleep': {
-        const monitors = await readHypr('monitors');
-        for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, false, monitors);
-        lightsCache.at = 0;
-        await lightsCommand('sleep'); break;
-      }
+      case 'power.smart_sleep':
       case 'power.wake':
       case 'power.restore': {
-        const monitors = await readHypr('monitors');
-        for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, true, monitors);
+        // Monitors and lights are independent: a Hyprland hiccup must not leave
+        // the RGB on, and a light that stays lit is named instead of hidden.
+        const sleeping = value.type === 'power.sleep' || value.type === 'power.smart_sleep';
+        let monitorError = null;
+        try {
+          const monitors = await readHypr('monitors');
+          for (const monitor of monitors) if (validMonitorName(monitor.name)) await setMonitorDpms(monitor.name, !sleeping, monitors);
+        } catch (error) { monitorError = error; log.error(`[power] ${value.type} monitors failed: ${error.code || error.message}`); }
         lightsCache.at = 0;
-        await lightsCommand('restore'); break;
+        let lights;
+        try { lights = await lightsAction(value.type, sleeping ? 'sleep' : 'restore'); }
+        catch (error) { if (!monitorError && sleeping) throw new ApiError(503, 'SLEEP_LIGHTS_FAILED', error.parameters); throw monitorError || error; }
+        if (monitorError) throw monitorError;
+        return { ok: true, lights };
       }
       case 'lights.preset': {
         if (typeof value.preset !== 'string' || !LIGHT_PRESETS.includes(value.preset)) throw new ApiError(400, 'INVALID_PRESET');
         if (!await lightsInstalled()) throw new ApiError(503, 'LIGHTS_UNAVAILABLE');
         lightsCache.at = 0;
-        await lightsCommand('preset', value.preset); break;
+        return { ok: true, lights: await lightsAction(value.type, 'preset', value.preset) };
       }
       case 'lights.sleep':
       case 'lights.restore':
       case 'lights.reapply': {
         if (!await lightsInstalled()) throw new ApiError(503, 'LIGHTS_UNAVAILABLE');
         lightsCache.at = 0;
-        await lightsCommand(value.type.slice('lights.'.length)); break;
+        return { ok: true, lights: await lightsAction(value.type, value.type.slice('lights.'.length)) };
       }
       case 'lights.screen': {
         if (typeof value.enabled !== 'boolean') throw new ApiError(400, 'INVALID_POWER_STATE');

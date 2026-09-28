@@ -458,6 +458,8 @@
   "Luzes acesas no preset {preset}.": "Lights on with the {preset} preset.",
   "Luzes apagadas.": "Lights off.",
   "Luzes apagadas. Toque em um preset ou em Restaurar.": "Lights are off. Tap a preset or Restore.",
+  "Luzes apagadas, menos: {devices}. Toque em Apagar luzes de novo ou em Restaurar luzes.": "Lights are off except: {devices}. Tap Lights off again or Restore lights.",
+  "Não encontrado (desligado?): {devices}.": "Not found (turned off?): {devices}.",
   "Luzes no preset {preset}.": "Lights set to {preset}.",
   "Luzes restauradas.": "Lights restored.",
   "MOVER PARA": "MOVE TO",
@@ -880,6 +882,14 @@
   "LIGHTS_UNAVAILABLE": {
     "en": "The Magma lights controller is not installed on the PC.",
     "pt": "O controlador de luzes Magma não está instalado no PC."
+  },
+  "LIGHTS_FAILED": {
+    "en": "These lights did not respond: {devices}. Details are in the PC journal.",
+    "pt": "Estas luzes não responderam: {devices}. Detalhes no journal do PC."
+  },
+  "SLEEP_LIGHTS_FAILED": {
+    "en": "Monitors are off, but these lights stayed on: {devices}. Details are in the PC journal.",
+    "pt": "Monitores apagados, mas estas luzes ficaram acesas: {devices}. Detalhes no journal do PC."
   },
   "INVALID_QUALITY": {
     "en": "JPEG quality must be between 30 and 90.",

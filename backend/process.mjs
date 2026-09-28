@@ -12,6 +12,21 @@ export class ApiError extends Error {
   }
 }
 
+// What a failed child said, for the server journal and for callers that parse a
+// structured answer printed before a non-zero exit. It never reaches the phone:
+// ApiError parameters are what the client sees. Long secret-shaped runs are masked.
+function failureDetail(error, stdout, stderr) {
+  const text = value => Buffer.isBuffer(value) ? value.toString('utf8') : String(value || '');
+  const redact = value => value.replace(/[A-Za-z0-9+/_-]{32,}=*/g, '[redacted]');
+  return {
+    exitCode: Number.isInteger(error.code) ? error.code : null,
+    signal: error.signal || null,
+    timedOut: error.killed === true && error.signal === 'SIGKILL',
+    stdout: text(stdout).slice(-8192),
+    stderr: redact(text(stderr).trim().slice(-600)),
+  };
+}
+
 // No shell invocation, a timeout on every request-scoped child, and bounded stdout.
 export function runCommand(command, args = [], options = {}) {
   const { input, binary = false, timeout = 3500, maxBuffer = 2 * 1024 * 1024, env = process.env, signal } = options;
@@ -19,8 +34,8 @@ export function runCommand(command, args = [], options = {}) {
     const child = execFile(command, args, {
       shell: false, timeout, maxBuffer, encoding: binary ? 'buffer' : 'utf8', env,
       killSignal: 'SIGKILL', windowsHide: true, signal,
-    }, (error, stdout) => {
-      if (error) reject(new ApiError(503, 'COMMAND_FAILED', { command: path.basename(command) }));
+    }, (error, stdout, stderr) => {
+      if (error) reject(Object.assign(new ApiError(503, 'COMMAND_FAILED', { command: path.basename(command) }), { detail: failureDetail(error, stdout, stderr) }));
       else resolve(stdout);
     });
     child.stdin.on('error', () => {});

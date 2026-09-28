@@ -732,10 +732,10 @@ test('lights, all-monitor DPMS, reboot and suspend map to the Magma controller, 
   assert.equal((await f.action({ type: 'lights.preset', preset: 'oceano' })).status, 200);
   assert.equal(f.calls.at(-1).command, 'python');
   assert.match(f.calls.at(-1).args[0], /controller\.py$/);
-  assert.deepEqual(f.calls.at(-1).args.slice(1), ['preset', 'oceano']);
+  assert.deepEqual(f.calls.at(-1).args.slice(1), ['preset', 'oceano', '--json']);
   for (const [type, expected] of [['lights.sleep', 'sleep'], ['lights.restore', 'restore'], ['lights.reapply', 'reapply']]) {
     assert.equal((await f.action({ type })).status, 200);
-    assert.deepEqual(f.calls.at(-1).args.slice(1), [expected]);
+    assert.deepEqual(f.calls.at(-1).args.slice(1), [expected, '--json']);
   }
   assert.equal((await f.action({ type: 'lights.screen', enabled: false })).status, 200);
   assert.deepEqual(f.calls.at(-1).args.slice(1), ['screen_off']);
@@ -930,4 +930,100 @@ test('a line with enter is typed and confirmed in one action, and a Super drag h
   await new Promise(resolve => setTimeout(resolve, 80));
   assert.deepEqual(keys().slice(-2), ['0x80', '125:0']);
   await desktop.close();
+});
+
+// Magma controller with --json: one entry per device, printed also before a non-zero exit.
+const magmaReport = (ok, statuses) => JSON.stringify({ action: 'sleep', ok, devices: Object.entries(statuses).map(([device, status]) => ({ device, status, ...(status === 'failed' ? { error: 'i2c timeout' } : {}) })) });
+const commandFailure = detail => Object.assign(new ApiError(503, 'COMMAND_FAILED', { command: 'python' }), { detail: { exitCode: 1, signal: null, timedOut: false, stdout: '', stderr: '', ...detail } });
+function sleepDesktop({ python, hyprFails = false, controller = '/nonexistent/controller.py' }) {
+  const calls = []; const logs = [];
+  const log = { log: line => logs.push(['log', line]), error: line => logs.push(['error', line]) };
+  const runner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'hyprctl') {
+      if (hyprFails) throw commandFailure({ stderr: 'HYPRLAND_INSTANCE_SIGNATURE not set' });
+      if (args[1] === 'monitors') return JSON.stringify([{ name: 'DP-1', width: 1920, height: 1080, focused: true, dpmsStatus: true }]);
+      return 'ok';
+    }
+    if (command === 'python') return python(args);
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true, env: { ...process.env, MAGMA_LIGHTS_CONTROLLER: controller }, log });
+  return { desktop, calls, logs };
+}
+
+test('smart sleep reports an absent keyboard as skipped and logs every device to the journal', async () => {
+  const { desktop, calls, logs } = sleepDesktop({ python: () => magmaReport(true, { 'ENE DRAM': 'ok', 'Corsair Vengeance RGB DDR5': 'ok', 'ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC': 'ok', 'G515 LS TKL': 'absent', 'MSI B650M': 'ok', telinha: 'ok' }) });
+  const result = await desktop.action({ type: 'power.sleep' });
+  assert.deepEqual(calls.at(-1).args.slice(1), ['sleep', '--json']);
+  assert.equal(calls.at(-1).command, 'python');
+  assert.deepEqual(result.lights.devices.map(item => [item.device, item.status]), [['RAM ENE', 'ok'], ['RAM Corsair', 'ok'], ['GPU', 'ok'], ['G515', 'absent'], ['MSI (fans)', 'ok'], ['LCD', 'ok']]);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], 'log');
+  assert.match(logs[0][1], /^\[lights\] power\.sleep ok .*"G515","status":"absent"/);
+});
+
+test('smart sleep names the lights that stayed on, in the phone language, without leaking controller output', async t => {
+  const { desktop, logs } = sleepDesktop({ python: () => { throw commandFailure({ stdout: magmaReport(false, { 'ENE DRAM': 'ok', 'Corsair Vengeance RGB DDR5': 'ok', 'ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC': 'failed', 'G515 LS TKL': 'absent', 'MSI B650M': 'ok', telinha: 'ok' }), stderr: 'RGB: ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC: i2c timeout' }); } });
+  await assert.rejects(desktop.action({ type: 'power.sleep' }), error => error.code === 'SLEEP_LIGHTS_FAILED' && error.parameters.devices === 'GPU');
+  assert.equal(logs.at(-1)[0], 'error');
+  assert.match(logs.at(-1)[1], /\[lights\] power\.sleep failed: exit=1 .*"GPU","status":"failed".* i2c timeout/);
+  const f = await fixture(t, { desktop: { action: value => desktop.action(value), getState: async () => ({}), close: async () => {} } });
+  for (const [lang, text] of [['en', 'Monitors are off, but these lights stayed on: GPU. Details are in the PC journal.'], ['pt', 'Monitores apagados, mas estas luzes ficaram acesas: GPU. Detalhes no journal do PC.']]) {
+    const response = await f.request(`/api/action?lang=${lang}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'power.sleep' }) });
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.deepEqual(body, { errorCode: 'SLEEP_LIGHTS_FAILED', errorParameters: { devices: 'GPU' }, error: text });
+  }
+});
+
+test('lights still sleep when Hyprland fails, and the monitor error is the one reported', async () => {
+  const { desktop, calls, logs } = sleepDesktop({ hyprFails: true, python: () => magmaReport(true, { 'ENE DRAM': 'ok', 'MSI B650M': 'ok' }) });
+  await assert.rejects(desktop.action({ type: 'power.sleep' }), error => error.code === 'HYPRLAND_UNAVAILABLE');
+  assert.deepEqual(calls.filter(call => call.command === 'python').map(call => call.args.slice(1)), [['sleep', '--json']]);
+  assert.match(logs[0][1], /\[power\] power\.sleep monitors failed: HYPRLAND_UNAVAILABLE/);
+  // Lights off alone reports its own failure code; wake restores lights even with Hyprland down.
+  const failing = sleepDesktop({ python: () => { throw commandFailure({ stdout: magmaReport(false, { 'ENE DRAM': 'failed', 'MSI B650M': 'ok' }) }); } });
+  await assert.rejects(failing.desktop.action({ type: 'power.wake' }), error => error.code === 'LIGHTS_FAILED' && error.parameters.devices === 'RAM ENE');
+  const woke = sleepDesktop({ hyprFails: true, python: () => magmaReport(true, {}) });
+  await assert.rejects(woke.desktop.action({ type: 'power.wake' }), error => error.code === 'HYPRLAND_UNAVAILABLE');
+  assert.deepEqual(woke.calls.filter(call => call.command === 'python').map(call => call.args.slice(1)), [['restore', '--json']]);
+});
+
+test('an older Magma controller without --json degrades to its exit code', async () => {
+  let attempt = 0;
+  const { desktop, calls } = sleepDesktop({ python: args => {
+    attempt++;
+    if (args.includes('--json')) throw commandFailure({ exitCode: 2, stderr: 'controller.py: error: unrecognized arguments: --json' });
+    if (attempt === 2) return 'Gabinete e telinha apagados.';
+    throw commandFailure({ stderr: 'RGB: Error: Cannot find device "G515 LS TKL"' });
+  } });
+  assert.deepEqual(await desktop.action({ type: 'power.sleep' }), { ok: true, lights: null });
+  assert.deepEqual(calls.filter(call => call.command === 'python').map(call => call.args.slice(1)), [['sleep', '--json'], ['sleep']]);
+  await assert.rejects(desktop.action({ type: 'power.sleep' }), error => error.code === 'SLEEP_LIGHTS_FAILED' && error.parameters.devices === 'RGB');
+});
+
+test('lights status lists what a partial sleep left on', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-lights-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const controller = path.join(root, 'controller.py');
+  await writeFile(controller, '# fake Magma controller\n');
+  const { desktop } = sleepDesktop({ controller, python: args => args[1] === 'status' ? JSON.stringify({ last_applied: { preset: 'lava', sleeping: true, brightness: 100, incomplete: ['ASUS TUF GeForce RTX 4070 Ti SUPER Gaming White OC', 7] } }) : 'ok' });
+  const { lights } = await desktop.getState();
+  assert.deepEqual(lights.incomplete, ['GPU']);
+  assert.equal(lights.sleeping, true);
+});
+
+test('a failed command keeps its exit code, stdout and a redacted stderr tail off the public error', async () => {
+  const secret = 'a'.repeat(48);
+  await assert.rejects(runCommand(process.execPath, ['-e', `process.stdout.write('{"ok":false}'); process.stderr.write('noise '.repeat(150) + ' token=${secret} Error: Cannot find device'); process.exit(3)`], { timeout: 5000 }), error => {
+    assert.equal(error.code, 'COMMAND_FAILED');
+    assert.deepEqual(error.parameters, { command: path.basename(process.execPath) });
+    assert.equal(error.detail.exitCode, 3);
+    assert.equal(error.detail.stdout, '{"ok":false}');
+    assert.ok(error.detail.stderr.length <= 600);
+    assert.match(error.detail.stderr, /token=\[redacted\] Error: Cannot find device$/);
+    assert.equal(error.detail.stderr.includes(secret), false);
+    return true;
+  });
 });
