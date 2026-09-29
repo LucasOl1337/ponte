@@ -36,7 +36,7 @@ const SETTLE_MS = 3000;          // after a restart: reports may still carry the
 const P95_WINDOW_MS = 5000;      // the page's latency window
 const UP_CALM_MS = 30000, UP_EVERY_MS = 60000, DOWN_QUIET_MS = 60000;
 const FAILED_UP_MS = 20000, BACKOFF_MAX_MS = 8 * 60000, BACKOFF_RESET_MS = 10 * 60000;
-const KEY_COALESCE_MS = 2000, IMPLICIT_KEY_GRACE_MS = 3000, KEYS_PER_MINUTE = 3;
+const KEY_COALESCE_MS = 2000, IMPLICIT_KEY_GRACE_MS = 2000, KEYS_PER_MINUTE = 3;
 // Acks.
 const ACK_WINDOW_MS = 10000, ACK_HISTORY_MAX = 4096, DELIVERED_WINDOW_MS = 2000;
 // A queue counts as draining only when it fell by more than the spread of one
@@ -68,7 +68,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
   // Ack path: frames sent and not acked yet, ages of the acked ones, acked bytes.
-  let acking = false, firstAckAt = null, sentSeq = 0, ackedSeq = 0, badSince = null, farSince = null, judgeFrom = now(), sample = null;
+  let acking = false, firstAckAt = null, sentSeq = 0, ackedSeq = 0, keySeq = 0, badSince = null, farSince = null, judgeFrom = now(), sample = null;
   const inFlight = [], ages = [], acked = [];
 
   const widthLimit = () => {
@@ -169,7 +169,10 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   function keyRequest() {
     if (mode !== 'wan') return null;
     const t = now();
-    if (t - lastRestartAt < KEY_COALESCE_MS) return null;
+    // Merged into the last restart while its keyframe may still be on the way;
+    // a page that acked that keyframe asks for a new one.
+    const keyArrived = acking && keySeq > 0 && ackedSeq >= keySeq && lastKey?.at >= lastRestartAt;
+    if (t - lastRestartAt < KEY_COALESCE_MS && !keyArrived) return null;
     while (keyRestarts.length && keyRestarts[0] < t - 60000) keyRestarts.shift();
     // Keyframes asked for again and again: the page cannot keep up with this step.
     if (keyRestarts.length >= KEYS_PER_MINUTE && step > 0) return change('down', step - 1);
@@ -197,6 +200,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       if (keyframe) lastKey = { at: t, bytes };
       if (!caps.ack || !Number.isInteger(seq) || seq <= sentSeq) return null;
       sentSeq = seq;
+      if (keyframe) keySeq = seq;
       inFlight.push({ seq, at: t, bytes, keyframe });
       // Never acked within 10 s: the page stopped acking; forget them.
       while (inFlight.length > ACK_HISTORY_MAX || (inFlight.length && inFlight[0].at < t - ACK_WINDOW_MS)) inFlight.shift();

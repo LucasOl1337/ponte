@@ -351,3 +351,17 @@ test('acks: a LAN session whose acked frames keep ageing over 15 ms, or queue, m
   assert.equal(near.c.mode, 'lan');
   assert.deepEqual(near.events, []);
 });
+
+test('acks: a keyframe request is merged into a restart only while its keyframe may still be on the way', () => {
+  let clock = 0;
+  const c = createRateControl({ now: () => clock, caps: { ack: true, key: true } });
+  c.open(30);
+  c.sent(40000, true, 1);
+  clock += 300; c.sent(3000, false, 2);
+  assert.equal(c.key(), null, 'the first keyframe has not been acked: it may fix this');
+  clock += 200; c.ack(2);
+  clock += 100;
+  assert.equal(c.key()?.reason, 'key', 'the page got that keyframe and still asks: a new one');
+  clock += 100; c.sent(40000, true, 3);
+  assert.equal(c.key(), null);
+});

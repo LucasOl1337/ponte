@@ -374,6 +374,26 @@ test('acks: the last frame that arrived, on arrival, at most every 50 ms; a drop
   assert.deepEqual(h.sent('ack'), [{ t: 'ack', seq: 1 }]);
 });
 
+test('frames that arrive while the decoder is being set up go in as one burst, and live frames wait for it instead of breaking the stream', async () => {
+  const h = await harness().connect();
+  const now = 1_700_000_000_000 + 1_000_000;
+  const unit = (key, seq) => { const buffer = videoMessage({ key, data: Buffer.from([0, 0, 0, 1, key ? 0x65 : 0x41, seq]) }, seq, now - 5); return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.length); };
+  h.run("configureDecoder('avc1.640034')");
+  for (let seq = 1; seq <= 12; seq++) h.socket.message(unit(seq === 1, seq));
+  await flush();
+  const decoder = h.decoder;
+  assert.equal(decoder.chunks.length, 12, 'a keyframe and 11 deltas, none dropped');
+  decoder.decodeQueueSize = 12;
+  h.socket.message(unit(false, 13));
+  assert.equal(decoder.chunks.length, 13, 'the decoder is still on the burst');
+  decoder.decodeQueueSize = 1;
+  h.socket.message(unit(false, 14));
+  decoder.decodeQueueSize = 3;
+  h.socket.message(unit(false, 15));
+  assert.equal(decoder.chunks.length, 14, 'caught up: a late delta is dropped again');
+  assert.deepEqual(h.sent('keyframe'), [{ t: 'keyframe' }]);
+});
+
 test('the header byte order: big endian by default, little endian detected from an implausible send time', async () => {
   const h = harness();
   const make = little => { const b = videoMessage({ key: true, data: Buffer.from([9]) }, 7, 1_700_001_000_000, little); return b.buffer.slice(b.byteOffset, b.byteOffset + b.length); };

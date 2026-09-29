@@ -11,6 +11,7 @@ const TOKEN_KEY = 'ponte-pair-token';
 const MODE_KEY = 'ponte-rd-mode';
 const HEADER_BYTES = 16;
 const MAX_DECODE_QUEUE = 2;
+const MAX_CONFIGURE_QUEUE = 30; // about a second at 30 fps while the decoder is being set up
 const WHEEL_UNIT = 120;
 const CLIP_LIMIT = 1024 * 1024;
 const STATS_SPAN = 5000;
@@ -175,6 +176,7 @@ let hardware = '';
 let decoderFailures = 0;
 let hardwareFailed = false;   // for the rest of the page's life
 const inflight = new Map();    // seq → { sendTime, recvAt }
+let catchingUp = false;       // the frames queued while configuring are being decoded
 let ackSeq = 0, ackSent = 0, ackTimer = 0, lastAckAt = -Infinity, keyframeAskedAt = -Infinity;
 let canvasContext = null;
 let sampler = null;
@@ -382,7 +384,7 @@ function pong(message) {
 
 function closeDecoder() {
   if (decoder && decoder.state !== 'closed') { try { decoder.close(); } catch {} }
-  decoder = null; configuring = null; queuedChunks = []; waitingKey = true;
+  decoder = null; configuring = null; queuedChunks = []; waitingKey = true; catchingUp = false;
 }
 
 async function configureDecoder(codec) {
@@ -398,8 +400,11 @@ async function configureDecoder(codec) {
   decoderFailures = 0;
   startDecoder(config);
   configuring = null;
+  // What arrived while configuring goes in as one burst, not as late frames:
+  // dropping it would wait for the next keyframe, minutes away on a slow link.
   const queued = queuedChunks; queuedChunks = [];
-  for (const chunk of queued) decode(chunk);
+  catchingUp = queued.length > 1;
+  for (const chunk of queued) decode(chunk, true);
 }
 
 // A decoder that fails restarts and waits for the next keyframe. Hardware that
@@ -432,7 +437,7 @@ function video(buffer) {
   acknowledge(header.seq);
   const chunk = { ...header, recvAt: nowEpoch() };
   if (configuring) {
-    if (chunk.key) queuedChunks = [chunk]; else if (queuedChunks.length && queuedChunks.length < 8) queuedChunks.push(chunk); else { framesDropped++; askKeyframe(); }
+    if (chunk.key) queuedChunks = [chunk]; else if (queuedChunks.length && queuedChunks.length < MAX_CONFIGURE_QUEUE) queuedChunks.push(chunk); else { framesDropped++; askKeyframe(); }
     return;
   }
   decode(chunk);
@@ -440,11 +445,14 @@ function video(buffer) {
 
 // A late frame is not worth drawing: with more than two frames waiting in the
 // decoder, deltas are dropped until the next keyframe, which restarts clean.
-function decode(chunk) {
+function decode(chunk, burst = false) {
+  // Until the decoder has worked through that burst, a full queue is expected.
+  if (!burst && catchingUp && decoder && decoder.decodeQueueSize <= MAX_DECODE_QUEUE) catchingUp = false;
+  const late = !burst && decoder?.decodeQueueSize > (catchingUp ? MAX_CONFIGURE_QUEUE : MAX_DECODE_QUEUE);
   if (!decoder || decoder.state !== 'configured') { waitingKey = true; framesDropped++; if (!chunk.key) askKeyframe(); return; }
   if (!chunk.key) {
-    if (waitingKey || decoder.decodeQueueSize > MAX_DECODE_QUEUE) { waitingKey = true; framesDropped++; askKeyframe(); return; }
-  } else if (decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+    if (waitingKey || late) { waitingKey = true; framesDropped++; askKeyframe(); return; }
+  } else if (late) {
     framesDropped += decoder.decodeQueueSize;
     decoder.reset();
     decoder.configure(decoderConfig);

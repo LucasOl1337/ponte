@@ -450,7 +450,9 @@ export function createRemoteDesktop({
       if (metrics.length > 20) metrics.shift();
       const reasons = Object.entries(this.metrics.reasons).map(([key, count]) => `${key} ${count}`).join(', ');
       const link = `${this.control.mode === 'lan' ? 'LAN' : `WAN step ${this.control.step}`}${this.control.acking ? ' (page acks)' : ''}`;
-      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}`);
+      const started = this.metrics.startedAt;
+      const steps = this.metrics.decisions.slice(-10).map(d => `${d.reason} ${((d.at - started) / 1000).toFixed(1)} s${d.step !== undefined ? ` W${d.step}` : ''}`).join(', ');
+      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}${steps ? `; ${steps}` : ''}`);
     }
   }
 
