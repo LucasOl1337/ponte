@@ -2,6 +2,47 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.30 (2026-09-29)
+
+Remote desktop over an internet link stops piling up seconds of video. The node that is
+being watched does all of it, so an older page (the notebook's alpha.29) benefits as soon as
+the watched computer updates. The APK does not change (still versionCode 21).
+
+- **Why it lagged.** On the notebook away from home, the PC's kernel held 400-850 KB of
+  unsent video on the RD socket while the link delivered 1.2-2.6 Mbps: 2 to 5 seconds of
+  picture waiting (`ss -tin`, `notsent`). The session only looked at Node's own buffer,
+  which stayed empty, so it kept sending up to 6 Mbps. A keyframe every second
+  (110-200 KB from gpu-screen-recorder at 1080p, against 3-6 KB per delta) added a
+  ~350 ms stall each second on a 2.5 Mbps link.
+- **LAN or internet, decided before the first frame.** Three WebSocket pings on the empty
+  link: under 15 ms keeps today's LAN encoder (60 fps, 12 Mbps, native size, one keyframe a
+  second). Otherwise the session opens on a ladder of internet steps, from 30 fps at 6 Mbps
+  down to 15 fps at 600 kbps. Frame rate falls before the width, so text stays readable
+  (1920 px wide until the floor, 1280 only there). A LAN session that turns slow moves to
+  the ladder once and stays there.
+- **Queue seen by the page's own pings.** The pong waits behind the video, so the round
+  trip over its floor is the queue. Two bad reports step down at once, in one encoder
+  restart, to what 80 % of the received rate carries; a keyframe's own burst does not
+  count. Climbing is one step after 30 s calm, at most once a minute, with a doubling wait
+  for a step that just failed. On the floor the node stops sending until the queue drains.
+- **Keyframes on demand.** On the internet ladder the periodic keyframe is every 60 s
+  instead of every second; a page that drops frames (its stats say so) gets one at once, as
+  does any frame the node itself has to drop.
+- **LAN fix:** a keyframe larger than the LAN ceiling (~350 KB at 12 Mbps) made the next
+  deltas fall over it until the following keyframe, about a second frozen and a restart.
+  The ceiling now leaves room for that keyframe for up to a second.
+- **Lab:** `PONTE_RD_LAB_SCENE=desktop` paints a desktop with scrolling text whose
+  keyframes and deltas are the size gpu-screen-recorder makes them, and
+  `tools/lab/rd-link.sh` runs `rd-measure.mjs` in a private network namespace with netem,
+  with an alpha.29 page emulated (`--client old`) and a per-second timeline.
+
+Measured in the lab (desktop scene, alpha.29 page emulated, 60 s each), before → after:
+2.5 Mbps with 1 % loss, capture → arrival p95 466 → 114 ms and freezes over 250 ms from
+53 a minute to none; 2.5 Mbps with 3 % loss, p95 1206 → 191 ms and frames over 500 ms
+from 41 % to none; a drop from 20 to 2 Mbps recovered in 25 s before and 4-5 s now. LAN:
+60 fps, p95 4.9 ms, no restart; five LAN runs froze for ~1 s in 2 of 5 before and 0 of 5
+now. `tcp_notsent_lowat` alone made the old code slightly worse, so no sysctl ships.
+
 ## 0.1.0-alpha.29 (2026-09-28)
 
 SSH machines open as Ponte terminals, from the phone, from the other computer and from agents. The APK does not change (still versionCode 21).
