@@ -12,7 +12,10 @@
 //
 // --client old behaves like the page's rd.js up to 0.1.0-alpha.29: a ping and
 // a stats report (fps, kbps, rtt, queue, drops, latency, p95) every second
-// after the first ready. Without --client only pings go out, as before.
+// after the first ready. --client new is the current page: the same, plus a
+// hello with caps { ack, key } and view (--view, default 1920x1080) and an ack
+// of the last frame on arrival at most every 50 ms. Without --client only
+// pings go out, as before.
 // --plan and --netem reshape the link during the run and only work inside
 // rd-link.sh's private network namespace.
 //
@@ -76,10 +79,17 @@ const units = [];
 let rtt = null, clockOffset = 0, readyAt = null;
 const pingSamples = [], latencies = [];
 let secondFrames = 0, secondBytes = 0;
+let ackSeq = 0, ackSent = 0, ackTimer = null, lastAckAt = -Infinity;
+const sendAck = () => { ackTimer = null; if (ackSeq === ackSent) return; lastAckAt = performance.now(); ackSent = ackSeq; ws.send(JSON.stringify({ t: 'ack', seq: ackSeq })); };
 ws.on('message', (data, binary) => {
   const at = epochNow();
   if (binary) {
     const h = parseVideoHeader(data);
+    if (client === 'new' && h.seq > ackSeq) {
+      ackSeq = h.seq;
+      const wait = lastAckAt + 50 - performance.now();
+      if (!ackTimer) { if (wait <= 0) sendAck(); else ackTimer = setTimeout(sendAck, wait); }
+    }
     frames.push({ ...h, at, bytes: data.length - 16 });
     if (band) units.push(Buffer.from(data.subarray(16)));
     secondFrames++; secondBytes += data.length;
@@ -96,7 +106,9 @@ ws.on('message', (data, binary) => {
     clockOffset = pingSamples.reduce((best, item) => item.rtt < best.rtt ? item : best).offset;
   }
 });
-ws.send(JSON.stringify({ t: 'hello', v: 1, token, maxFps: Number(opt('fps', 60)), ...(opt('gsr') ? { monitor: opt('gsr') } : {}) }));
+const [viewWidth, viewHeight] = String(opt('view', '1920x1080')).split('x').map(Number);
+const current = client === 'new' ? { caps: { ack: true, key: true }, view: { width: viewWidth, height: viewHeight } } : {};
+ws.send(JSON.stringify({ t: 'hello', v: 1, token, maxFps: Number(opt('fps', 60)), ...current, ...(opt('gsr') ? { monitor: opt('gsr') } : {}) }));
 
 const pct = (values, p) => { if (!values.length) return null; const s = [...values].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))] * 100) / 100; };
 const kernel = () => {
@@ -126,7 +138,7 @@ const ticker = setInterval(() => {
     const session = app?.rd.sessions[0];
     const params = session?.capture?.params;
     timeline.push({ s: second, link: plan.filter(step => step.at <= second).at(-1)?.rate ?? null, fps: secondFrames, kbps: Math.round(secondBytes * 8 / 1000), rtt: rtt === null ? null : Math.round(rtt),
-      encoder: params ? `${params.fps}/${params.kbps}${params.scale ? `/${params.scale.width}x${params.scale.height}` : ''}/k${params.keyint ?? 1}` : null, shedding: session?.shedding || undefined, nodeBuffer: session ? session.ws.bufferedAmount : null, ...kernel() });
+      encoder: params ? `${params.fps}/${params.kbps}${params.scale ? `/${params.scale.width}x${params.scale.height}` : ''}/k${params.keyint ?? 1}` : null, shedding: session?.shedding || undefined, decisions: session?.metrics.decisions.filter(d => d.at > now - 1000).map(d => `${d.reason}@${Math.round(d.at - t0)}:W${d.step}`).join(' ') || undefined, nodeBuffer: session ? session.ws.bufferedAmount : null, ...kernel() });
   }
   secondFrames = 0; secondBytes = 0;
 }, 1000);
@@ -178,6 +190,7 @@ if (switchAt) {
 }
 
 if (opt('dump')) await import('node:fs/promises').then(fs => fs.writeFile(opt('dump'), Buffer.concat(units)));
+const traced = [];
 if (band && units.length) {
   // Decode what arrived and read the capture time out of each frame's band.
   const width = BAND.bits * BAND.cell, size = width * BAND.cell;
@@ -188,12 +201,12 @@ if (band && units.length) {
   decoder.stdin.end(Buffer.concat(units));
   await new Promise(resolve => decoder.once('close', resolve));
   const gray = Buffer.concat(chunks);
-  const glass = [], stamped = [];
+  const glass = [], stamped = traced;
   for (let i = 0; i * size + size <= gray.length && i < frames.length; i++) {
     const stamp = readBand(gray.subarray(i * size, i * size + size), width);
     if (Math.abs(stamp - frames[i].sentAt) > 60000) continue; // not a lab stream
     glass.push(frames[i].sentAt - stamp);
-    stamped.push({ at: frames[i].at, value: frames[i].at - stamp, keyframe: frames[i].keyframe });
+    stamped.push({ at: frames[i].at, s: (frames[i].at - t0) / 1000, value: frames[i].at - stamp, keyframe: frames[i].keyframe });
   }
   if (glass.length) {
     // After the warm-up: how late frames are, how often over half a second,
@@ -228,4 +241,9 @@ if (app) {
 }
 console.log(JSON.stringify(report, null, 2));
 if (flag('timeline')) for (const row of timeline) console.log(JSON.stringify(row));
+// --trace 14-20: every stamped frame arriving in that window, as `s:ms-late[K]`.
+if (opt('trace') && traced.length) {
+  const [from, to] = opt('trace').split('-').map(Number);
+  console.log(traced.filter(f => f.s >= from && f.s < to).map(f => `${f.s.toFixed(2)}:${Math.round(f.value)}${f.keyframe ? 'K' : ''}`).join(' '));
+}
 process.exit(0);

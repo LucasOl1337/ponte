@@ -83,7 +83,7 @@ function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', s
     get decoder() { return FakeDecoder.all.at(-1); },
     advance: ms => { clock += ms; },
     sent: type => h.socket.sent.filter(message => !type || message.t === type),
-    input: () => h.socket.sent.filter(message => !['hello', 'ping', 'stats'].includes(message.t)),
+    input: () => h.socket.sent.filter(message => !['hello', 'ping', 'stats', 'ack', 'keyframe'].includes(message.t)),
     raf: () => { const due = frames.splice(0); due.forEach(callback => callback()); },
     timer: ms => timers.find(timer => timer.ms === ms && !timer.cleared && !timer.interval),
     async connect(extra) { h.socket.open(); h.socket.message(readyMessage(extra)); await flush(); return h; },
@@ -102,11 +102,13 @@ test('the pairing hash is saved and stripped, and hello goes to /api/rd on the p
   assert.equal(h.history[0], '/rd.html?node=feedfacecafebeef&probe=1');
   assert.equal(h.socket.url, 'ws://127.0.0.1:8787/api/rd?node=feedfacecafebeef');
   h.socket.open();
-  assert.deepEqual(h.socket.sent[0], { t: 'hello', v: 1, token: TOKEN, maxFps: 60 });
+  // caps and view go to every server: one that does not know them ignores them.
+  assert.deepEqual(h.socket.sent[0], { t: 'hello', v: 1, token: TOKEN, maxFps: 60, caps: { ack: true, key: true }, view: { width: 1000, height: 500 } });
   assert.equal(h.el('#rd-probe').hidden, false);
   const again = harness({ hash: '', search: '?monitor=LAB-2', stored: { 'ponte-pair-token': 'stored-token-0123456789abcdef0123456789' } });
+  again.window.devicePixelRatio = 2;
   again.socket.open();
-  assert.deepEqual(again.socket.sent[0], { t: 'hello', v: 1, token: 'stored-token-0123456789abcdef0123456789', maxFps: 60, monitor: 'LAB-2' });
+  assert.deepEqual(again.socket.sent.at(-1), { t: 'hello', v: 1, token: 'stored-token-0123456789abcdef0123456789', maxFps: 60, caps: { ack: true, key: true }, monitor: 'LAB-2', view: { width: 2000, height: 1000 } });
   assert.equal(again.el('#rd-probe').hidden, true);
   const none = harness({ hash: '' });
   assert.equal(FakeSocket.all.length, 0);
@@ -337,6 +339,41 @@ test('the decoder: annex B without description, hardware preferred with fallback
   assert.match(h.el('#rd-status').textContent, /video decoder failed: Decoding error/);
 });
 
+test('acks: the last frame that arrived, on arrival, at most every 50 ms; a dropped delta asks for a keyframe at most every 3 s', async () => {
+  const h = await harness().connect();
+  const now = 1_700_000_000_000 + 1_000_000;
+  const unit = (key, seq) => { const buffer = videoMessage({ key, data: Buffer.from([0, 0, 0, 1, key ? 0x65 : 0x41, seq]) }, seq, now - 5); return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.length); };
+  h.socket.message(unit(true, 1));
+  assert.deepEqual(h.sent('ack'), [{ t: 'ack', seq: 1 }], 'the first one goes at once');
+  h.advance(10); h.socket.message(unit(false, 2));
+  h.advance(10); h.socket.message(unit(false, 3));
+  assert.equal(h.sent('ack').length, 1, 'batched');
+  const timer = h.timer(40); // armed by the second frame, 10 ms after the first ack
+  assert.ok(timer, 'sent when 50 ms have passed since the last one');
+  h.advance(30); timer.callback();
+  assert.deepEqual(h.sent('ack').at(-1), { t: 'ack', seq: 3 });
+  h.socket.message(unit(false, 2));
+  h.advance(100); h.socket.message(unit(false, 2));
+  assert.equal(h.sent('ack').length, 2, 'never an older seq');
+  // A delta the decoder cannot take any more: a keyframe request, not repeated for 3 s.
+  assert.deepEqual(h.sent('keyframe'), []);
+  h.decoder.decodeQueueSize = 3;
+  h.socket.message(unit(false, 4));
+  h.decoder.decodeQueueSize = 0;
+  h.advance(1000); h.socket.message(unit(false, 5));
+  assert.deepEqual(h.sent('keyframe'), [{ t: 'keyframe' }]);
+  h.advance(2100); h.socket.message(unit(false, 6));
+  assert.equal(h.sent('keyframe').length, 2, 'still waiting after 3 s: asks again');
+  h.socket.message(unit(true, 7)); h.advance(4000); h.socket.message(unit(false, 8));
+  assert.equal(h.sent('keyframe').length, 2, 'the keyframe came');
+  // A new connection starts counting seqs again.
+  h.socket.close(1006);
+  h.timer(500).callback();
+  await h.connect();
+  h.advance(100); h.socket.message(unit(true, 1));
+  assert.deepEqual(h.sent('ack'), [{ t: 'ack', seq: 1 }]);
+});
+
 test('the header byte order: big endian by default, little endian detected from an implausible send time', async () => {
   const h = harness();
   const make = little => { const b = videoMessage({ key: true, data: Buffer.from([9]) }, 7, 1_700_001_000_000, little); return b.buffer.slice(b.byteOffset, b.byteOffset + b.length); };
@@ -547,7 +584,7 @@ test('end to end with the fake /api/rd: the ffmpeg stream reaches the decoder ke
   h.run("chooseMonitor('LAB-2')");
   await until(() => fake.received.some(message => message.t === 'monitor'), 'monitor');
   await until(() => h.run('session.monitor') === 'LAB-2', 'ready for LAB-2');
-  assert.deepEqual(fake.received.filter(message => message.t !== 'ping' && message.t !== 'clip').map(message => message.t === 'key' ? `${message.code}${message.down ? 'v' : '^'}` : message.t), ['hello', 'KeyAv', 'KeyA^', 'monitor']);
+  assert.deepEqual(fake.received.filter(message => !['ping', 'clip', 'ack', 'keyframe'].includes(message.t)).map(message => message.t === 'key' ? `${message.code}${message.down ? 'v' : '^'}` : message.t), ['hello', 'KeyAv', 'KeyA^', 'monitor']);
   assert.equal(fake.received[0].token, TOKEN);
   // A second client takes the target: the first one hears `taken` and stays down.
   const other = new WebSocket(`ws://127.0.0.1:${fake.port}/api/rd`);

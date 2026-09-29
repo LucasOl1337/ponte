@@ -353,6 +353,30 @@ test('the session opens on the WAN steps when the first round trip is 15 ms or m
   current.rd.close();
 });
 
+test('a page that acks and asks: {t:"keyframe"} restarts the WAN run for a keyframe, deltas of the old run are not sent, and {t:"key"} stays a key', async () => {
+  let clock = 1000;
+  const s = fakeSession({ now: () => clock, probe: async () => 30, hello: { caps: { ack: true, key: true } } });
+  await s.ready();
+  const wan = { monitor: 'LAB-1', fps: 30, kbps: 2500 };
+  s.unit(true, wan, 60000);
+  for (let i = 0; i < 5; i++) { clock += 33; s.unit(false, wan); }
+  s.ws.emit('message', JSON.stringify({ t: 'ack', seq: 3 }), false);
+  s.ws.emit('message', JSON.stringify({ t: 'ack', seq: 'x' }), false);
+  s.ws.emit('message', JSON.stringify({ t: 'key', code: 'KeyA', down: true }), false);
+  assert.equal(s.restarts.length, 0);
+  clock += 2500;
+  s.ws.emit('message', JSON.stringify({ t: 'keyframe' }), false);
+  await new Promise(r => setImmediate(r));
+  assert.equal(s.restarts.length, 1);
+  assert.equal(s.restarts[0].keyint, 300);
+  const before = s.sent.length;
+  s.unit(false, wan);
+  assert.equal(s.sent.length, before, 'the old run is over');
+  s.unit(true, wan);
+  assert.equal(s.sent.length, before + 1);
+  s.rd.close();
+});
+
 test('probeRtt: the smallest of three WebSocket pings; 0 without ping support; null when nothing answers', async () => {
   const answering = Object.assign(new EventEmitter(), { delays: [30, 10, 20], ping(payload) { setTimeout(() => this.emit('pong', payload), this.delays.shift()); return true; } });
   const rtt = await probeRtt(answering);

@@ -16,6 +16,11 @@ const CLIP_LIMIT = 1024 * 1024;
 const STATS_SPAN = 5000;
 const ESC_HOLD_MS = 2000;
 const RECONNECT_STEPS = [500, 1000, 2000, 4000, 8000];
+// The server paces the encoder by these (a server that does not know them
+// ignores them): the last frame that arrived, at most every 50 ms, and a
+// keyframe when the decoder lost its reference, at most every 3 s.
+const ACK_EVERY_MS = 50;
+const KEYFRAME_ASK_MS = 3000;
 const PROBE_PATCH = 24;
 const PROBE_ROUNDS = 10;
 // The lab source paints its capture time (ms epoch, 44 bits, MSB first, white =
@@ -170,6 +175,7 @@ let hardware = '';
 let decoderFailures = 0;
 let hardwareFailed = false;   // for the rest of the page's life
 const inflight = new Map();    // seq → { sendTime, recvAt }
+let ackSeq = 0, ackSent = 0, ackTimer = 0, lastAckAt = -Infinity, keyframeAskedAt = -Infinity;
 let canvasContext = null;
 let sampler = null;
 let videoSize = { width: 0, height: 0 };
@@ -240,14 +246,17 @@ function connect() {
   if (!token) { stopped = 'auth'; overlay(t('Abra pelo ./ponte rd ou por um link de pareamento: este navegador ainda não tem a chave.')); return; }
   stopped = ''; stopMessage = '';
   session = null; littleEndian = null; waitingKey = true; inflight.clear(); pingSamples.length = 0;
+  clearTimeout(ackTimer); ackTimer = 0; ackSeq = 0; ackSent = 0; keyframeAskedAt = -Infinity;
   overlay(reconnectAttempt ? t('Reconectando…') : t('Conectando…'));
   const current = new WebSocket(socketAddress());
   current.binaryType = 'arraybuffer';
   socket = current;
   current.addEventListener('open', () => {
     if (socket !== current) return;
-    const hello = { t: 'hello', v: 1, token, maxFps: 60 };
+    const hello = { t: 'hello', v: 1, token, maxFps: 60, caps: { ack: true, key: true } };
     if (wantedMonitor) hello.monitor = wantedMonitor;
+    const view = stageView();
+    if (view) hello.view = view;
     current.send(JSON.stringify(hello));
   });
   current.addEventListener('message', event => { if (socket === current) receive(event.data); });
@@ -265,6 +274,39 @@ function closed(event) {
   reconnectAttempt++;
   overlay(t('Sem conexão. Tentando de novo em {seconds} s…', { seconds: Math.ceil(delay / 1000) }));
   reconnectTimer = setTimeout(connect, delay);
+}
+
+// The stage in device pixels: a picture wider than this is only scaled down here.
+function stageView() {
+  const stage = $('#rd-stage');
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.round((stage?.clientWidth || 0) * ratio), height = Math.round((stage?.clientHeight || 0) * ratio);
+  return width >= 320 && height > 0 ? { width, height } : null;
+}
+
+// On arrival, before decoding: the server reads the link's queue from it.
+function acknowledge(seq) {
+  if (!(seq > ackSeq)) return;
+  ackSeq = seq;
+  if (ackTimer) return;
+  const wait = lastAckAt + ACK_EVERY_MS - performance.now();
+  if (wait <= 0) sendAck(); else ackTimer = setTimeout(sendAck, wait);
+}
+function sendAck() {
+  ackTimer = 0;
+  if (ackSeq === ackSent) return;
+  lastAckAt = performance.now();
+  ackSent = ackSeq;
+  send({ t: 'ack', seq: ackSeq });
+}
+
+// A delta was dropped: every frame up to the next keyframe is lost, and on a
+// slow link the next one may be minutes away.
+function askKeyframe() {
+  const now = performance.now();
+  if (now - keyframeAskedAt < KEYFRAME_ASK_MS) return;
+  keyframeAskedAt = now;
+  send({ t: 'keyframe' });
 }
 
 function receive(data) {
@@ -387,9 +429,10 @@ function video(buffer) {
   const header = parseHeader(buffer, littleEndian);
   if (!header) return;
   bytesReceived += buffer.byteLength;
+  acknowledge(header.seq);
   const chunk = { ...header, recvAt: nowEpoch() };
   if (configuring) {
-    if (chunk.key) queuedChunks = [chunk]; else if (queuedChunks.length && queuedChunks.length < 8) queuedChunks.push(chunk); else framesDropped++;
+    if (chunk.key) queuedChunks = [chunk]; else if (queuedChunks.length && queuedChunks.length < 8) queuedChunks.push(chunk); else { framesDropped++; askKeyframe(); }
     return;
   }
   decode(chunk);
@@ -398,9 +441,9 @@ function video(buffer) {
 // A late frame is not worth drawing: with more than two frames waiting in the
 // decoder, deltas are dropped until the next keyframe, which restarts clean.
 function decode(chunk) {
-  if (!decoder || decoder.state !== 'configured') { waitingKey = true; framesDropped++; return; }
+  if (!decoder || decoder.state !== 'configured') { waitingKey = true; framesDropped++; if (!chunk.key) askKeyframe(); return; }
   if (!chunk.key) {
-    if (waitingKey || decoder.decodeQueueSize > MAX_DECODE_QUEUE) { waitingKey = true; framesDropped++; return; }
+    if (waitingKey || decoder.decodeQueueSize > MAX_DECODE_QUEUE) { waitingKey = true; framesDropped++; askKeyframe(); return; }
   } else if (decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
     framesDropped += decoder.decodeQueueSize;
     decoder.reset();

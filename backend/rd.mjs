@@ -251,7 +251,7 @@ export function createRemoteDesktop({
       this.control = createRateControl({ maxFps: this.fps, caps: this.page, view: this.view, now });
       this.seq = 0; this.waitKey = true; this.announced = null; this.ended = false; this.shedding = false;
       this.failures = 0; this.lastUnitAt = now();
-      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, pesToSend: [], lastToSend: [], early: 0 };
+      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, decisions: [], pesToSend: [], lastToSend: [], early: 0 };
     }
 
     async start() {
@@ -292,8 +292,12 @@ export function createRemoteDesktop({
       if (!decision || this.ended) return;
       if (decision.reason === 'shed') { this.shedding = true; return; }
       this.shedding = false;
+      // What the old run still has to send only delays the new keyframe.
+      this.waitKey = true;
       this.metrics.restarts++;
       this.metrics.reasons[decision.reason] = (this.metrics.reasons[decision.reason] || 0) + 1;
+      this.metrics.decisions.push({ at: epochNow(), reason: decision.reason, step: this.control.step });
+      if (this.metrics.decisions.length > 50) this.metrics.decisions.shift();
       const monitor = this.monitors.find(m => m.name === this.monitor) || this.monitors[0];
       this.capture.restart(this.captureParams(monitor));
     }
@@ -329,14 +333,15 @@ export function createRemoteDesktop({
       const sentAt = epochNow();
       const seq = ++this.seq;
       this.ws.send(videoHeader(seq, unit.keyframe, sentAt), unit.data);
-      this.control.sent(unit.data.length, unit.keyframe);
       if (unit.keyframe) this.lastKey = { at: now(), bytes: unit.data.length + HEADER_BYTES };
+      const decision = this.control.sent(unit.data.length + HEADER_BYTES, unit.keyframe, seq);
       const m = this.metrics;
       m.frames++; m.bytes += unit.data.length;
       if (unit.keyframe) { m.keyframes++; m.keyBytes += unit.data.length; }
       if (unit.early) m.early++;
       const sentPerf = now();
       if (m.pesToSend.length < 20000) { m.pesToSend.push(sentPerf - unit.firstAt); m.lastToSend.push(sentPerf - unit.lastAt); }
+      this.apply(decision);
     }
 
     // Outside the LAN the next natural keyframe can be minutes away: a delta
@@ -393,6 +398,10 @@ export function createRemoteDesktop({
         case 'release': input?.release(); break;
         case 'ping': this.sendJson({ t: 'pong', c: m.c, s: epochNow() }); break;
         case 'stats': this.adapt.stats(m); this.clientStats = m; this.apply(this.control.stats(m)); break;
+        // Pages that announced caps.ack / caps.key: the last frame that arrived,
+        // and a decoder that lost its reference and needs a keyframe.
+        case 'ack': this.apply(this.control.ack(m.seq)); break;
+        case 'keyframe': this.apply(this.control.key()); break;
         case 'clip':
           if (typeof m.text !== 'string' || Buffer.byteLength(m.text) > MAX_CLIP_BYTES || m.text === this.lastClip) break;
           this.lastClip = m.text;

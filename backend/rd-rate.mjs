@@ -5,10 +5,14 @@
 // down at once and in one go when the link's queue grows, up one step at a
 // time after a long calm, with a growing wait for a step that failed.
 //
-// Signals: the round trip of the client's own pings (the pong waits behind the
-// video in the same queue, so rtt − its floor is the queue, on one clock) and
-// the p95 of its send → arrival latencies, from the stats every page sends once
-// a second; the kbps it received is what the link delivers.
+// Signals. A page that acks (hello caps.ack) says which frame arrived last, at
+// most every 50 ms: on the server's own clock, the age of that frame minus the
+// smallest age in 10 s is the queue, the acked bytes are what the link
+// delivers, and the unacked ones are in flight. A keyframe burst crossing the
+// link also measures its capacity, which lets a climb skip steps. An older page
+// only has its stats, once a second: the round trip of its own pings (the pong
+// waits behind the video, so rtt − its floor is the queue) and the p95 of its
+// send → arrival latencies; the kbps it received is what the link delivers.
 // A LAN answers in 1-10 ms; the notebook away from home was 22-28 ms at best.
 export const LAN_RTT_MS = 15;
 // fps falls before the width: reading text matters more than motion.
@@ -33,6 +37,12 @@ const P95_WINDOW_MS = 5000;      // the page's latency window
 const UP_CALM_MS = 30000, UP_EVERY_MS = 60000, DOWN_QUIET_MS = 60000;
 const FAILED_UP_MS = 20000, BACKOFF_MAX_MS = 8 * 60000, BACKOFF_RESET_MS = 10 * 60000;
 const KEY_COALESCE_MS = 2000, IMPLICIT_KEY_GRACE_MS = 3000, KEYS_PER_MINUTE = 3;
+// Acks.
+const ACK_WINDOW_MS = 10000, ACK_HISTORY_MAX = 4096, DELIVERED_WINDOW_MS = 2000;
+// A queue counts as draining only when it fell by more than the spread of one
+// burst of frames arriving together (the ack names the youngest).
+const BAD_SUSTAIN_MS = 500, DRAINING_MS = 75, IN_FLIGHT_EMERGENCY_MS = 1000;
+const SAMPLE_FRESH_MS = 2 * 60000, SAMPLE_HEADROOM = 1.25, SAMPLE_CLEARS_BACKOFF = 1.5, SAMPLE_MIN_BYTES = 20000, SAMPLE_MIN_MS = 50;
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
@@ -57,6 +67,9 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   let lastKey = null;
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
+  // Ack path: frames sent and not acked yet, ages of the acked ones, acked bytes.
+  let acking = false, firstAckAt = null, sentSeq = 0, ackedSeq = 0, badSince = null, farSince = null, judgeFrom = now(), sample = null;
+  const inFlight = [], ages = [], acked = [];
 
   const widthLimit = () => {
     const limits = [WAN_STEPS[step].width, finite(view?.width)].filter(Boolean);
@@ -66,10 +79,19 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     fps: Math.min(maxFps, WAN_STEPS[step].fps), kbps: WAN_STEPS[step].kbps,
     keyint: caps.key ? WAN_KEYINT.asks : WAN_KEYINT.silent, maxWidth: widthLimit(),
   };
-  const deliveredKbps = () => delivered.length ? delivered.reduce((sum, value) => sum + value, 0) / delivered.length : null;
+  // With a queue standing since `since`, the link was busy all along: what
+  // it delivered from then on is its capacity, not what the encoder made.
+  const deliveredKbps = (since = null) => {
+    if (!acking) return delivered.length ? delivered.reduce((sum, value) => sum + value, 0) / delivered.length : null;
+    const t = now();
+    while (acked.length && acked[0].at < t - DELIVERED_WINDOW_MS) acked.shift();
+    const from = since !== null && t - since >= 300 ? Math.max(since, t - DELIVERED_WINDOW_MS) : Math.max(firstAckAt, t - DELIVERED_WINDOW_MS);
+    if (t - from < 300) return null;
+    return acked.reduce((sum, item) => sum + (item.at > from ? item.bytes : 0), 0) * 8 / (t - from);
+  };
   // The highest step that 80% of the delivered rate carries, below the current one.
-  const fitting = (below = step) => {
-    const rate = deliveredKbps();
+  const fitting = (below = step, since = null) => {
+    const rate = deliveredKbps(since);
     const fit = rate === null ? below - 1 : WAN_STEPS.findLastIndex(s => s.kbps <= 0.8 * rate);
     return Math.max(0, Math.min(below - 1, fit));
   };
@@ -79,12 +101,11 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     if (openRtt !== null && t - openedAt < BASE_WINDOW_MS && samples === rtts) values.push(openRtt);
     return values.length ? Math.min(...values) : null;
   };
-  // A keyframe takes bytes ÷ rate to cross the link: the queue it makes then is expected.
-  const keyframeExcuse = t => {
-    if (!lastKey) return false;
-    const rate = deliveredKbps() || WAN_STEPS[step].kbps;
-    return t - lastKey.at < lastKey.bytes * 8 / Math.max(300, rate) + 1000;
-  };
+  // A keyframe takes bytes ÷ rate to cross the link: the queue it makes then
+  // is expected, plus the time the signal takes to show it.
+  const keyframeTime = () => lastKey ? lastKey.bytes * 8 / Math.max(300, deliveredKbps() || WAN_STEPS[step].kbps) : 0;
+  const keyframeExcuse = (t, lag = 1000) => !!lastKey && t - lastKey.at < keyframeTime() + lag;
+  const ackBase = () => ages.length ? Math.min(...ages.map(item => item.value)) : (openRtt ?? 0);
 
   function fail(target, t) {
     const entry = backoff.get(target) || { failures: 0, retryAt: 0 };
@@ -101,7 +122,48 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     if (reason === 'key') keyRestarts.push(t);
     if (next !== step || reason === 'wan') atStepSince = t;
     step = next; lastRestartAt = t; badStreak = 0; shedding = false; lastUncalmAt = t;
+    // Frames of the old run still queued say nothing about the new one, nor
+    // do the ones sent behind them: judge again once they have drained.
+    badSince = null; judgeFrom = inFlight.length ? Infinity : t;
     return { reason, params: params() };
+  }
+
+  // Too much queued (or in flight for too long): a step down at once, all
+  // the way to what the link delivers; on the floor, stop sending instead.
+  function congested(queue, emergency) {
+    if (step > 0) return change('down', fitting(step, badSince?.at ?? null));
+    if (!shedding && (emergency || queue > QUEUE_SHED_MS)) { shedding = true; return { reason: 'shed', params: params() }; }
+    return null;
+  }
+
+  // Over 150 ms for half a second and not shrinking from its peak: a queue
+  // that drains means the step already fits (a burst or the step before left
+  // it behind).
+  function queued(queue, t) {
+    if (queue <= QUEUE_BAD_MS) { badSince = null; return false; }
+    if (!badSince) { badSince = { at: t, peak: queue }; return false; }
+    if (queue < badSince.peak - DRAINING_MS) { badSince = { at: t, peak: queue }; return false; }
+    badSince.peak = Math.max(badSince.peak, queue);
+    return t - badSince.at >= BAD_SUSTAIN_MS;
+  }
+
+  function drained(t) {
+    if (judgeFrom === Infinity && !inFlight.some(frame => frame.at < lastRestartAt)) judgeFrom = t;
+  }
+
+  // In flight for over a second (beyond a keyframe's own time), or more than
+  // a second of the step's bytes: the link stalled or shrank a lot.
+  function emergency(t) {
+    if (!acking || mode !== 'wan' || shedding || !inFlight.length) return null;
+    const oldest = inFlight[0], base = ackBase();
+    const late = t - oldest.at - base - (lastKey && lastKey.at >= lastRestartAt ? keyframeTime() : 0);
+    // An old run's frames get a settling time to drain before they count.
+    if (oldest.at < lastRestartAt && t - lastRestartAt < SETTLE_MS) return null;
+    let bytes = 0;
+    for (const frame of inFlight) if (frame.at >= lastRestartAt) bytes += frame.bytes;
+    const allowance = WAN_STEPS[step].kbps * 125 + (lastKey && lastKey.at >= lastRestartAt ? lastKey.bytes : 0);
+    if (late > IN_FLIGHT_EMERGENCY_MS || bytes > allowance) return congested(late, true);
+    return null;
   }
 
   function keyRequest() {
@@ -127,9 +189,58 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       step = INITIAL_STEP;
       return params();
     },
-    // Every unit that left, so keyframe bursts are known.
-    sent(bytes, keyframe) { if (keyframe) lastKey = { at: now(), bytes }; },
+    // Every unit that left (seq as in its header), so keyframe bursts are
+    // known and acks can be matched.
+    sent(bytes, keyframe, seq) {
+      const t = now();
+      if (keyframe) lastKey = { at: t, bytes };
+      if (!caps.ack || !Number.isInteger(seq) || seq <= sentSeq) return null;
+      sentSeq = seq;
+      inFlight.push({ seq, at: t, bytes, keyframe });
+      // Never acked within 10 s: the page stopped acking; forget them.
+      while (inFlight.length > ACK_HISTORY_MAX || (inFlight.length && inFlight[0].at < t - ACK_WINDOW_MS)) inFlight.shift();
+      drained(t);
+      return emergency(t);
+    },
+    // The page received every frame up to `seq`.
+    ack(seq) {
+      if (!caps.ack || !Number.isInteger(seq) || seq <= ackedSeq || seq > sentSeq || !inFlight.length) return null;
+      const index = seq - inFlight[0].seq;
+      if (index < 0 || index >= inFlight.length || inFlight[index].seq !== seq) return null;
+      const t = now();
+      if (!acking) { acking = true; firstAckAt = t; }
+      ackedSeq = seq; lastReportAt = t;
+      const arrived = inFlight.splice(0, index + 1);
+      for (const frame of arrived) acked.push({ at: t, bytes: frame.bytes });
+      const frame = arrived.at(-1), age = t - frame.at;
+      while (ages.length && (ages[0].at < t - ACK_WINDOW_MS || ages.length >= 1000)) ages.shift();
+      ages.push({ at: t, value: age });
+      const base = ackBase(), queue = age - base;
+      // A keyframe that crossed the link in one burst measured its capacity.
+      const burst = arrived.find(item => item.keyframe && item.bytes >= SAMPLE_MIN_BYTES);
+      if (burst) {
+        sample = { at: t, kbps: burst.bytes * 8 / Math.max(SAMPLE_MIN_MS, t - burst.at - base) };
+        for (const [target] of backoff) if (sample.kbps >= SAMPLE_CLEARS_BACKOFF * WAN_STEPS[target].kbps) backoff.delete(target);
+      }
+      drained(t);
+      if (mode === 'lan') {
+        // Far (the smallest age stays over the LAN round trip) or queued.
+        farSince = base > LAN_RTT_MS ? farSince ?? t : null;
+        const piling = frame.at >= judgeFrom && !keyframeExcuse(t, 100) && queued(queue, t);
+        if ((farSince === null || t - farSince < 5000) && !piling) return null;
+        mode = 'wan';
+        return change('wan', Math.min(INITIAL_STEP, fitting(WAN_STEPS.length)));
+      }
+      if (shedding) return queue < QUEUE_BAD_MS || !inFlight.length ? change('key', 0) : null;
+      if (frame.at < judgeFrom) { lastUncalmAt = t; return null; }
+      if (keyframeExcuse(t, 100)) return null;
+      if (queue >= QUEUE_CALM_MS) lastUncalmAt = t;
+      if (queue > QUEUE_EMERGENCY_MS || queued(queue, t)) return congested(queue, queue > QUEUE_EMERGENCY_MS);
+      return emergency(t);
+    },
     stats(report = {}) {
+      // A page that acks already said all of this, sooner.
+      if (acking) return null;
       const t = now();
       lastReportAt = t;
       const kbps = finite(report.kbps);
@@ -171,14 +282,20 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     },
     // Called about once a second.
     tick() {
-      if (mode !== 'wan' || shedding) return null;
       const t = now();
+      if (mode === 'wan' && shedding && acking && !inFlight.length) return change('key', 0);
+      if (mode !== 'wan' || shedding) return null;
+      const stalled = emergency(t);
+      if (stalled) return stalled;
       for (const [target] of backoff) if (step === target - 1 && t - atStepSince >= BACKOFF_RESET_MS) backoff.delete(target);
       if (step >= WAN_STEPS.length - 1 || t - lastReportAt > 2500) return null;
       if (t - lastUncalmAt < UP_CALM_MS || t - lastRestartAt < UP_CALM_MS) return null;
       if (t - lastDownAt < DOWN_QUIET_MS || t - lastUpAt < UP_EVERY_MS) return null;
-      const target = step + 1;
-      if ((backoff.get(target)?.retryAt ?? 0) > t) return null;
+      // A fresh capacity sample may skip steps; a step that failed waits its backoff.
+      const fit = sample && t - sample.at <= SAMPLE_FRESH_MS ? WAN_STEPS.findLastIndex(s => s.kbps <= sample.kbps / SAMPLE_HEADROOM) : -1;
+      let target = Math.max(step + 1, fit);
+      while (target > step && (backoff.get(target)?.retryAt ?? 0) > t) target--;
+      if (target <= step) return null;
       return change('up', target);
     },
     key: keyRequest,

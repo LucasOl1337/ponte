@@ -209,3 +209,145 @@ test('on the floor, a queue that keeps growing sheds frames until it drains, the
   assert.equal(t.report({ rtt: 70 })?.reason, 'key');
   assert.equal(t.c.shedding, false);
 });
+
+// ---- pages that ack -------------------------------------------------------------------
+
+// A link simulated in 5 ms slices: an encoder at the control's step (a
+// keyframe of ~44 bytes per kbps after each ~450 ms restart gap), a FIFO
+// bottleneck of `capacity(t)` kbps with `oneWay` ms each way, and a page that
+// acks the last frame it got at most every 50 ms. Decisions are applied like
+// the session does; the report has what happened.
+function simulate({ seconds, capacity, oneWay = 12, open = 30, caps = { ack: true, key: true }, onDecision } = {}) {
+  let clock = 0, seq = 0, restartAt = 0, nextFrame = 450, linkFree = 0, lastAckSent = -Infinity, pendingAck = null;
+  const c = createRateControl({ now: () => clock, caps });
+  const arrivals = [], acks = [], events = [], delays = [];
+  const LAN = { fps: 60, kbps: 12000 };
+  let params = c.open(open) || LAN, keyNext = true, shed = false;
+  const apply = decision => {
+    if (!decision) return;
+    events.push({ at: clock, reason: decision.reason, step: c.step });
+    onDecision?.(decision, clock);
+    if (decision.reason === 'shed') { shed = true; return; }
+    shed = false; params = decision.params || LAN; restartAt = clock; nextFrame = clock + 450; keyNext = true;
+  };
+  for (; clock < seconds * 1000; clock += 5) {
+    if (clock >= nextFrame) {
+      nextFrame += 1000 / params.fps;
+      if (!shed) {
+        const bytes = keyNext ? params.kbps * 44 : Math.round(params.kbps * 125 / params.fps);
+        const keyframe = keyNext; keyNext = false;
+        seq++;
+        const start = Math.max(clock + oneWay, linkFree);
+        linkFree = start + bytes * 8 / capacity(start);
+        arrivals.push({ seq, sentAt: clock, arriveAt: linkFree });
+        apply(c.sent(bytes, keyframe, seq));
+      }
+    }
+    while (arrivals.length && arrivals[0].arriveAt <= clock) {
+      const frame = arrivals.shift();
+      delays.push({ at: clock, value: clock - frame.sentAt });
+      pendingAck = frame.seq;
+    }
+    if (pendingAck !== null && clock - lastAckSent >= 50) { acks.push({ seq: pendingAck, at: clock + oneWay }); pendingAck = null; lastAckSent = clock; }
+    while (acks.length && acks[0].at <= clock) apply(c.ack(acks.shift().seq));
+    if (clock % 1000 === 0) apply(c.tick());
+  }
+  return { c, events, delays };
+}
+
+test('acks: ignored when invalid, repeated, from the future or unknown, and the history stays bounded', () => {
+  let clock = 0;
+  const c = createRateControl({ now: () => clock, caps: { ack: true } });
+  c.open(30);
+  for (let seq = 1; seq <= 10; seq++) { clock += 33; c.sent(3000, seq === 1, seq); }
+  for (const junk of [null, '5', 5.5, -1, 0, 11, 1e12, NaN, Infinity]) assert.equal(c.ack(junk), null);
+  clock += 40;
+  c.ack(5);
+  assert.equal(c.ack(5), null, 'repeated');
+  assert.equal(c.ack(3), null, 'out of order');
+  // A page that stops acking: at most 10 s of frames are kept.
+  for (let seq = 11; seq < 20000; seq++) { clock += 16; c.sent(1000, false, seq); c.tick?.(); }
+  const before = process.memoryUsage().heapUsed;
+  for (let i = 0; i < 100000; i++) c.ack(1 + (i % 50));
+  assert.ok(process.memoryUsage().heapUsed - before < 20e6);
+  // Without caps.ack nothing is tracked.
+  const old = createRateControl({ now: () => clock });
+  old.open(30);
+  assert.equal(old.sent(1000, false, 1), null);
+  assert.equal(old.ack(1), null);
+});
+
+test('acks: a queue over 150 ms held for half a second steps down at once to what the acked bytes carry; a shorter one does not', () => {
+  // 2.5 Mbps until 10 s, then 1.3 Mbps.
+  const { c, events, delays } = simulate({ seconds: 20, capacity: t => t < 10000 ? 3200 : 1300 });
+  const downs = events.filter(e => e.reason === 'down');
+  assert.equal(downs.length, 1, JSON.stringify(events));
+  assert.ok(downs[0].at > 10000 && downs[0].at < 11500, `down at ${downs[0].at}`);
+  assert.equal(c.step, 1, '80% of ~1.3 Mbps carries W1');
+  // The old queue drains with the 20% left free, and within ~3 s of the down.
+  const after = delays.filter(d => d.at > 14000).map(d => d.value);
+  assert.ok(Math.max(...after) < 250, `delay after ${Math.max(...after)}`);
+  // A dip that queues over 150 ms for less than half a second is no congestion.
+  const blip = simulate({ seconds: 20, capacity: t => t >= 10000 && t < 10400 ? 800 : 3200 });
+  const peak = Math.max(...blip.delays.filter(d => d.at > 10000 && d.at < 12000).map(d => d.value));
+  assert.ok(peak > 150 + 55, `peak ${peak}`);
+  assert.equal(blip.events.filter(e => e.reason === 'down').length, 0, JSON.stringify(blip.events));
+  // Nor is one that drains: a queue falling from its peak means the step fits.
+  const drains = simulate({ seconds: 20, capacity: t => t >= 10000 && t < 10300 ? 1200 : 6000 });
+  assert.equal(drains.events.filter(e => e.reason === 'down').length, 0, JSON.stringify(drains.events));
+});
+
+test('acks: the keyframe of a new run (110 KB at 2.5 Mbps, ~350 ms) is no congestion', () => {
+  const { events } = simulate({ seconds: 30, capacity: () => 2700, open: 30 });
+  assert.deepEqual(events.filter(e => e.reason !== 'up'), []);
+});
+
+test('acks: frames in flight for over a second step down without waiting for any ack', () => {
+  let clock = 0;
+  const c = createRateControl({ now: () => clock, caps: { ack: true, key: true } });
+  c.open(30);
+  let seq = 0;
+  for (; clock < 4000; clock += 33) { c.sent(10000, false, ++seq); if (seq % 2 === 0) c.ack(seq); }
+  let decision = null;
+  // The link stops: nothing is acked any more.
+  for (let i = 0; i < 40 && !decision; i++) { clock += 33; decision = c.sent(10000, false, ++seq); }
+  assert.equal(decision?.reason, 'down');
+  assert.ok(clock - 4000 <= 1300, `after ${clock - 4000} ms`);
+});
+
+test('acks: a keyframe burst measures the capacity, and a climb after the calm goes straight to what it carries (once a minute)', () => {
+  // Opens at W3 on a link that fell to 1.2 Mbps, then grows to 30 Mbps at 20 s.
+  const { events, c } = simulate({ seconds: 240, capacity: t => t < 20000 ? 1200 : 30000 });
+  const ups = events.filter(e => e.reason === 'up');
+  assert.ok(ups.length >= 1, JSON.stringify(events));
+  // The first climb is one step (the samples so far saw 1.2 Mbps); its keyframe sees 30 Mbps, and the next one goes to the top.
+  assert.equal(ups[1]?.step, 5, JSON.stringify(ups));
+  assert.ok(ups[1].at - ups[0].at >= 60000);
+  assert.equal(c.step, 5);
+});
+
+test('acks: on a steady 2.4 Mbps link a failing step is retried at most once per 8 minutes in the regime', () => {
+  const { events } = simulate({ seconds: 40 * 60, capacity: () => 2400 });
+  const ups = events.filter(e => e.reason === 'up');
+  const failed = ups.filter(up => events.some(e => e.reason === 'down' && e.at > up.at && e.at - up.at <= 20000));
+  const late = failed.filter(up => up.at >= 16 * 60000);
+  for (let i = 1; i < late.length; i++) assert.ok(late[i].at - late[i - 1].at >= 8 * 60000);
+  assert.ok(late.length <= 3, `${late.length} failed climbs in 24 minutes: ${JSON.stringify(events.slice(0, 20))}`);
+});
+
+test('acks: on the floor a link below it sheds frames, then restarts with a keyframe once in-flight frames drained', () => {
+  const { events } = simulate({ seconds: 30, capacity: t => t < 8000 ? 3000 : t < 20000 ? 350 : 3000 });
+  const reasons = events.map(e => e.reason);
+  assert.ok(reasons.includes('shed'), JSON.stringify(events));
+  const shedAt = reasons.indexOf('shed');
+  assert.equal(reasons[shedAt + 1], 'key', JSON.stringify(events));
+});
+
+test('acks: a LAN session whose acked frames keep ageing over 15 ms, or queue, moves to the WAN steps', () => {
+  const far = simulate({ seconds: 10, capacity: () => 100000, oneWay: 12, open: 4 });
+  const moved = far.events.find(e => e.reason === 'wan');
+  assert.ok(moved && moved.at < 6500, JSON.stringify(far.events));
+  const near = simulate({ seconds: 10, capacity: () => 100000, oneWay: 1, open: 2 });
+  assert.equal(near.c.mode, 'lan');
+  assert.deepEqual(near.events, []);
+});
