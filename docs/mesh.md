@@ -54,7 +54,9 @@ A node can open outside machines (VMs, servers) as Ponte terminals. The node's p
 
 Home and Dev then show an **SSH** choice next to Claude, Codex and Terminal, with those machines in place of the folders, and `./ponte ctl terminals create --agent ssh --host ALIAS` does the same for agents (`terminals places` lists them). The session is a tmux pane running `ssh ALIAS`; when ssh ends, the pane falls back to a local shell. The phone only picks a listed alias: it never sends a hostname, user or ssh option. Up to 16 aliases, each with an optional label of up to 40 characters. Restart the service after changing the list.
 
-A key can stay on the one computer that holds it. The other computer reaches that machine through a hop over the 2222 link above. For example, on the PC, when the work VM's key lives only on the notebook:
+Give every computer its own way in, so no machine depends on another being awake. Each computer keeps its own `~/.ssh/id_ed25519`, and that public key goes into `authorized_keys` on every machine it should reach. Every computer then has the same direct `Host` entry and the same `ssh.hosts` list. Private keys never leave the computer that made them. The phone reaches any machine through whichever computer it is controlling.
+
+When a machine's `authorized_keys` cannot take another key, a computer that can log in there serves as a hop over the 2222 link above. For example, on the PC, when only the notebook can reach the work VM:
 
 ```
 Host work-vm
@@ -68,7 +70,7 @@ Host work-vm
   RemoteCommand ssh work-vm
 ```
 
-`ssh work-vm` on the PC is then an interactive shell on the VM. Such an alias does not take a command of its own (`ssh work-vm uptime` is refused because of `RemoteCommand`); type the command in the session instead, or run it on the computer that has the key.
+This works only while the notebook is online, and such an alias does not take a command of its own (`ssh work-vm uptime` is refused because of `RemoteCommand`).
 
 ## What a peer token can do
 
