@@ -6,6 +6,7 @@ import { closeSync, constants as fsConstants, mkdtempSync, openSync, rmSync } fr
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const TS = 188;
 export const BAND = { bits: 44, cell: 16 }; // lab time band: 44 cells of 16x16 px, top-left, MSB first, white = 1
@@ -222,22 +223,47 @@ export class TsDemuxer {
 
 const clampInt = (value, low, high, fallback) => Number.isFinite(Number(value)) ? Math.max(low, Math.min(high, Math.round(Number(value)))) : fallback;
 
+// The lab's desktop scene: a real desktop screenshot, a terminal scrolling
+// source code and a moving cursor, with a one-second-plus VBV so keyframes and
+// deltas come out the size gpu-screen-recorder makes them (1080p at 2 Mbps:
+// ~110 KB keyframes, a few KB per delta). The test pattern changes every pixel
+// every frame and its keyframes are ten times smaller than the real ones.
+const LAB_BACKDROP = fileURLToPath(new URL('../docs/assets/desktop-control.png', import.meta.url));
+const LAB_TEXT = fileURLToPath(import.meta.url);
+function labDesktop(w, h, fps, backdrop = LAB_BACKDROP, text = LAB_TEXT) {
+  if (/['\\\n]/.test(text)) throw new Error('lab text path cannot hold quotes or backslashes');
+  // The text is drawn once on a tall sheet and a terminal-sized window of it
+  // scrolls: drawing it every frame costs enough CPU to make the pacing uneven.
+  const tw = Math.round(w * 0.45) & ~1, th = Math.round(h * 0.36) & ~1, sheet = 8000;
+  const inputs = ['-loop', '1', '-framerate', String(fps), '-i', backdrop, '-f', 'lavfi', '-i', `color=c=0x0d1117:s=${tw}x${sheet}:r=${fps}`];
+  const graph = `[1:v]drawtext=font=monospace:expansion=none:textfile='${text}':fontsize=${Math.max(10, Math.round(h / 72))}:fontcolor=0xc8d0c0:line_spacing=5:x=14:y=${th},`
+    + `trim=end_frame=1,loop=loop=-1:size=1,setpts=N/${fps}/TB,crop=${tw}:${th}:0:'mod(t*60\\,${sheet - th})'[term];`
+    + `[0:v]scale=${w}:${h},format=yuv420p[bg];`
+    + `[bg][term]overlay=x=${Math.round(w * 0.04)}:y=${Math.round(h * 0.58)},`
+    + `drawbox=x='${w}*0.55+${w}*0.2*sin(t*0.9)':y='${h}*0.35+${h}*0.15*cos(t*0.7)':w=14:h=22:color=white:t=fill`;
+  return { inputs, graph };
+}
+
 // The command line for one capture. `lab` needs the monitor size; the real
-// capture takes the monitor by name (KMS, no portal, no picker).
-export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1080, fps = 60, kbps = 10000, keyint = 1 } = {}) {
+// capture takes the monitor by name (KMS, no portal, no picker). `scene` picks
+// the lab picture: 'pattern' (testsrc2) or 'desktop'.
+export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1080, fps = 60, kbps = 10000, keyint = 1, scene = 'pattern', backdrop, text } = {}) {
   fps = clampInt(fps, 1, 120, 60); kbps = clampInt(kbps, 250, 100000, 10000);
   if (mode === 'lab') {
     const w = clampInt(width, 704, 7680, 1920) & ~1, h = clampInt(height, 64, 4320, 1080) & ~1;
+    const desktop = scene === 'desktop' ? labDesktop(w, h, fps, backdrop, text) : null;
+    const inputs = desktop ? desktop.inputs : ['-f', 'lavfi', '-i', `testsrc2=size=${w}x${h}:rate=${fps}`];
     // Wall-clock ms goes into the frame's timestamp (RTCTIME) right after
     // `realtime` releases it, then the band paints it bit by bit.
     const bit = `mod(floor(round(T*1000)/pow(2,${BAND.bits - 1}-floor(X/${BAND.cell}))),2)`;
-    const graph = `[0:v]format=yuv420p,realtime,settb=1/1000,setpts=RTCTIME/1000,split[a][b];`
+    const graph = `${desktop ? desktop.graph : '[0:v]format=yuv420p'},realtime,settb=1/1000,setpts=RTCTIME/1000,split[a][b];`
       + `[b]crop=${BAND.bits * BAND.cell}:${BAND.cell}:0:0,geq=lum='255*${bit}':cb=128:cr=128[band];`
       + `[a][band]overlay=0:0,setpts=N/FRAME_RATE/TB[v]`;
-    return ['ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin', '-f', 'lavfi', '-i', `testsrc2=size=${w}x${h}:rate=${fps}`,
+    const bufsize = desktop ? kbps * 2 : Math.max(100, Math.round(kbps / fps * 2));
+    return ['ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin', ...inputs,
       '-filter_complex', graph, '-map', '[v]', '-r', String(fps),
       '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-g', String(Math.max(1, Math.round(fps * keyint))),
-      '-b:v', `${kbps}k`, '-maxrate', `${kbps}k`, '-bufsize', `${Math.max(100, Math.round(kbps / fps * 2))}k`,
+      '-b:v', `${kbps}k`, '-maxrate', `${kbps}k`, '-bufsize', `${bufsize}k`,
       '-f', 'mpegts', '-flush_packets', '1', '-muxdelay', '0', 'pipe:1']];
   }
   if (typeof monitor !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(monitor)) throw new Error('invalid monitor name');
@@ -263,12 +289,12 @@ export function realPipe() {
 // One running encoder at a time. restart() swaps monitor, bitrate or fps; the
 // new process always opens with a keyframe. onUnit gets each access unit with
 // the parameters of the run that made it.
-export function createCapture({ mode = 'gsr', env = process.env, spawn = spawnChild, onUnit, onExit = () => {}, log = console } = {}) {
+export function createCapture({ mode = 'gsr', scene, env = process.env, spawn = spawnChild, onUnit, onExit = () => {}, log = console } = {}) {
   let child = null, params = null, generation = 0;
   function start(next) {
     stop();
     params = { ...next };
-    const [command, args] = captureCommand({ mode, ...params });
+    const [command, args] = captureCommand({ mode, scene, ...params });
     const run = ++generation;
     const startedAt = performance.now();
     const { readFd, writeFd } = realPipe();

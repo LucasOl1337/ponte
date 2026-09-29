@@ -101,13 +101,14 @@ async function evdevInstalled(python, env) {
   try { await runCommand(python, ['-c', 'import evdev'], { env, timeout: 5000 }); return true; } catch { return false; }
 }
 
-// Options: PONTE_RD_CAPTURE=lab (ffmpeg test pattern), PONTE_RD_INPUT=dry-run
+// Options: PONTE_RD_CAPTURE=lab (ffmpeg test pattern; PONTE_RD_LAB_SCENE=desktop
+// for a desktop-like picture), PONTE_RD_INPUT=dry-run
 // (+ PONTE_RD_INPUT_LOG), PONTE_RD_ABS=layout|output, PONTE_RD_KBPS, PONTE_RD_FPS.
 // Under `node --test` input is always dry-run and capture always lab: a test
 // must never create a real uinput device on a developer's desktop.
 export function createRemoteDesktop({
   env = process.env, readMonitors, node = {}, spawn = spawnChild, clipboard, log = console,
-  captureMode = env.PONTE_RD_CAPTURE === 'lab' ? 'lab' : 'gsr',
+  captureMode = env.PONTE_RD_CAPTURE === 'lab' ? 'lab' : 'gsr', labScene = env.PONTE_RD_LAB_SCENE === 'desktop' ? 'desktop' : 'pattern',
   inputMode = env.PONTE_RD_INPUT === 'dry-run' ? 'dry-run' : env.PONTE_RD_INPUT === 'off' ? 'off' : 'uinput',
   inputLog = env.PONTE_RD_INPUT_LOG, mapping = env.PONTE_RD_ABS === 'output' ? 'output' : 'layout',
   kbps = Number(env.PONTE_RD_KBPS) || (captureMode === 'lab' ? 4000 : 12000), maxFps = Number(env.PONTE_RD_FPS) || 60,
@@ -237,7 +238,7 @@ export function createRemoteDesktop({
         this.input.setMonitors(this.monitors);
         this.input.start();
       }
-      this.capture = makeCapture({ mode: captureMode, env, spawn, log, onUnit: unit => this.unit(unit), onExit: info => this.captureExit(info) });
+      this.capture = makeCapture({ mode: captureMode, scene: labScene, env, spawn, log, onUnit: unit => this.unit(unit), onExit: info => this.captureExit(info) });
       this.capture.start(this.captureParams(pick));
       this.stopClipboard = clip.watch(text => {
         if (this.ended || text === this.lastClip || Buffer.byteLength(text) > MAX_CLIP_BYTES) return;

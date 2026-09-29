@@ -95,6 +95,33 @@ test('the lab capture paints the wall-clock capture time into the top band', { s
   assert.ok(steps.every(step => step > 15 && step < 60), `frame steps ${steps}`); // 30 fps ≈ 33 ms apart
 });
 
+const hasDrawtext = hasFfmpeg && spawnSync('ffmpeg', ['-hide_banner', '-filters']).stdout.toString().includes(' drawtext ');
+
+test('the lab desktop scene: a screenshot, a scrolling terminal and a cursor, with a VBV that lets keyframes grow like the real encoder', () => {
+  const [, args] = captureCommand({ mode: 'lab', scene: 'desktop', width: 1920, height: 1080, fps: 30, kbps: 2000 });
+  const joined = args.join(' ');
+  for (const part of ['desktop-control.png', 'drawtext=', 'expansion=none', 'drawbox=', '-bufsize 4000k', 'RTCTIME', `crop=${BAND.bits * BAND.cell}:${BAND.cell}`]) assert.ok(joined.includes(part), part);
+  assert.ok(!joined.includes('testsrc2'));
+  assert.throws(() => captureCommand({ mode: 'lab', scene: 'desktop', text: "/tmp/it's" }));
+});
+
+test('the lab desktop scene carries the capture-time band too', { skip: !hasDrawtext }, async () => {
+  const [command, args] = captureCommand({ mode: 'lab', scene: 'desktop', width: 704, height: 400, fps: 30, kbps: 800 });
+  const started = Date.now();
+  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+  const units = [];
+  const demuxer = new TsDemuxer(unit => units.push(unit));
+  child.stdout.on('data', chunk => demuxer.push(chunk));
+  while (units.length < 10) await new Promise(r => setTimeout(r, 50));
+  child.kill('SIGKILL');
+  const gray = ffmpeg(['-f', 'h264', '-i', 'pipe:0', '-fps_mode', 'passthrough', '-vf', `crop=${BAND.bits * BAND.cell}:${BAND.cell}:0:0,format=gray`, '-f', 'rawvideo', 'pipe:1'], Buffer.concat(units.map(u => u.data)));
+  const size = BAND.bits * BAND.cell * BAND.cell;
+  const stamps = [];
+  for (let i = 0; i + size <= gray.length; i += size) stamps.push(readBand(gray.subarray(i, i + size), BAND.bits * BAND.cell));
+  assert.ok(stamps.length >= 8);
+  for (const stamp of stamps) assert.ok(stamp >= started - 50 && stamp <= Date.now(), `${stamp} vs ${started}`);
+});
+
 test('createCapture runs the lab encoder, restarts it with new parameters and opens each run with a keyframe', { skip: !hasFfmpeg }, async () => {
   const units = [];
   const capture = createCapture({ mode: 'lab', onUnit: unit => units.push(unit), log: { error() {} } });
