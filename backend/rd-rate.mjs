@@ -180,6 +180,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     get mode() { return mode; },
     get step() { return step; },
     get shedding() { return shedding; },
+    get acking() { return acking; },
     params,
     // The round trip measured before the first frame, on an empty queue.
     open(rtt) {
