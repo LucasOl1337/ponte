@@ -246,9 +246,13 @@ function labDesktop(w, h, fps, backdrop = LAB_BACKDROP, text = LAB_TEXT) {
 
 // The command line for one capture. `lab` needs the monitor size; the real
 // capture takes the monitor by name (KMS, no portal, no picker). `scene` picks
-// the lab picture: 'pattern' (testsrc2) or 'desktop'.
-export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1080, fps = 60, kbps = 10000, keyint = 1, scene = 'pattern', backdrop, text } = {}) {
+// the lab picture: 'pattern' (testsrc2) or 'desktop'. `scale` ({ width,
+// height }) is a box the picture shrinks into, keeping its aspect (gsr -s);
+// `keyint` is in seconds (gsr takes under 500).
+export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1080, fps = 60, kbps = 10000, keyint = 1, scale = null, scene = 'pattern', backdrop, text } = {}) {
   fps = clampInt(fps, 1, 120, 60); kbps = clampInt(kbps, 250, 100000, 10000);
+  keyint = Math.max(0.1, Math.min(499, Number(keyint) || 1));
+  const box = scale && Number.isFinite(scale.width) && Number.isFinite(scale.height) ? { width: clampInt(scale.width, 2, 7680, 1920) & ~1, height: clampInt(scale.height, 2, 4320, 1080) & ~1 } : null;
   if (mode === 'lab') {
     const w = clampInt(width, 704, 7680, 1920) & ~1, h = clampInt(height, 64, 4320, 1080) & ~1;
     const desktop = scene === 'desktop' ? labDesktop(w, h, fps, backdrop, text) : null;
@@ -256,7 +260,8 @@ export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1
     // Wall-clock ms goes into the frame's timestamp (RTCTIME) right after
     // `realtime` releases it, then the band paints it bit by bit.
     const bit = `mod(floor(round(T*1000)/pow(2,${BAND.bits - 1}-floor(X/${BAND.cell}))),2)`;
-    const graph = `${desktop ? desktop.graph : '[0:v]format=yuv420p'},realtime,settb=1/1000,setpts=RTCTIME/1000,split[a][b];`
+    const shrink = box ? `,scale=${box.width}:${box.height}:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2` : '';
+    const graph = `${desktop ? desktop.graph : '[0:v]format=yuv420p'}${shrink},realtime,settb=1/1000,setpts=RTCTIME/1000,split[a][b];`
       + `[b]crop=${BAND.bits * BAND.cell}:${BAND.cell}:0:0,geq=lum='255*${bit}':cb=128:cr=128[band];`
       + `[a][band]overlay=0:0,setpts=N/FRAME_RATE/TB[v]`;
     const bufsize = desktop ? kbps * 2 : Math.max(100, Math.round(kbps / fps * 2));
@@ -268,7 +273,7 @@ export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1
   }
   if (typeof monitor !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(monitor)) throw new Error('invalid monitor name');
   return ['gpu-screen-recorder', ['-w', monitor, '-c', 'mpegts', '-k', 'h264', '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(kbps),
-    '-tune', 'performance', '-keyint', String(keyint), '-cursor', 'yes', '-v', 'no']];
+    '-tune', 'performance', '-keyint', String(keyint), ...(box ? ['-s', `${box.width}x${box.height}`] : []), '-cursor', 'yes', '-v', 'no']];
 }
 
 // gpu-screen-recorder opens /dev/stdout by path, and on the socketpair Node

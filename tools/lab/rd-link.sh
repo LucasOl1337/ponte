@@ -8,6 +8,7 @@
 #   tools/lab/rd-link.sh --plan 0:2500kbit --client old --seconds 60 --timeline
 #   tools/lab/rd-link.sh --plan 0:20mbit,15:2000kbit,45:20mbit --client old --seconds 60
 #   tools/lab/rd-link.sh --plan 0:2500kbit --netem "delay 25ms loss 3% limit 400" --client old
+#   RD_LINK_BACK_DELAY=5ms tools/lab/rd-link.sh --plan 0:3000kbit --netem "delay 5ms limit 150" ...   # a near link
 #   RD_LINK_SYSCTL="net.ipv4.tcp_notsent_lowat=131072" tools/lab/rd-link.sh ...   # inside the namespace only
 #
 # Defaults: --lab --scene desktop --port 8800 and netem "delay 12ms loss 1%
@@ -23,7 +24,7 @@ defaults=()
 [[ " $* " == *" --port "* ]] || defaults+=(--port "$port")
 [[ " $* " == *" --scene "* ]] || defaults+=(--scene desktop)
 [[ " $* " == *" --lab "* || " $* " == *" --url "* ]] || defaults+=(--lab)
-export PONTE_LAB_NETNS=1 RD_LINK_PORT="$port" RD_LINK_ROOT="$root" RD_LINK_SYSCTL="${RD_LINK_SYSCTL:-}"
+export PONTE_LAB_NETNS=1 RD_LINK_BACK_DELAY="${RD_LINK_BACK_DELAY:-12ms}" RD_LINK_PORT="$port" RD_LINK_ROOT="$root" RD_LINK_SYSCTL="${RD_LINK_SYSCTL:-}"
 exec unshare -rn bash -c '
 set -euo pipefail
 ip link set lo up
@@ -31,7 +32,7 @@ ip link set lo mtu 1280
 ethtool -K lo tso off gso off gro off >/dev/null 2>&1 || echo "rd-link: offloads unchanged" >&2
 tc qdisc add dev lo root handle 1: prio bands 3 priomap 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
 tc qdisc add dev lo parent 1:1 handle 10: netem delay 12ms
-tc qdisc add dev lo parent 1:2 handle 20: netem delay 12ms
+tc qdisc add dev lo parent 1:2 handle 20: netem delay "$RD_LINK_BACK_DELAY"
 tc filter add dev lo parent 1: protocol ip prio 1 u32 match ip sport "$RD_LINK_PORT" 0xffff flowid 1:1
 for setting in $RD_LINK_SYSCTL; do sysctl -q -w "$setting"; done
 cd "$RD_LINK_ROOT"

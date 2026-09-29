@@ -8,7 +8,8 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { createApp } from '../server.mjs';
 import { createDesktop } from '../backend/desktop.mjs';
 import { connect } from '../backend/ws.mjs';
-import { createAdaptation, createRemoteDesktop, parseVideoHeader, videoHeader } from '../backend/rd.mjs';
+import { createAdaptation, createRemoteDesktop, parseVideoHeader, probeRtt, videoHeader } from '../backend/rd.mjs';
+import { absolutePoint } from '../backend/rd-input.mjs';
 
 const TOKEN = 'test_token_with_at_least_thirty_two_characters';
 const canRun = spawnSync('ffmpeg', ['-version']).status === 0 && spawnSync('python3', ['--version']).status === 0;
@@ -271,24 +272,24 @@ test('health and state report the rd capability', { skip: !canRun }, async t => 
 
 // A session over fake parts: a capture that emits what the test says and a
 // socket whose queue the test fills.
-function fakeSession({ buffered = 0 } = {}) {
+function fakeSession({ buffered = 0, now, probe, hello = {} } = {}) {
   const sent = [];
   const ws = new EventEmitter();
   ws.readyState = 'open';
   ws.bufferedAmount = buffered;
   ws.send = (...parts) => { sent.push(parts.length > 1 ? { header: parseVideoHeader(parts[0]), bytes: parts[1].length } : JSON.parse(parts[0])); return true; };
   ws.close = () => { ws.readyState = 'closed'; ws.emit('close', 1000, ''); };
-  let emit, restarts = [];
+  let emit, restarts = [], started = null;
   const makeCapture = ({ onUnit }) => {
     emit = onUnit;
-    return { start(p) { this.params = p; }, restart(p) { restarts.push(p); this.params = { ...this.params, ...p }; }, stop() {}, running: true };
+    return { start(p) { this.params = p; started = p; }, restart(p) { restarts.push(p); this.params = { ...this.params, ...p }; }, stop() {}, running: true };
   };
-  const rd = createRemoteDesktop({ readMonitors: async () => MONITORS, makeCapture, inputMode: 'off', clipboard: fakeClipboard(), exists: async () => true, log: { info() {}, error() {} } });
+  const rd = createRemoteDesktop({ readMonitors: async () => MONITORS, makeCapture, inputMode: 'off', clipboard: fakeClipboard(), exists: async () => true, log: { info() {}, error() {} }, ...(now ? { now } : {}), ...(probe ? { probe } : {}) });
   rd.accept(ws, {}, { authorize: async token => token === TOKEN ? { kind: 'owner' } : null });
-  ws.emit('message', JSON.stringify({ t: 'hello', v: 1, token: TOKEN }), false);
+  ws.emit('message', JSON.stringify({ t: 'hello', v: 1, token: TOKEN, ...hello }), false);
   const sps = { codec: 'avc1.640034', width: 960, height: 540 };
-  const unit = (keyframe, params = { monitor: 'LAB-1', fps: 60, kbps: 12000 }) => emit({ data: Buffer.alloc(keyframe ? 5000 : 1000), keyframe, sps: keyframe ? sps : null, params, firstAt: performance.now(), lastAt: performance.now() });
-  return { ws, sent, unit, restarts, rd, ready: async () => { while (!emit) await new Promise(r => setTimeout(r, 5)); } };
+  const unit = (keyframe, params = { monitor: 'LAB-1', fps: 60, kbps: 12000 }, bytes = keyframe ? 5000 : 1000) => emit({ data: Buffer.alloc(bytes), keyframe, sps: keyframe ? sps : null, params, firstAt: performance.now(), lastAt: performance.now() });
+  return { ws, sent, unit, restarts, rd, get started() { return started; }, ready: async () => { while (!emit) await new Promise(r => setTimeout(r, 5)); } };
 }
 
 test('backpressure: a delta over the queue ceiling is dropped and so is every delta until the next keyframe', async () => {
@@ -310,7 +311,73 @@ test('backpressure: a delta over the queue ceiling is dropped and so is every de
   s.rd.close();
 });
 
-test('adaptation: lasting congestion steps bitrate and fps down, a long calm steps back up, a slow round trip caps at 30 fps / 6 Mbps', () => {
+test('a keyframe larger than the ceiling does not break the deltas behind it: room for its own bytes, for a second, the last keyframe only', async () => {
+  let clock = 1000;
+  const s = fakeSession({ now: () => clock });
+  await s.ready();
+  const kinds = () => s.sent.slice(1).map(m => m.header.keyframe ? 'K' : 'D');
+  s.unit(true, undefined, 350 * 1024);
+  s.ws.bufferedAmount = 340 * 1024; // the keyframe still leaving: 340 KB over a 150 KB ceiling
+  s.unit(false);
+  assert.deepEqual(kinds(), ['K', 'D'], 'the delta goes out behind its keyframe');
+  s.ws.bufferedAmount = 350 * 1024 + 160 * 1024; // the keyframe plus a real queue over the ceiling
+  s.unit(false);
+  assert.deepEqual(kinds(), ['K', 'D'], 'a real queue on top is still dropped');
+  s.ws.bufferedAmount = 0;
+  s.unit(true, undefined, 350 * 1024);
+  s.unit(true, undefined, 350 * 1024);
+  s.ws.bufferedAmount = 600 * 1024; // two keyframes queued: the room is one keyframe, not two
+  s.unit(false);
+  assert.deepEqual(kinds(), ['K', 'D', 'K', 'K']);
+  s.unit(true, undefined, 350 * 1024);
+  clock += 1001; // over a second later the room is gone
+  s.ws.bufferedAmount = 340 * 1024;
+  s.unit(false);
+  assert.deepEqual(kinds(), ['K', 'D', 'K', 'K', 'K']);
+  s.rd.close();
+});
+
+test('the session opens on the WAN steps when the first round trip is 15 ms or more: keyint by what the page can ask, width by its stage', async () => {
+  const lan = fakeSession({ probe: async () => 3 });
+  await lan.ready();
+  assert.deepEqual({ fps: lan.started.fps, kbps: lan.started.kbps, keyint: lan.started.keyint, scale: lan.started.scale }, { fps: 60, kbps: 12000, keyint: 1, scale: null });
+  lan.rd.close();
+  const old = fakeSession({ probe: async () => 22 });
+  await old.ready();
+  assert.deepEqual({ fps: old.started.fps, kbps: old.started.kbps, keyint: old.started.keyint, scale: old.started.scale }, { fps: 30, kbps: 2500, keyint: 60, scale: null });
+  old.rd.close();
+  const current = fakeSession({ probe: async () => null, hello: { caps: { ack: true, key: true }, view: { width: 800, height: 450 } } });
+  await current.ready();
+  assert.equal(current.started.keyint, 300);
+  assert.deepEqual(current.started.scale, { width: 800, height: 450 });
+  current.rd.close();
+});
+
+test('probeRtt: the smallest of three WebSocket pings; 0 without ping support; null when nothing answers', async () => {
+  const answering = Object.assign(new EventEmitter(), { delays: [30, 10, 20], ping(payload) { setTimeout(() => this.emit('pong', payload), this.delays.shift()); return true; } });
+  const rtt = await probeRtt(answering);
+  assert.ok(rtt >= 9 && rtt < 20, `${rtt}`);
+  assert.equal(await probeRtt(new EventEmitter()), 0);
+  const silent = Object.assign(new EventEmitter(), { ping() { return true; } });
+  assert.equal(await probeRtt(silent, { timeout: 50 }), null);
+});
+
+test('a WAN session scaled to the page stage: a smaller ready, and a click still lands on the same monitor pixel', { skip: !canRun }, async t => {
+  const { url, inputLog } = await rdApp(t, { probe: async () => 40 });
+  const c = await client(url, { caps: { ack: true, key: true }, view: { width: 704, height: 500 } });
+  const ready = await c.until(() => c.texts.find(m => m.t === 'ready'), 'ready');
+  assert.equal(ready.width, 704);
+  assert.equal(ready.height, 396);
+  await c.until(() => c.frames.length >= 3, 'frames');
+  c.send({ t: 'move', x: 0.25, y: 0.75 });
+  const expected = absolutePoint(MONITORS, 'LAB-1', 0.25, 0.75);
+  let seen = [];
+  for (let i = 0; i < 100 && !seen.includes(`ponte-rd-abs:ABS_X=${expected.x}`); i++) { seen = await logEvents(inputLog); await new Promise(r => setTimeout(r, 30)); }
+  assert.ok(seen.includes(`ponte-rd-abs:ABS_X=${expected.x}`), seen.join(' '));
+  assert.ok(seen.includes(`ponte-rd-abs:ABS_Y=${expected.y}`), seen.join(' '));
+});
+
+test('LAN adaptation: lasting congestion steps bitrate and fps down, a long calm steps back up (a slow round trip is the WAN steps now)', () => {
   let clock = 0;
   const a = createAdaptation({ fps: 60, kbps: 12000, now: () => clock });
   clock = 4000;
@@ -329,16 +396,8 @@ test('adaptation: lasting congestion steps bitrate and fps down, a long calm ste
   assert.deepEqual(a.tick(0), { fps: 60, kbps: 6750 });
   clock += 11000;
   assert.equal(a.tick(10 * 1024 * 1024), null, 'not while the socket still has a queue');
-  a.stats({ rtt: 80 });
-  assert.deepEqual(a.tick(0), { fps: 30, kbps: 6000 });
-  a.stats({ rtt: 30 }); // hysteresis: still outside the LAN until under 20 ms
-  clock += 11000;
-  assert.equal(a.tick(0), null);
-  a.stats({ rtt: 3 });
-  clock += 11000;
-  assert.deepEqual(a.tick(0), { fps: 60, kbps: 7500 });
   // The client saying its decoder is behind counts as congestion.
   clock += 4000;
-  a.stats({ queue: 6 }); a.stats({ queue: 5 }); a.stats({ fps: 20 });
-  assert.deepEqual(a.tick(0), { fps: 30, kbps: 4500 });
+  a.stats({ queue: 6 }); a.stats({ queue: 5 }); a.stats({ fps: 20 }); a.stats({ rtt: 80 });
+  assert.deepEqual(a.tick(0), { fps: 30, kbps: 4050 });
 });

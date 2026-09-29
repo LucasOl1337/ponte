@@ -126,7 +126,7 @@ const ticker = setInterval(() => {
     const session = app?.rd.sessions[0];
     const params = session?.capture?.params;
     timeline.push({ s: second, link: plan.filter(step => step.at <= second).at(-1)?.rate ?? null, fps: secondFrames, kbps: Math.round(secondBytes * 8 / 1000), rtt: rtt === null ? null : Math.round(rtt),
-      encoder: params ? `${params.fps}/${params.kbps}${params.scale ? `/${params.scale}` : ''}` : null, nodeBuffer: session ? session.ws.bufferedAmount : null, ...kernel() });
+      encoder: params ? `${params.fps}/${params.kbps}${params.scale ? `/${params.scale.width}x${params.scale.height}` : ''}/k${params.keyint ?? 1}` : null, shedding: session?.shedding || undefined, nodeBuffer: session ? session.ws.bufferedAmount : null, ...kernel() });
   }
   secondFrames = 0; secondBytes = 0;
 }, 1000);

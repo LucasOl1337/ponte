@@ -3,10 +3,12 @@
 // input of this target at a time; a new one takes over and the previous gets
 // {"t":"taken"}. The message shapes are the contract in the mesh design (§5).
 import os from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { access, constants } from 'node:fs/promises';
 import { spawn as spawnChild } from 'node:child_process';
 import { createCapture } from './rd-capture.mjs';
 import { createRdInput } from './rd-input.mjs';
+import { createRateControl, scaleBox } from './rd-rate.mjs';
 import { copyToClipboard } from './images.mjs';
 import { connect, pipe } from './ws.mjs';
 import { commandExists, runCommand } from './process.mjs';
@@ -31,23 +33,21 @@ export function parseVideoHeader(buffer) {
   return { type: buffer[0], keyframe: (buffer[1] & 1) === 1, seq: buffer.readUInt32BE(4), sentAt: buffer.readDoubleBE(8) };
 }
 
-// Bitrate and frame rate follow the link. Congestion (non-key frames dropped
-// because the socket queue is over its ceiling, or the client saying its
-// decoder falls behind) that lasts steps the encoder down; a long calm steps it
-// back up. A slow round trip (outside the LAN) caps it at 30 fps / 6 Mbps.
+// Bitrate and frame rate on the LAN follow the link. Congestion (non-key
+// frames dropped because the socket queue is over its ceiling, or the client
+// saying its decoder falls behind) that lasts steps the encoder down; a long
+// calm steps it back up. Outside the LAN the session moves to the steps of
+// rd-rate.mjs instead.
 export function createAdaptation({ fps = 60, kbps = 12000, minKbps = 1500, maxKbps = 20000, wanKbps = 6000, now = () => performance.now() } = {}) {
   const ceiling = { fps, kbps: Math.min(kbps, maxKbps) };
   let current = { ...ceiling };
-  let events = [], lastChange = now(), calmSince = now(), wan = false;
-  const limit = () => ({ fps: wan ? Math.min(30, ceiling.fps) : ceiling.fps, kbps: wan ? Math.min(wanKbps, maxKbps) : maxKbps });
+  let events = [], lastChange = now(), calmSince = now();
+  const limit = () => ({ fps: ceiling.fps, kbps: maxKbps });
   return {
     get current() { return { ...current }; },
-    get wan() { return wan; },
     congestion() { events.push(now()); calmSince = now(); },
     stats(report = {}) {
       if (Number(report.queue) > 3 || (Number(report.fps) > 0 && Number(report.fps) < current.fps * 0.6)) this.congestion();
-      const rtt = Number(report.rtt);
-      if (Number.isFinite(rtt) && rtt >= 0) wan = wan ? rtt > 20 : rtt > 40;
     },
     // Called about once a second; returns the new { fps, kbps } or null.
     tick(buffered = 0, lowWater = 32 * 1024) {
@@ -69,6 +69,29 @@ export function createAdaptation({ fps = 60, kbps = 12000, minKbps = 1500, maxKb
       return { ...current };
     },
   };
+}
+
+// WebSocket pings before the first frame: the queue is still empty, so this is
+// the link's own round trip, the smallest of three so one Wi-Fi hiccup does not
+// count. Browsers and the relaying node answer pings by themselves, so every
+// client version gets measured. null: no answer within `timeout` in all.
+export async function probeRtt(ws, { count = 3, timeout = 1000 } = {}) {
+  if (typeof ws.ping !== 'function') return 0;
+  const deadline = performance.now() + timeout;
+  let best = null;
+  for (let i = 0; i < count; i++) {
+    const rtt = await new Promise(resolve => {
+      const payload = randomBytes(8), started = performance.now();
+      const done = value => { clearTimeout(timer); ws.off?.('pong', onPong); resolve(value); };
+      const onPong = data => { if (Buffer.from(data).equals(payload)) done(performance.now() - started); };
+      const timer = setTimeout(() => done(null), Math.max(0, deadline - performance.now()));
+      ws.on('pong', onPong);
+      if (!ws.ping(payload)) done(null);
+    });
+    if (rtt === null) break;
+    best = best === null ? rtt : Math.min(best, rtt);
+  }
+  return best;
 }
 
 // Text clipboard of the target: a `wl-paste --watch` notifier only while a
@@ -112,7 +135,7 @@ export function createRemoteDesktop({
   inputMode = env.PONTE_RD_INPUT === 'dry-run' ? 'dry-run' : env.PONTE_RD_INPUT === 'off' ? 'off' : 'uinput',
   inputLog = env.PONTE_RD_INPUT_LOG, mapping = env.PONTE_RD_ABS === 'output' ? 'output' : 'layout',
   kbps = Number(env.PONTE_RD_KBPS) || (captureMode === 'lab' ? 4000 : 12000), maxFps = Number(env.PONTE_RD_FPS) || 60,
-  python = 'python3', createInput = createRdInput, makeCapture = createCapture, now = () => performance.now(), exists = commandExists,
+  python = 'python3', createInput = createRdInput, makeCapture = createCapture, now = () => performance.now(), exists = commandExists, probe = probeRtt,
 } = {}) {
   if (env.NODE_TEST_CONTEXT || process.env.NODE_TEST_CONTEXT) {
     if (inputMode === 'uinput') inputMode = 'dry-run';
@@ -220,13 +243,22 @@ export function createRemoteDesktop({
       this.fps = Math.max(1, Math.min(maxFps, Math.round(Number(hello.maxFps) || maxFps)));
       this.requestedMonitor = typeof hello.monitor === 'string' ? hello.monitor : null;
       this.adapt = createAdaptation({ fps: this.fps, kbps, now });
-      this.seq = 0; this.waitKey = true; this.announced = null; this.ended = false;
+      // What the page can do beyond the first protocol version, and its stage size.
+      const announced = hello.caps && typeof hello.caps === 'object' ? hello.caps : {};
+      this.page = { ack: announced.ack === true, key: announced.key === true };
+      const view = hello.view && typeof hello.view === 'object' ? hello.view : null;
+      this.view = view && Number.isFinite(view.width) && view.width >= 320 && view.width <= 16384 ? { width: Math.round(view.width), height: Math.round(Number(view.height) || 0) } : null;
+      this.control = createRateControl({ maxFps: this.fps, caps: this.page, view: this.view, now });
+      this.seq = 0; this.waitKey = true; this.announced = null; this.ended = false; this.shedding = false;
       this.failures = 0; this.lastUnitAt = now();
-      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, pesToSend: [], lastToSend: [], early: 0 };
+      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, pesToSend: [], lastToSend: [], early: 0 };
     }
 
     async start() {
-      this.monitors = await readMonitors();
+      const [monitors, rtt] = await Promise.all([readMonitors(), probe(this.ws)]);
+      this.monitors = monitors;
+      this.control.open(rtt);
+      this.openRtt = rtt;
       const pick = this.monitors.find(m => m.name === this.requestedMonitor) || this.monitors.find(m => m.focused) || this.monitors[0];
       if (!pick) throw Object.assign(new Error('no monitor'), { code: 'MONITORS_UNAVAILABLE' });
       this.monitor = pick.name;
@@ -250,8 +282,20 @@ export function createRemoteDesktop({
     }
 
     captureParams(monitor) {
-      const { fps, kbps: rate } = this.adapt.current;
-      return { monitor: monitor.name, width: monitor.width, height: monitor.height, fps, kbps: rate };
+      const wan = this.control.params();
+      const { fps, kbps: rate } = wan || this.adapt.current;
+      return { monitor: monitor.name, width: monitor.width, height: monitor.height, fps, kbps: rate, keyint: wan ? wan.keyint : 1, scale: wan ? scaleBox(monitor, wan.maxWidth) : null };
+    }
+
+    // One encoder restart for a decision of the rate control.
+    apply(decision) {
+      if (!decision || this.ended) return;
+      if (decision.reason === 'shed') { this.shedding = true; return; }
+      this.shedding = false;
+      this.metrics.restarts++;
+      this.metrics.reasons[decision.reason] = (this.metrics.reasons[decision.reason] || 0) + 1;
+      const monitor = this.monitors.find(m => m.name === this.monitor) || this.monitors[0];
+      this.capture.restart(this.captureParams(monitor));
     }
 
     unit(unit) {
@@ -263,18 +307,30 @@ export function createRemoteDesktop({
         if (!unit.keyframe || !unit.sps) return; // a decoder can only start at a keyframe with its SPS
         this.announce(unit.sps, params);
       }
+      // Shedding: the lowest step still overflows the link; nothing goes out
+      // until its queue drains and a new run starts with a keyframe.
+      if (this.shedding) { this.waitKey = true; this.metrics.dropped++; return; }
       const buffered = this.ws.bufferedAmount;
       const bytesPerSecond = params.kbps * 125;
+      // A keyframe can be larger than the ceiling on its own (1080p at 12 Mbps:
+      // ~350 KB against 150 KB), and the deltas right behind it used to be
+      // dropped until the next keyframe: a second frozen on a fast LAN. For up
+      // to a second, the ceiling leaves room for that keyframe's own bytes, and
+      // only the last keyframe's.
+      const keyRoom = this.lastKey && now() - this.lastKey.at <= 1000 ? this.lastKey.bytes : 0;
       if (unit.keyframe) {
-        if (buffered > bytesPerSecond) { this.drop(); return; } // a whole second queued: even a keyframe would be late
+        if (buffered > bytesPerSecond) { this.drop(true); return; } // a whole second queued: even a keyframe would be late
         this.waitKey = false;
-      } else if (this.waitKey || buffered > Math.max(128 * 1024, bytesPerSecond / 10)) {
+      } else if (this.waitKey || buffered > Math.max(128 * 1024, bytesPerSecond / 10) + keyRoom) {
         // One missing delta breaks every frame up to the next keyframe.
-        this.waitKey = true; this.drop(); return;
+        const over = !this.waitKey;
+        this.waitKey = true; this.drop(over); return;
       }
       const sentAt = epochNow();
       const seq = ++this.seq;
       this.ws.send(videoHeader(seq, unit.keyframe, sentAt), unit.data);
+      this.control.sent(unit.data.length, unit.keyframe);
+      if (unit.keyframe) this.lastKey = { at: now(), bytes: unit.data.length + HEADER_BYTES };
       const m = this.metrics;
       m.frames++; m.bytes += unit.data.length;
       if (unit.keyframe) { m.keyframes++; m.keyBytes += unit.data.length; }
@@ -283,7 +339,13 @@ export function createRemoteDesktop({
       if (m.pesToSend.length < 20000) { m.pesToSend.push(sentPerf - unit.firstAt); m.lastToSend.push(sentPerf - unit.lastAt); }
     }
 
-    drop() { this.metrics.dropped++; this.adapt.congestion(); }
+    // Outside the LAN the next natural keyframe can be minutes away: a delta
+    // dropped for congestion asks the rate control for a new run at once.
+    drop(congestion) {
+      this.metrics.dropped++;
+      this.adapt.congestion();
+      if (congestion) this.apply(this.control.drop());
+    }
 
     announce(sps, params) {
       const monitors = this.monitors.map(m => ({ name: m.name, x: m.x, y: m.y, width: m.width, height: m.height, scale: m.scale, focused: !!m.focused }));
@@ -306,8 +368,11 @@ export function createRemoteDesktop({
     tick() {
       if (this.ended) return;
       if (this.capture.running && now() - this.lastUnitAt > 5000) { this.lastUnitAt = now(); this.metrics.restarts++; this.capture.restart({}); return; }
-      const next = this.adapt.tick(this.ws.bufferedAmount);
-      if (next) { this.metrics.restarts++; this.capture.restart(next); }
+      if (this.control.mode === 'lan') {
+        const next = this.adapt.tick(this.ws.bufferedAmount);
+        if (next) { this.metrics.restarts++; this.capture.restart(next); }
+      }
+      this.apply(this.control.tick());
     }
 
     sendJson(value) { if (this.ws.readyState === 'open') this.ws.send(JSON.stringify(value)); }
@@ -327,7 +392,7 @@ export function createRemoteDesktop({
         case 'wheel': if (num(m.dx ?? 0) && num(m.dy ?? 0)) input?.wheel(m.dx ?? 0, m.dy ?? 0); break;
         case 'release': input?.release(); break;
         case 'ping': this.sendJson({ t: 'pong', c: m.c, s: epochNow() }); break;
-        case 'stats': this.adapt.stats(m); this.clientStats = m; break;
+        case 'stats': this.adapt.stats(m); this.clientStats = m; this.apply(this.control.stats(m)); break;
         case 'clip':
           if (typeof m.text !== 'string' || Buffer.byteLength(m.text) > MAX_CLIP_BYTES || m.text === this.lastClip) break;
           this.lastClip = m.text;
@@ -367,7 +432,9 @@ export function createRemoteDesktop({
       const summary = summarize(this.metrics);
       metrics.push(summary);
       if (metrics.length > 20) metrics.shift();
-      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms`);
+      const reasons = Object.entries(this.metrics.reasons).map(([key, count]) => `${key} ${count}`).join(', ');
+      const link = this.control.mode === 'lan' ? 'LAN' : `WAN step ${this.control.step}`;
+      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}`);
     }
   }
 
