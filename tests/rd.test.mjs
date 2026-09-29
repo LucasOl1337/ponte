@@ -398,9 +398,10 @@ test('outside the LAN a new run\'s keyframe goes out over an old queue, and a ke
   clock += 500; s.ws.bufferedAmount = 400 * 1024; s.unit(false, wan);
   s.ws.bufferedAmount = 0;
   assert.equal(s.restarts.length, restarts, 'merged into the restart just made');
-  clock += 500; session.tick();
-  assert.equal(s.restarts.length, restarts, 'still inside the 2 s');
-  clock += 600; session.tick();
+  // That keyframe (40 KB, ~130 ms at W3) has landed 630 ms after it left: asked again then, inside the 2 s.
+  clock += 100; session.tick();
+  assert.equal(s.restarts.length, restarts, 'the keyframe may still be on the way');
+  clock += 100; session.tick();
   assert.equal(s.restarts.length, restarts + 1, 'the picture is broken since that delta: a keyframe');
   s.unit(true, wan);
   clock += 1000; session.tick();

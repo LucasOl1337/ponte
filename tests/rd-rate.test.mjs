@@ -365,3 +365,15 @@ test('acks: a keyframe request is merged into a restart only while its keyframe 
   clock += 100; c.sent(40000, true, 3);
   assert.equal(c.key(), null);
 });
+
+test('an older page that drops frames right after the first keyframe landed gets a new one without waiting 2 s', () => {
+  let clock = 0;
+  const c = createRateControl({ now: () => clock });
+  c.open(30);
+  clock += 450; c.sent(40000, true);
+  // 40 KB at the 1.5 Mbps the page reports is ~210 ms: landed ~710 ms after it left.
+  clock += 400;
+  assert.equal(c.stats({ fps: 10, kbps: 1500, rtt: 30, drops: 12 }), null, 'may still be on the way');
+  clock += 400;
+  assert.equal(c.stats({ fps: 0, kbps: 1500, rtt: 30, drops: 20 })?.reason, 'key');
+});

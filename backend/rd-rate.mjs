@@ -166,13 +166,16 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     return null;
   }
 
+  // The last restart's keyframe reached the page: it acked it, or (a page
+  // that does not ack) it left long enough ago to have crossed the link.
+  const keyLanded = t => !!lastKey && lastKey.at >= lastRestartAt
+    && (acking ? keySeq > 0 && ackedSeq >= keySeq : t - lastKey.at > keyframeTime() + 500);
+
   function keyRequest() {
     if (mode !== 'wan') return null;
     const t = now();
-    // Merged into the last restart while its keyframe may still be on the way;
-    // a page that acked that keyframe asks for a new one.
-    const keyArrived = acking && keySeq > 0 && ackedSeq >= keySeq && lastKey?.at >= lastRestartAt;
-    if (t - lastRestartAt < KEY_COALESCE_MS && !keyArrived) return null;
+    // Merged into the last restart while its keyframe may still be on the way.
+    if (t - lastRestartAt < KEY_COALESCE_MS && !keyLanded(t)) return null;
     while (keyRestarts.length && keyRestarts[0] < t - 60000) keyRestarts.shift();
     // Keyframes asked for again and again: the page cannot keep up with this step.
     if (keyRestarts.length >= KEYS_PER_MINUTE && step > 0) return change('down', step - 1);
@@ -271,7 +274,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
         return change('wan', Math.min(INITIAL_STEP, fitting(WAN_STEPS.length)));
       }
       // A page that cannot ask for a keyframe drops deltas and says so in its stats.
-      if (!caps.key && Number(report.drops) > 0 && t - lastRestartAt > IMPLICIT_KEY_GRACE_MS) return keyRequest();
+      if (!caps.key && Number(report.drops) > 0 && (t - lastRestartAt > IMPLICIT_KEY_GRACE_MS || keyLanded(t))) return keyRequest();
       const queue = Math.max(rttQueue ?? 0, p95Queue ?? 0);
       const emergency = !excused && queue > QUEUE_EMERGENCY_MS;
       if (t - lastRestartAt < SETTLE_MS && !emergency) return null;
