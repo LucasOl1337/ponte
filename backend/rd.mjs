@@ -249,9 +249,9 @@ export function createRemoteDesktop({
       const view = hello.view && typeof hello.view === 'object' ? hello.view : null;
       this.view = view && Number.isFinite(view.width) && view.width >= 320 && view.width <= 16384 ? { width: Math.round(view.width), height: Math.round(Number(view.height) || 0) } : null;
       this.control = createRateControl({ maxFps: this.fps, caps: this.page, view: this.view, now });
-      this.seq = 0; this.waitKey = true; this.announced = null; this.ended = false; this.shedding = false;
+      this.seq = 0; this.waitKey = true; this.keyWanted = false; this.announced = null; this.ended = false; this.shedding = false;
       this.failures = 0; this.lastUnitAt = now();
-      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, pesToSend: [], lastToSend: [], early: 0 };
+      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, decisions: [], pesToSend: [], lastToSend: [], early: 0 };
     }
 
     async start() {
@@ -292,8 +292,12 @@ export function createRemoteDesktop({
       if (!decision || this.ended) return;
       if (decision.reason === 'shed') { this.shedding = true; return; }
       this.shedding = false;
+      // What the old run still has to send only delays the new keyframe.
+      this.waitKey = true; this.keyWanted = false;
       this.metrics.restarts++;
       this.metrics.reasons[decision.reason] = (this.metrics.reasons[decision.reason] || 0) + 1;
+      this.metrics.decisions.push({ at: epochNow(), reason: decision.reason, step: this.control.step });
+      if (this.metrics.decisions.length > 50) this.metrics.decisions.shift();
       const monitor = this.monitors.find(m => m.name === this.monitor) || this.monitors[0];
       this.capture.restart(this.captureParams(monitor));
     }
@@ -319,8 +323,11 @@ export function createRemoteDesktop({
       // only the last keyframe's.
       const keyRoom = this.lastKey && now() - this.lastKey.at <= 1000 ? this.lastKey.bytes : 0;
       if (unit.keyframe) {
-        if (buffered > bytesPerSecond) { this.drop(true); return; } // a whole second queued: even a keyframe would be late
-        this.waitKey = false;
+        // A whole second queued: on the LAN even a keyframe would be late and
+        // the next one is a second away. Outside the LAN the next one may be
+        // minutes away, and what is queued belongs to the run before.
+        if (buffered > bytesPerSecond && this.control.mode === 'lan') { this.drop(true); return; }
+        this.waitKey = false; this.keyWanted = false;
       } else if (this.waitKey || buffered > Math.max(128 * 1024, bytesPerSecond / 10) + keyRoom) {
         // One missing delta breaks every frame up to the next keyframe.
         const over = !this.waitKey;
@@ -329,14 +336,15 @@ export function createRemoteDesktop({
       const sentAt = epochNow();
       const seq = ++this.seq;
       this.ws.send(videoHeader(seq, unit.keyframe, sentAt), unit.data);
-      this.control.sent(unit.data.length, unit.keyframe);
       if (unit.keyframe) this.lastKey = { at: now(), bytes: unit.data.length + HEADER_BYTES };
+      const decision = this.control.sent(unit.data.length + HEADER_BYTES, unit.keyframe, seq);
       const m = this.metrics;
       m.frames++; m.bytes += unit.data.length;
       if (unit.keyframe) { m.keyframes++; m.keyBytes += unit.data.length; }
       if (unit.early) m.early++;
       const sentPerf = now();
       if (m.pesToSend.length < 20000) { m.pesToSend.push(sentPerf - unit.firstAt); m.lastToSend.push(sentPerf - unit.lastAt); }
+      this.apply(decision);
     }
 
     // Outside the LAN the next natural keyframe can be minutes away: a delta
@@ -344,7 +352,10 @@ export function createRemoteDesktop({
     drop(congestion) {
       this.metrics.dropped++;
       this.adapt.congestion();
-      if (congestion) this.apply(this.control.drop());
+      if (!congestion) return;
+      // Merged into a restart that already sent its keyframe: still owed, asked again by tick().
+      this.keyWanted = this.control.mode === 'wan';
+      this.apply(this.control.drop());
     }
 
     announce(sps, params) {
@@ -372,6 +383,7 @@ export function createRemoteDesktop({
         const next = this.adapt.tick(this.ws.bufferedAmount);
         if (next) { this.metrics.restarts++; this.capture.restart(next); }
       }
+      if (this.keyWanted && this.waitKey && !this.shedding) { this.apply(this.control.key()); if (this.keyWanted) return; }
       this.apply(this.control.tick());
     }
 
@@ -393,6 +405,10 @@ export function createRemoteDesktop({
         case 'release': input?.release(); break;
         case 'ping': this.sendJson({ t: 'pong', c: m.c, s: epochNow() }); break;
         case 'stats': this.adapt.stats(m); this.clientStats = m; this.apply(this.control.stats(m)); break;
+        // Pages that announced caps.ack / caps.key: the last frame that arrived,
+        // and a decoder that lost its reference and needs a keyframe.
+        case 'ack': this.apply(this.control.ack(m.seq)); break;
+        case 'keyframe': this.apply(this.control.key()); break;
         case 'clip':
           if (typeof m.text !== 'string' || Buffer.byteLength(m.text) > MAX_CLIP_BYTES || m.text === this.lastClip) break;
           this.lastClip = m.text;
@@ -433,8 +449,10 @@ export function createRemoteDesktop({
       metrics.push(summary);
       if (metrics.length > 20) metrics.shift();
       const reasons = Object.entries(this.metrics.reasons).map(([key, count]) => `${key} ${count}`).join(', ');
-      const link = this.control.mode === 'lan' ? 'LAN' : `WAN step ${this.control.step}`;
-      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}`);
+      const link = `${this.control.mode === 'lan' ? 'LAN' : `WAN step ${this.control.step}`}${this.control.acking ? ' (page acks)' : ''}`;
+      const started = this.metrics.startedAt;
+      const steps = this.metrics.decisions.slice(-10).map(d => `${d.reason} ${((d.at - started) / 1000).toFixed(1)} s${d.step !== undefined ? ` W${d.step}` : ''}`).join(', ');
+      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}${steps ? `; ${steps}` : ''}`);
     }
   }
 

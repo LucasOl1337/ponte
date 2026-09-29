@@ -353,6 +353,62 @@ test('the session opens on the WAN steps when the first round trip is 15 ms or m
   current.rd.close();
 });
 
+test('a page that acks and asks: {t:"keyframe"} restarts the WAN run for a keyframe, deltas of the old run are not sent, and {t:"key"} stays a key', async () => {
+  let clock = 1000;
+  const s = fakeSession({ now: () => clock, probe: async () => 30, hello: { caps: { ack: true, key: true } } });
+  await s.ready();
+  const wan = { monitor: 'LAB-1', fps: 30, kbps: 2500 };
+  s.unit(true, wan, 60000);
+  for (let i = 0; i < 5; i++) { clock += 33; s.unit(false, wan); }
+  s.ws.emit('message', JSON.stringify({ t: 'ack', seq: 3 }), false);
+  s.ws.emit('message', JSON.stringify({ t: 'ack', seq: 'x' }), false);
+  s.ws.emit('message', JSON.stringify({ t: 'key', code: 'KeyA', down: true }), false);
+  assert.equal(s.restarts.length, 0);
+  clock += 2500;
+  s.ws.emit('message', JSON.stringify({ t: 'keyframe' }), false);
+  await new Promise(r => setImmediate(r));
+  assert.equal(s.restarts.length, 1);
+  assert.equal(s.restarts[0].keyint, 300);
+  const before = s.sent.length;
+  s.unit(false, wan);
+  assert.equal(s.sent.length, before, 'the old run is over');
+  s.unit(true, wan);
+  assert.equal(s.sent.length, before + 1);
+  s.rd.close();
+});
+
+test('outside the LAN a new run\'s keyframe goes out over an old queue, and a key request merged into a restart is asked again', async () => {
+  let clock = 1000;
+  const s = fakeSession({ now: () => clock, probe: async () => 30 });
+  await s.ready();
+  const session = s.rd.sessions[0];
+  const wan = { monitor: 'LAB-1', fps: 15, kbps: 1000 };
+  const kinds = () => s.sent.slice(1).map(m => m.header.keyframe ? 'K' : 'D');
+  // 160 KB still queued from the run before: more than a second of W1 (125 KB/s).
+  s.ws.bufferedAmount = 160 * 1024;
+  s.unit(true, wan, 40000);
+  assert.deepEqual(kinds(), ['K'], 'the keyframe is the only way out of the old run');
+  s.ws.bufferedAmount = 0;
+  s.unit(false, wan);
+  assert.deepEqual(kinds(), ['K', 'D']);
+  // A step down, whose keyframe goes out; then a delta over the ceiling inside the 2 s merge window.
+  session.apply({ reason: 'down', params: session.control.params() });
+  const restarts = s.restarts.length;
+  clock += 500; s.unit(true, wan, 40000);
+  clock += 500; s.ws.bufferedAmount = 400 * 1024; s.unit(false, wan);
+  s.ws.bufferedAmount = 0;
+  assert.equal(s.restarts.length, restarts, 'merged into the restart just made');
+  // That keyframe (40 KB, ~130 ms at W3) has landed 630 ms after it left: asked again then, inside the 2 s.
+  clock += 100; session.tick();
+  assert.equal(s.restarts.length, restarts, 'the keyframe may still be on the way');
+  clock += 100; session.tick();
+  assert.equal(s.restarts.length, restarts + 1, 'the picture is broken since that delta: a keyframe');
+  s.unit(true, wan);
+  clock += 1000; session.tick();
+  assert.equal(s.restarts.length, restarts + 1);
+  s.rd.close();
+});
+
 test('probeRtt: the smallest of three WebSocket pings; 0 without ping support; null when nothing answers', async () => {
   const answering = Object.assign(new EventEmitter(), { delays: [30, 10, 20], ping(payload) { setTimeout(() => this.emit('pong', payload), this.delays.shift()); return true; } });
   const rtt = await probeRtt(answering);
