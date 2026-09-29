@@ -177,6 +177,7 @@ if (switchAt) {
   Object.assign(report, { switchTo: opt('switch'), switchReadyMs: again ? Math.round(again.at - switchAt) : null, switchToKeyframeMs: next ? Math.round(next.at - switchAt) : null, switchGapMs: next && last ? Math.round(next.at - last.at) : null });
 }
 
+if (opt('dump')) await import('node:fs/promises').then(fs => fs.writeFile(opt('dump'), Buffer.concat(units)));
 if (band && units.length) {
   // Decode what arrived and read the capture time out of each frame's band.
   const width = BAND.bits * BAND.cell, size = width * BAND.cell;

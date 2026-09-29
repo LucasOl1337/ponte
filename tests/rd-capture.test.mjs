@@ -105,8 +105,12 @@ test('the lab desktop scene: a screenshot, a scrolling terminal and a cursor, wi
   assert.throws(() => captureCommand({ mode: 'lab', scene: 'desktop', text: "/tmp/it's" }));
 });
 
-test('the lab desktop scene carries the capture-time band too', { skip: !hasDrawtext }, async () => {
-  const [command, args] = captureCommand({ mode: 'lab', scene: 'desktop', width: 704, height: 400, fps: 30, kbps: 800 });
+test('the lab desktop scene carries the capture-time band too, also shrunk for a WAN step', { skip: !hasDrawtext }, async () => {
+  for (const scale of [null, { width: 800, height: 450 }]) await desktopBand(scale);
+});
+
+async function desktopBand(scale) {
+  const [command, args] = captureCommand({ mode: 'lab', scene: 'desktop', width: scale ? 1280 : 704, height: scale ? 720 : 400, fps: 30, kbps: 800, scale });
   const started = Date.now();
   const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
   const units = [];
@@ -119,8 +123,8 @@ test('the lab desktop scene carries the capture-time band too', { skip: !hasDraw
   const stamps = [];
   for (let i = 0; i + size <= gray.length; i += size) stamps.push(readBand(gray.subarray(i, i + size), BAND.bits * BAND.cell));
   assert.ok(stamps.length >= 8);
-  for (const stamp of stamps) assert.ok(stamp >= started - 50 && stamp <= Date.now(), `${stamp} vs ${started}`);
-});
+  for (const stamp of stamps) assert.ok(stamp >= started - 50 && stamp <= Date.now(), `${stamp} vs ${started} (scale ${JSON.stringify(scale)})`);
+}
 
 test('createCapture runs the lab encoder, restarts it with new parameters and opens each run with a keyframe', { skip: !hasFfmpeg }, async () => {
   const units = [];

@@ -260,7 +260,7 @@ export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1
     // Wall-clock ms goes into the frame's timestamp (RTCTIME) right after
     // `realtime` releases it, then the band paints it bit by bit.
     const bit = `mod(floor(round(T*1000)/pow(2,${BAND.bits - 1}-floor(X/${BAND.cell}))),2)`;
-    const shrink = box ? `,scale=${box.width}:${box.height}:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2` : '';
+    const shrink = box ? `,scale=${box.width}:${box.height}:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p` : '';
     const graph = `${desktop ? desktop.graph : '[0:v]format=yuv420p'}${shrink},realtime,settb=1/1000,setpts=RTCTIME/1000,split[a][b];`
       + `[b]crop=${BAND.bits * BAND.cell}:${BAND.cell}:0:0,geq=lum='255*${bit}':cb=128:cr=128[band];`
       + `[a][band]overlay=0:0,setpts=N/FRAME_RATE/TB[v]`;
