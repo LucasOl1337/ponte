@@ -21,6 +21,10 @@ SSH machines open as Ponte terminals, from the phone, from the other computer an
 - **Keys stay where they are.** The work VM's key lives only on the notebook and the
   Hostinger VM's only on the PC. Each computer reaches the other's machine through an `~/.ssh/config`
   hop over the 2222 link (`RemoteCommand ssh ALIAS`), documented in `docs/mesh.md`.
+- **Remote desktop loads this build.** `rd.html` still asked for the alpha.28 `rd.js`,
+  `rd.css` and `i18n.js`; its `?v=` now follows the version, and a test checks every
+  `?v=` in `index.html` and `rd.html` against `package.json`.
+- **Docs:** `docs/cli.md` covers `terminals places` and `terminals create --agent ssh --host`.
 
 Verified on the real PC: after the service restart, `ctl terminals places` listed both machines,
 and `ctl terminals create --agent ssh` opened the work VM (through the notebook) and the
@@ -33,7 +37,16 @@ On the notebook, after the update, `ctl terminals places` listed both machines, 
 the PC `ctl terminals create --agent ssh --host ALIAS --node notebook-omarchy` opened the
 Hostinger VM through the notebook's hop and answered `hostname`.
 
-Not yet verified: the SSH choice on the real phone (it was in use during the round).
+At release: `npm test` (359, 1 skip) and the desktop CLI tests (120) pass. On both nodes
+`ctl terminals places` lists the two machines.
+
+The alpha.28 item left open is now verified: Ponte Remoto was opened on the notebook
+itself at 19:49 and has shown the PC since. The PC logged one remote desktop session of
+188,455 frames at 56.6 fps (about 4.6 Mbps) that ended only when the service restarted
+for this version, and the notebook reconnected by itself right after.
+
+Not yet verified: the SSH choice on the real phone (in use during the first round, off the
+tailnet at release time).
 
 ## 0.1.0-alpha.28 (2026-09-28)
 

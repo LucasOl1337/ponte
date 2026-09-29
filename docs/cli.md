@@ -233,6 +233,20 @@ são rejeitados. Os terminais pertencem ao socket privado do Ponte, não ao tmux
 pessoal, mas **o shell roda como o mesmo usuário, não é sandbox**. Remover mata a
 sessão e seus processos. O padrão de criação é 80 colunas por 24 linhas.
 
+### Máquinas SSH
+
+```sh
+./ponte ctl terminals places                              # pastas e máquinas SSH deste aparelho
+./ponte ctl terminals create --agent ssh --host cloud-vm  # sessão rodando `ssh cloud-vm`
+./ponte ctl terminals create --agent ssh --host work-vm --node notebook
+```
+
+O `--host` precisa ser um dos apelidos que `terminals places` lista em
+`data.hosts`, que vêm de `ssh.hosts` na configuração privada do aparelho (veja
+[a malha](mesh.md#ssh-machines-in-the-app)). Qualquer outro nome, um
+`usuario@host` ou algo começando com hífen volta `SSH_HOST_NOT_ALLOWED` antes do
+tmux rodar. Quando o ssh termina, a sessão cai num shell local do aparelho.
+
 ## Voz e ditado
 
 ```sh
