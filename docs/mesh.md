@@ -95,6 +95,32 @@ The target needs `gpu-screen-recorder` and `python-evdev`, and its user must be 
 
 `/api/rd?node=<id>` is a WebSocket that the home node joins to the paired node after checking the owner key. The target sees a desktop notice while a paired node controls it.
 
+### Over an internet link
+
+The target measures the round trip before the first frame (three WebSocket pings). Under 15 ms it streams as on a LAN: 60 fps, 12 Mbps, a keyframe every second. Otherwise, or when the round trip or a queue grows later, it moves to WAN steps from 15 fps / 600 kbps / 1280 wide up to 30 fps / 6000 kbps / native, starting at 30 fps / 2500 kbps / 1920. Each change restarts the encoder (~450 ms without a frame): down at once when the link's queue grows, up after 30 s calm and at most once a minute. Terms and the reasoning: [CONTEXT.md](../CONTEXT.md), [ADR 0001](adr/0001-rd-ack-control-over-tcp.md). `tools/lab/rd-link.sh` measures it on a simulated link.
+
+What the page and the target say about it, on top of the first protocol version (`v` stays 1; each side ignores what it does not know):
+
+| Message | Direction | Meaning |
+|---|---|---|
+| `hello.caps: {ack: true, key: true}` | page → target | the page acks frames and asks for keyframes |
+| `hello.view: {width, height}` | page → target | the page's stage in device pixels; a WAN step is never wider |
+| `{t:'ack', seq}` | page → target | the last video frame that arrived (header `seq`), sent on arrival, at most every 50 ms |
+| `{t:'keyframe'}` | page → target | the decoder dropped a delta and needs a keyframe (at most every 3 s); `{t:'key'}` stays a keyboard key |
+| `ready` with another `width`/`height` | target → page | a step changed the picture size: a new decoder |
+
+Without acks (a page up to 0.1.0-alpha.29) the target reads the same from the stats every page sends once a second: `rtt` for the queue, `p95` as a second vote, `kbps` for the delivered rate and `drops` as a keyframe request. The session's last log line says the link mode, the step, whether the page acked and the restarts by reason, with the last ten decisions (`key 0.5 s W3, down 4.5 s W2`).
+
+On a target that is often reached from outside, BBR may help on lossy links; it is a machine setting, not something Ponte changes:
+
+```sh
+# /etc/sysctl.d/60-bbr.conf, applied with `sudo sysctl --system`
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+```
+
+Leave `net.ipv4.tcp_notsent_lowat` alone: measured, it made a 2.5 Mbps link worse.
+
 ## Files
 
 - `dataDir/node.json`: this node's `id` (16 hex) and `name` (the tailnet host name).
