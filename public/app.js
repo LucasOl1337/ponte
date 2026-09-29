@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.30';
+const UI_VERSION = '0.1.0-alpha.31';
 let token = '';
 let state = null;
 let connected = false;

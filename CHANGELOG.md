@@ -2,6 +2,42 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.31 (2026-09-29)
+
+The remote desktop page now tells the watched computer which frame arrived, so an internet
+link is paced from what it really delivers, and alpha.30's worst case on a very bad link is
+gone. Both computers need this version for the new page (`./ponte rd` loads the page from the
+computer it runs on); the watched one alone already gets the fixes. The APK does not change
+(still versionCode 21).
+
+- **Fix: a stall of up to a minute on a very bad link (alpha.30).** On the internet ladder a
+  new encoder run's keyframe could be dropped behind what the previous run had queued, and an
+  alpha.29 page then waited for the safety keyframe: 55 s frozen in the lab at 2.5 Mbps with
+  3 % loss. The new run's keyframe now always goes out, and a key request merged into a
+  restart is asked again.
+- **Per-frame acks.** The page acks the last frame that arrived (at most every 50 ms,
+  before decoding). On its own clock the watched computer reads the queue (age over its
+  10 s floor), what the link delivers (acked bytes) and what is in flight, and steps down
+  after half a second over 150 ms instead of two stats a second apart. A keyframe's burst
+  also measures the link, so a climb can skip steps.
+- **Keyframes on request.** A page that lost its reference sends `{t:'keyframe'}`
+  (`{t:'key'}` is already a keystroke); with it the periodic keyframe outside the LAN is every
+  300 s. The hello announces `caps: { ack, key }` and the stage size (`view`), and outside the
+  LAN the picture is never encoded wider than the stage.
+- **No blank start on a slow link.** The page used to drop the frames that arrived while its
+  decoder was being set up, and waited for the next keyframe; it now decodes them as one
+  burst. For an alpha.29 page the watched computer asks for a keyframe as soon as the previous
+  one has landed.
+- **Docs:** `CONTEXT.md` (vocabulary), `docs/adr/0001-rd-ack-control-over-tcp.md` (why acks
+  over TCP now, WebRTC later), the new messages and the BBR note in `docs/mesh.md`.
+
+Measured in the lab (desktop scene, 60 s each), new page / alpha.29 page against the new
+computer: 2.5 Mbps with 1 % loss p95 110 / 165 ms, no freeze; a drop from 20 to 2 Mbps
+recovers in 2-3 s / 4-5 s (25 s in alpha.29); 3 % loss p95 219-276 / 196-254 ms; LAN 60 fps,
+p95 4 ms, no restart. Through two mesh nodes in a bench Chromium at 2.5 Mbps and 24 ms, glass
+to glass p95 was 111-114 ms with the first picture in the 2nd second, against 204 ms and a
+sawtooth with both sides on alpha.29.
+
 ## 0.1.0-alpha.30 (2026-09-29)
 
 Remote desktop over an internet link stops piling up seconds of video. The node that is
