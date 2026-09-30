@@ -292,7 +292,7 @@ async function main() {
     emit({ ok: true, data: { dryRun: true, requiresConfirmation: !!command.confirm, ...redacted(request), ...node } }); return;
   }
   if (command.confirm && !options.yes) throw new CliError('CONFIRMATION_REQUIRED', 'This command requires --yes. Inspect it with --dry-run first.', 2);
-  const client = await createClient({ url: options.url, tokenFile: options['token-file'], caFile: options['ca-file'], timeout: options.timeout ?? Math.max(15000, (request.durationMs || 0) + 5000), signal: controller.signal });
+  const client = await createClient({ url: options.url, tokenFile: options['token-file'], caFile: options['ca-file'], timeout: options.timeout ?? Math.max(command.timeoutMs || 15000, (request.durationMs || 0) + 5000), signal: controller.signal });
   if (options.node !== undefined) request = withNode(request, (await resolveNode(client, options.node)).id);
   mutation = request.method !== 'GET';
   const result = await client.request(request);

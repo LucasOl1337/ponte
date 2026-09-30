@@ -501,6 +501,13 @@ export async function createMesh({
     get enabled() { return enabled; },
     hello: hellobody, refresh, view, list, active, createRequest, requestStatus, approve, deny, revoke, pair,
     authorizePeer, relay, connection, forget, isPeer: id => peers.has(id), close,
+    // One JSON request to a paired node with its peer token and pinned CA.
+    async call(peerId, { method = 'GET', target, body, timeout = 30000 }) {
+      const peer = peers.get(peerId);
+      if (!peer) throw new ApiError(404, 'MESH_PEER_NOT_FOUND');
+      try { return await tlsJson({ ip: peer.ip, port: peer.port, caPem: peer.caPem, method, target, token: peer.token, body, timeout, maxBytes: 256 * 1024 }); }
+      catch (error) { throw peerFailure(error, peer.name); }
+    },
     // mesh.* actions from /api/action (the phone reaches no /api/mesh route).
     async action(value) {
       if (value.type === 'mesh.pair') return pair(value.peer ?? value.id);

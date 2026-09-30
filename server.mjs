@@ -24,6 +24,7 @@ import { readNativeTls } from './backend/tls.mjs';
 import { createMesh, peerFailure } from './backend/mesh.mjs';
 import { acceptUpgrade, rejectUpgrade } from './backend/ws.mjs';
 import { createRemoteDesktop } from './backend/rd.mjs';
+import { createFleet } from './backend/fleet.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -220,6 +221,7 @@ export async function createApp(options = {}) {
     dataDir: initialized.dataDir, env, identity: tailnetIdentity, version: uiVersion, caPem, selfPort: settings?.nativeTls?.port,
     enabled: !!settings?.nativeTls && env.PONTE_MESH !== '0', ...options.meshOptions,
   });
+  const fleet = options.fleet || createFleet({ env, dataDir: initialized.dataDir, mesh, terminals, sshHosts: options.sshHosts || settings?.sshHosts, ...options.fleetOptions });
   // The owner token, or a paired node's token over the tailnet listener only
   // (bound to that node's address). The RD WebSocket reuses this.
   function authenticate(token, req) {
@@ -243,6 +245,41 @@ export async function createApp(options = {}) {
     return list;
   };
   const rd = options.rd || createRemoteDesktop({ env, readMonitors, node: () => ({ id: mesh.id, name: mesh.name }), ...options.rdOptions });
+  // /api/fleet* and the fleet.* actions share one dispatcher.
+  async function fleetCall(type, value = {}) {
+    const fresh = value.fresh === true;
+    if (type === 'fleet.list') return fleet.overview({ fresh, deep: value.deep === true });
+    if (type === 'fleet.sessions') return fleet.sessions({ fresh });
+    if (type === 'fleet.check') {
+      const listing = await fleet.overview({ fresh: true, deep: true });
+      return typeof value.machine === 'string' ? { machine: listing.machines.find(item => item.id === value.machine) || null } : listing;
+    }
+    if (type === 'fleet.probe') return fleet.probe(value.machine, { fresh: true });
+    if (type === 'fleet.handoff') { const { type: _, ...rest } = value; return fleet.handoff(rest); }
+    if (type === 'fleet.job') return fleet.job(value.id);
+    if (type === 'fleet.jobs') return fleet.jobs();
+    throw new ApiError(400, 'FLEET_INVALID_REQUEST');
+  }
+  async function fleetRoute(req, res, pathname, query) {
+    const flag = name => ['1', 'true'].includes(query.get(name));
+    if (pathname === '/api/fleet' && req.method === 'GET') { json(res, 200, await limits.only('fleet', 2, () => fleetCall('fleet.list', { fresh: flag('fresh'), deep: flag('deep') }))); return; }
+    if (pathname === '/api/fleet/sessions' && req.method === 'GET') { json(res, 200, await limits.only('fleet', 2, () => fleetCall('fleet.sessions', { fresh: flag('fresh') }))); return; }
+    if (pathname === '/api/fleet/check' && req.method === 'POST') { json(res, 200, await limits.only('fleet', 2, () => fleetCall('fleet.check', {}))); return; }
+    const probeRoute = pathname.match(/^\/api\/fleet\/machines\/([^/]{1,80})\/probe$/);
+    if (probeRoute && req.method === 'POST') { json(res, 200, await limits.only('fleet', 2, () => fleetCall('fleet.probe', { machine: decodeURIComponent(probeRoute[1]) }))); return; }
+    if (pathname === '/api/fleet/handoff' && req.method === 'POST') {
+      const value = await limits.only('body', 8, () => readJson(req, 4096));
+      json(res, 202, fleet.handoff(value)); return;
+    }
+    if (pathname === '/api/fleet/jobs' && req.method === 'GET') { json(res, 200, fleet.jobs()); return; }
+    const jobRoute = pathname.match(/^\/api\/fleet\/jobs\/([a-f0-9]{16})$/);
+    if (jobRoute && req.method === 'GET') {
+      // ?wait=N holds the answer until the job ends or N seconds pass (max 60).
+      const wait = Math.min(60, Math.max(0, Number(query.get('wait')) || 0));
+      json(res, 200, wait ? await fleet.wait(jobRoute[1], wait * 1000) : fleet.job(jobRoute[1])); return;
+    }
+    throw new ApiError(404, 'ROUTE_NOT_FOUND');
+  }
   const activeRequests = new Set();
   let shuttingDown = false, closingPromise;
 
@@ -412,6 +449,18 @@ export async function createApp(options = {}) {
         if (state && typeof state === 'object' && caller.kind === 'owner' && mesh.active()) state.mesh = mesh.view();
         json(res, 200, state); return;
       }
+      // The fleet: machines, SSH routes, agent sessions everywhere, and
+      // handoffs that continue a session on another machine. A paired node
+      // may only resume a session here (the handoff's last step); everything
+      // else is the owner's.
+      if (pathname === '/api/fleet/resume' && req.method === 'POST') {
+        const value = await limits.only('body', 8, () => readJson(req, 4096));
+        json(res, 201, await limits.only('fleet-resume', 2, () => fleet.resume(value))); return;
+      }
+      if (pathname === '/api/fleet' || pathname.startsWith('/api/fleet/')) {
+        if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
+        await fleetRoute(req, res, pathname, query); return;
+      }
       if (pathname === '/api/mesh' && req.method === 'GET') { json(res, 200, await mesh.list()); return; }
       const meshAdmin = pathname.match(/^\/api\/mesh\/(pair|approve|deny|revoke)$/);
       if (meshAdmin && req.method === 'POST') {
@@ -441,6 +490,11 @@ export async function createApp(options = {}) {
           const body = await readBody(req, 24 * 1024);
           let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
           // Pairing actions for the phone, whose proxy reaches no /api/mesh route.
+          // Fleet actions too: the phone's proxy has no /api/fleet route.
+          if (typeof value?.type === 'string' && value.type.startsWith('fleet.')) {
+            if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
+            json(res, value.type === 'fleet.handoff' ? 202 : 200, await fleetCall(value.type, value)); return;
+          }
           if (typeof value?.type === 'string' && value.type.startsWith('mesh.')) {
             if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
             json(res, 200, await mesh.action(value)); return;

@@ -27,7 +27,7 @@ const cursorFormat = `${format}\t#{cursor_x}\t#{cursor_y}\t#{cursor_flag}\t#{alt
 // `ssh` opens one of the node's configured SSH aliases (ssh.hosts in the
 // private config), never a host the phone typed.
 const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' }, ssh: { title: 'SSH', program: 'ssh' } });
-const titlePattern = /^(Terminal|Claude|Codex|SSH [A-Za-z0-9][A-Za-z0-9._-]{0,63}) [1-4]$/;
+const titlePattern = /^(Terminal|Claude|Codex|Jcode|SSH [A-Za-z0-9][A-Za-z0-9._-]{0,63}) [1-4]$/;
 const projectPattern = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 // The agent runs as the pane's own argv (tmux execs it without a shell): the
 // program and the prompt are "$@", never parsed as shell text. When the agent
@@ -323,6 +323,44 @@ export function createTerminals(dataDir, options = {}) {
     }, 'read');
   }
 
+  // One new tmux session: a shell, or `program args` through the agent
+  // launcher, in the folder `directory()` resolves, numbered 1-4.
+  function spawnSession({ cols, rows, program, args, label, directory: resolveDirectory, agentTitle, typed }) {
+      return run(async available => {
+        if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+        await sessions();
+        if (liveSessionCount >= TERMINAL_LIMIT) throw new ApiError(409, 'TERMINAL_LIMIT_REACHED');
+        const directory = await resolveDirectory();
+        if (program && !await exists(program, env)) throw new ApiError(503, 'AGENT_UNAVAILABLE', { agent: agentTitle });
+        const id = randomBytes(12).toString('hex');
+        // One number per slot, whatever runs in it: Claude 1, Terminal 2, Codex 3.
+        const number = [1, 2, 3, 4].find(number => !registry.some(item => item.title.endsWith(` ${number}`)));
+        const title = `${label} ${number}`;
+        const launch = program ? ['--', ...agentLauncher, program, ...args] : [];
+        let pane;
+        try {
+          const output = await command([
+            'start-server', ';', 'set-option', '-g', 'set-clipboard', 'off',
+            ';', 'set-option', '-g', 'history-limit', '1000', ';', 'set-option', '-g', 'status', 'off',
+            ';', 'new-session', '-d', '-P', '-F', format, '-s', `ponte_${id}`, '-n', 'terminal', '-c', directory, '-x', String(cols), '-y', String(rows), ...launch,
+          ]);
+          const parsed = parsePanes(output);
+          [pane] = parsed;
+          if (parsed.length !== 1 || pane.name !== `ponte_${id}`) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+          registry.push({ id, title, paneId: pane.paneId, windowId: pane.windowId });
+          await save();
+          // A shell's first line is typed like the composer does; the pty holds
+          // it until the shell reads its input, then Enter runs it.
+          if (typed !== undefined) await pasteText(pane, typed, true);
+        } catch (error) {
+          registry = registry.filter(item => item.id !== id);
+          await discardNewSession(id);
+          throw error;
+        }
+        return summary({ id, title, ...pane });
+      });
+  }
+
   return {
     // The most recently changed project folders, by name only, for the phone
     // to offer as the new session's folder. It never needs tmux.
@@ -341,42 +379,23 @@ export function createTerminals(dataDir, options = {}) {
       const { cols, rows } = dimensions(value, ['agent', 'prompt', 'project', 'host']);
       const start = sessionStart(value, sshHosts);
       const { program } = agents[start.agent];
-      return run(async available => {
-        if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
-        await sessions();
-        if (liveSessionCount >= TERMINAL_LIMIT) throw new ApiError(409, 'TERMINAL_LIMIT_REACHED');
-        const directory = await projectDirectory(start.project);
-        if (program && !await exists(program, env)) throw new ApiError(503, 'AGENT_UNAVAILABLE', { agent: agents[start.agent].title });
-        const id = randomBytes(12).toString('hex');
-        // One number per slot, whatever runs in it: Claude 1, Terminal 2, Codex 3.
-        const number = [1, 2, 3, 4].find(number => !registry.some(item => item.title.endsWith(` ${number}`)));
-        const title = `${agents[start.agent].title}${start.host ? ` ${start.host}` : ''} ${number}`;
+      const args = start.host ? [start.host] : start.prompt === undefined ? [] : [start.prompt];
+      return spawnSession({ cols, rows, program, args, label: `${agents[start.agent].title}${start.host ? ` ${start.host}` : ''}`, directory: () => projectDirectory(start.project), agentTitle: agents[start.agent].title,
         // ssh gets the alias alone (it starts with a letter or digit, never an
         // option); its first line is typed below, like a shell's.
-        const args = start.host ? [start.host] : start.prompt === undefined ? [] : [start.prompt];
-        const launch = program ? ['--', ...agentLauncher, program, ...args] : [];
-        let pane;
-        try {
-          const output = await command([
-            'start-server', ';', 'set-option', '-g', 'set-clipboard', 'off',
-            ';', 'set-option', '-g', 'history-limit', '1000', ';', 'set-option', '-g', 'status', 'off',
-            ';', 'new-session', '-d', '-P', '-F', format, '-s', `ponte_${id}`, '-n', 'terminal', '-c', directory, '-x', String(cols), '-y', String(rows), ...launch,
-          ]);
-          const parsed = parsePanes(output);
-          [pane] = parsed;
-          if (parsed.length !== 1 || pane.name !== `ponte_${id}`) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
-          registry.push({ id, title, paneId: pane.paneId, windowId: pane.windowId });
-          await save();
-          // A shell's first line is typed like the composer does; the pty holds
-          // it until the shell reads its input, then Enter runs it.
-          if ((!program || start.host) && start.prompt !== undefined) await pasteText(pane, start.prompt, true);
-        } catch (error) {
-          registry = registry.filter(item => item.id !== id);
-          await discardNewSession(id);
-          throw error;
-        }
-        return summary({ id, title, ...pane });
-      });
+        typed: (!program || start.host) && start.prompt !== undefined ? start.prompt : undefined });
+    },
+    // A session the server itself starts: the fleet resuming a copied agent
+    // session. Only a fixed agent program with an id already validated by the
+    // caller, in an absolute folder that exists; never reachable from input
+    // the phone sends directly.
+    createInternal({ title, directory, argv, cols = 120, rows = 36 }) {
+      if (!['Claude', 'Codex', 'Jcode'].includes(title) || !Array.isArray(argv) || !['claude', 'codex', 'jcode'].includes(argv[0]) || argv.some(word => typeof word !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(word))) throw new ApiError(400, 'AGENT_NOT_ALLOWED');
+      if (typeof directory !== 'string' || !path.isAbsolute(directory) || /[\u0000-\u001f\u007f]/.test(directory)) throw new ApiError(400, 'PROJECT_NOT_ALLOWED');
+      return spawnSession({ cols, rows, program: argv[0], args: argv.slice(1), label: title, agentTitle: title, directory: async () => {
+        try { if ((await stat(directory)).isDirectory()) return directory; } catch {}
+        throw new ApiError(400, 'PROJECT_NOT_ALLOWED');
+      } });
     },
     // `since` is the hash of the text the phone already shows: when nothing
     // changed only the hash comes back, not up to 64 KiB of the same text.

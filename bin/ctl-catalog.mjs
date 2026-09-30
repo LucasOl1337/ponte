@@ -40,6 +40,7 @@ const pointParams = () => ({
   x: integer(0, 32767, required),
   y: integer(0, 32767, required),
 });
+const fleetMachine = (options = {}) => string({ maxLength: 68, pattern: `^(?:self|ssh:[A-Za-z0-9][A-Za-z0-9._-]{0,63})${end}`, ...options });
 const button = string({ ...required, enum: ['left', 'right', 'middle'] });
 const workspaceId = integer(1, 100, required);
 const desktopKeys = [
@@ -162,6 +163,42 @@ export const COMMANDS = [
     name: 'terminals dictate', description: 'Transcribe audio into a terminal, optionally followed by Enter.', method: 'POST', path: '/api/terminals/:id/dictate', kind: 'upload',
     // The transport must serialize enter as ?enter=0 or ?enter=1, not false/true.
     params: { id: { ...terminalId }, ...uploadParams(), enter: boolean({ default: false }) },
+  },
+  // The fleet: every machine on the tailnet, SSH config and mesh, the health
+  // of each route, and agent sessions (Claude Code, Codex, Jcode) anywhere.
+  {
+    name: 'fleet list', description: 'List machines, their SSH/Tailscale routes and health. --deep checks every SSH route now.', method: 'GET', path: '/api/fleet',
+    params: { fresh: boolean(), deep: boolean() }, timeoutMs: 45000,
+  },
+  {
+    name: 'fleet sessions', description: 'List recent Claude Code, Codex and Jcode sessions on every reachable machine.', method: 'GET', path: '/api/fleet/sessions',
+    params: { fresh: boolean() }, timeoutMs: 45000,
+  },
+  {
+    name: 'fleet check', description: 'Check every SSH route now: latency and error code per route.', method: 'POST', path: '/api/fleet/check',
+    params: {}, timeoutMs: 45000,
+  },
+  {
+    name: 'fleet probe', description: 'Probe one machine: tools, live agents and recent sessions.', method: 'POST', path: '/api/fleet/machines/:machine/probe',
+    params: { machine: fleetMachine({ ...required }) }, timeoutMs: 45000,
+  },
+  {
+    name: 'fleet handoff', description: 'Continue an agent session on another machine: sync the project (fast-forward only), copy the session and resume it in a Ponte terminal there. Returns a job; follow it with `fleet job`.', method: 'POST', path: '/api/fleet/handoff',
+    params: {
+      from: fleetMachine({ ...required }), to: fleetMachine({ default: 'self' }),
+      kind: string({ ...required, enum: ['claude', 'codex', 'jcode'] }),
+      session: string({ ...required, maxLength: 80, pattern: String.raw`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|session_[a-z0-9]{1,32}_[0-9]{10,16}_[0-9a-f]{8,32})${end}` }),
+      git: string({ enum: ['branch', 'changes', 'none'], default: 'branch' }),
+      resume: boolean({ default: true }), force: boolean({ default: false }),
+      // Only check both ends and report what would happen; copy nothing.
+      plan: boolean({ default: false, field: 'dryRun' }),
+    },
+  },
+  query('fleet jobs', 'List recent handoff jobs.', '/api/fleet/jobs'),
+  {
+    name: 'fleet job', description: 'Read a handoff job; --wait holds the answer until it ends (up to 60 s).', method: 'GET', path: '/api/fleet/jobs/:id',
+    params: { id: string({ ...required, pattern: `^[a-f0-9]{16}${end}`, maxLength: 16 }), wait: integer(0, 60, { default: 0 }) },
+    timeoutMs: 70000,
   },
   query('audio list', 'List stored audio recordings.', '/api/audio'),
   {

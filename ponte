@@ -1040,6 +1040,103 @@ def mesh_main(argv, sleep=time.sleep):
     raise ValueError('No answer within 10 minutes.')
 
 
+def fleet_age(ms):
+    if not ms:
+        return ''
+    seconds = max(0, time.time() - ms / 1000)
+    for size, unit in ((86400, 'd'), (3600, 'h'), (60, 'min')):
+        if seconds >= size:
+            return f'{int(seconds // size)}{unit}'
+    return 'now'
+
+
+def print_fleet(listing):
+    for machine in listing.get('machines') or []:
+        tail = machine.get('tailnet') or {}
+        probe = machine.get('probe') or {}
+        tools = ' '.join(name for name, ok in (probe.get('tools') or {}).items() if ok and name in ('claude', 'codex', 'jcode'))
+        link = tail.get('link') or ''
+        print(f"{machine.get('name'):<24} {machine.get('health'):<10} {machine.get('id'):<22} {link:<7} {tools}")
+        for route in machine.get('routes') or [] if machine.get('id') != 'self' else []:
+            check = route.get('check')
+            if check is None:
+                state = 'unchecked'
+            elif check.get('ok'):
+                state = f"ok {check.get('ms')} ms"
+            else:
+                state = f"{check.get('code')} {check.get('message') or ''}".strip()
+            print(f"    ssh {route.get('alias'):<18} {route.get('kind'):<14} {route.get('user') or ''}@{route.get('hostname')}:{route.get('port')}  {state}")
+
+
+def print_fleet_sessions(listing):
+    sessions = listing.get('sessions') or []
+    if not sessions:
+        print('No recent agent session on any reachable machine.')
+    for item in sessions:
+        live = 'live' if item.get('live') else ''
+        title = (item.get('title') or item.get('last') or '').replace('\n', ' ')[:70]
+        print(f"{item.get('machineName'):<18} {item.get('kind'):<6} {fleet_age(item.get('updatedAt')):>5} {live:<4} {item.get('cwd') or '':<28} {title}")
+        print(f"{'':<18} ./ponte fleet continue {item.get('kind')} {item.get('id')} --from {item.get('machine')}")
+    for failure in listing.get('errors') or []:
+        print(f"(could not read {failure.get('machine')}: {failure.get('code')})")
+
+
+def fleet_main(argv, sleep=time.sleep):
+    parser = argparse.ArgumentParser(prog='ponte fleet', description='Machines on your Tailscale and SSH config, the health of each route, and agent sessions you can continue on another machine.')
+    sub = parser.add_subparsers(dest='action')
+    listing = sub.add_parser('list', help='Machines and routes (default). --check tests every SSH route now.')
+    listing.add_argument('--check', action='store_true', help='Connect to every SSH route now and report latency or the error.')
+    sub.add_parser('sessions', help='Recent Claude Code, Codex and Jcode sessions on every reachable machine.')
+    go = sub.add_parser('continue', help='Continue a session on another machine: fast-forward the project, copy the session, resume it in a Ponte terminal.')
+    go.add_argument('kind', choices=['claude', 'codex', 'jcode'])
+    go.add_argument('session')
+    go.add_argument('--from', dest='source', required=True, help='Machine id from ./ponte fleet sessions (self or ssh:ALIAS).')
+    go.add_argument('--to', default='self', help='Destination machine (default: this one).')
+    go.add_argument('--git', choices=['branch', 'changes', 'none'], default='branch', help='branch: fast-forward the branch (default); changes: also carry uncommitted changes as a patch; none: leave the project alone.')
+    go.add_argument('--no-resume', action='store_true', help='Copy the session only; do not open a terminal.')
+    go.add_argument('--force', action='store_true', help='Copy even when the session is still open, or newer at the destination (a backup is kept).')
+    go.add_argument('--plan', action='store_true', help='Check both sides and report what would happen; change nothing.')
+    parser.add_argument('--json', action='store_true', help='Print the server answer as JSON.')
+    args = parser.parse_args(argv)
+    config_file, _, _ = paths()
+    emit = (lambda value: print(json.dumps(value, indent=2))) if args.json else None
+    if args.action == 'sessions':
+        result = local_api(config_file, 'GET', '/fleet/sessions', timeout=60)
+        return emit(result) if emit else print_fleet_sessions(result)
+    if args.action != 'continue':
+        route = '/fleet?deep=1&fresh=1' if getattr(args, 'check', False) else '/fleet'
+        result = local_api(config_file, 'GET', route, timeout=60)
+        return emit(result) if emit else print_fleet(result)
+    job = local_api(config_file, 'POST', '/fleet/handoff', {
+        'from': args.source, 'to': args.to, 'kind': args.kind, 'session': args.session, 'git': args.git,
+        'resume': not args.no_resume, 'force': args.force, 'dryRun': args.plan})
+    shown = 0
+    deadline = time.monotonic() + 30 * 60
+    while job.get('status') == 'running' and time.monotonic() < deadline:
+        if not emit:
+            for item in (job.get('steps') or [])[shown:]:
+                print(f"  {item.get('name')}")
+            shown = len(job.get('steps') or [])
+        job = local_api(config_file, 'GET', f"/fleet/jobs/{job['id']}?wait=20", timeout=40)
+    if emit:
+        return emit(job)
+    for item in (job.get('steps') or [])[shown:]:
+        print(f"  {item.get('name')}")
+    if job.get('status') == 'failed':
+        error = job.get('error') or {}
+        text = (error.get('text') or {}).get('pt' if os.environ.get('LANG', '').startswith('pt') else 'en') or error.get('code')
+        detail = f" ({error.get('detail')})" if error.get('detail') and error.get('detail') not in text else ''
+        raise ValueError(f"{text}{detail} [{error.get('code')}]")
+    result = job.get('result') or {}
+    if result.get('dryRun'):
+        print(json.dumps(result, indent=2))
+        return
+    terminal = result.get('terminal') or {}
+    print(f"Done. {' '.join(result.get('command') or [])}" + (f" is running in Ponte terminal {terminal.get('id')}." if terminal.get('id') else '.'))
+    if result.get('note'):
+        print(result['note'])
+
+
 def pc_main(argv):
     # SSH-friendly local control over Tailscale. Reuses the Node desktop actions
     # (power, lock, unlock, monitors, RGB) validated by the server, so `ssh
@@ -1227,10 +1324,13 @@ def main():
     if sys.argv[1:2] == ['mesh']:
         mesh_main(sys.argv[2:])
         return
+    if sys.argv[1:2] == ['fleet']:
+        fleet_main(sys.argv[2:])
+        return
     if sys.argv[1:2] == ['rd']:
         rd_main(sys.argv[2:])
         return
-    parser = argparse.ArgumentParser(description=__doc__, epilog='Desktop app: ./ponte desktop (control Android from this PC). Agent control: ./ponte ctl help. Offline discovery: ./ponte ctl schema or ./ponte desktop schema. Remote desktop: ./ponte rd [device]. Other groups: ./ponte pc --help, ./ponte phone --help and ./ponte mesh --help.')
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Desktop app: ./ponte desktop (control Android from this PC). Agent control: ./ponte ctl help. Offline discovery: ./ponte ctl schema or ./ponte desktop schema. Remote desktop: ./ponte rd [device]. Other groups: ./ponte pc --help, ./ponte phone --help, ./ponte mesh --help and ./ponte fleet --help.')
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config'])
     parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')
     parser.add_argument('--tailscale-ip', help='Explicit canonical Tailscale IPv4 instead of automatic detection.')

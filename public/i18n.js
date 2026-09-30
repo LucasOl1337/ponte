@@ -1221,6 +1221,98 @@
     "en": "{name} presented a certificate that does not match the one saved when pairing.",
     "pt": "{name} apresentou um certificado diferente do salvo no pareamento."
   },
+  "FLEET_UNAVAILABLE": {
+    "en": "The fleet folder is not private. Check the permissions of Ponte's data folder.",
+    "pt": "A pasta da frota não está privada. Confira as permissões da pasta de dados do Ponte."
+  },
+  "FLEET_MACHINE_NOT_FOUND": {
+    "en": "This machine is not in the fleet. Refresh the list.",
+    "pt": "Esta máquina não está na frota. Atualize a lista."
+  },
+  "FLEET_INVALID_REQUEST": {
+    "en": "Invalid fleet request.",
+    "pt": "Pedido inválido para a frota."
+  },
+  "FLEET_PROBE_REFUSED": {
+    "en": "The machine refused the request ({reason}).",
+    "pt": "A máquina recusou o pedido ({reason})."
+  },
+  "FLEET_HANDOFF_BUSY": {
+    "en": "This session is already being moved.",
+    "pt": "Esta sessão já está sendo transferida."
+  },
+  "FLEET_JOB_NOT_FOUND": {
+    "en": "This transfer is no longer tracked.",
+    "pt": "Esta transferência não está mais registrada."
+  },
+  "FLEET_SESSION_LIVE": {
+    "en": "The agent is still open on the other machine. Close it there, or continue anyway with force.",
+    "pt": "O agente ainda está aberto na outra máquina. Feche lá ou continue mesmo assim forçando."
+  },
+  "FLEET_RESUME_FAILED": {
+    "en": "The session was copied but could not be opened in a terminal.",
+    "pt": "A sessão foi copiada, mas não abriu num terminal."
+  },
+  "FLEET_HANDOFF_FAILED": {
+    "en": "The transfer stopped at {stage}. Nothing was discarded.",
+    "pt": "A transferência parou em {stage}. Nada foi descartado."
+  },
+  "FLEET_NO_ROUTE": {
+    "en": "There is no SSH route to this machine. Add it to ~/.ssh/config.",
+    "pt": "Não há rota SSH para esta máquina. Adicione em ~/.ssh/config."
+  },
+  "FLEET_NO_CHECKOUT": {
+    "en": "The project is not on the destination and could not be cloned ({dir}).",
+    "pt": "O projeto não está no destino e não deu para clonar ({dir})."
+  },
+  "FLEET_DEST_DIRTY": {
+    "en": "The destination has uncommitted changes in {dir}. Commit or stash them there first; nothing was touched.",
+    "pt": "O destino tem mudanças sem commit em {dir}. Faça commit ou stash lá antes; nada foi mexido."
+  },
+  "FLEET_DIVERGED": {
+    "en": "Branch {branch} diverged between the machines. Merge or rebase by hand; nothing was touched.",
+    "pt": "A branch {branch} divergiu entre as máquinas. Faça merge ou rebase à mão; nada foi mexido."
+  },
+  "FLEET_HEAD_MISMATCH": {
+    "en": "The source branch moved during the transfer. Try again.",
+    "pt": "A branch de origem andou durante a transferência. Tente de novo."
+  },
+  "FLEET_UNTRACKED_EXISTS": {
+    "en": "A new file from the source already exists on the destination. Nothing was overwritten.",
+    "pt": "Um arquivo novo da origem já existe no destino. Nada foi sobrescrito."
+  },
+  "FLEET_PATCH_FAILED": {
+    "en": "The uncommitted changes did not apply cleanly on the destination. Nothing was changed.",
+    "pt": "As mudanças sem commit não entraram limpas no destino. Nada foi alterado."
+  },
+  "FLEET_DEST_NEWER": {
+    "en": "The destination has a newer copy of this session. Continue with force to replace it (a backup is kept).",
+    "pt": "O destino tem uma cópia mais nova desta sessão. Continue forçando para substituir (fica um backup)."
+  },
+  "FLEET_SESSION_NOT_FOUND": {
+    "en": "This session no longer exists on the source machine.",
+    "pt": "Esta sessão não existe mais na máquina de origem."
+  },
+  "FLEET_CLONE_FAILED": {
+    "en": "Cloning the project on the destination failed. Check its access to the repository.",
+    "pt": "Falhou ao clonar o projeto no destino. Confira o acesso dele ao repositório."
+  },
+  "FLEET_TIMEOUT": {
+    "en": "The machine did not answer in time.",
+    "pt": "A máquina não respondeu a tempo."
+  },
+  "FLEET_AUTH": {
+    "en": "SSH refused the key. Check the key on that machine.",
+    "pt": "O SSH recusou a chave. Confira a chave nessa máquina."
+  },
+  "FLEET_UNREACHABLE": {
+    "en": "The machine is unreachable.",
+    "pt": "A máquina está inalcançável."
+  },
+  "FLEET_TAILSCALE_CHECK": {
+    "en": "Tailscale SSH asks for a browser check on this route. Use a key route instead.",
+    "pt": "O Tailscale SSH pede checagem no navegador nesta rota. Use uma rota por chave."
+  },
   "WOL_INSTRUCTIONS": {
     "en": "Enable Wake-on-LAN in UEFI/BIOS (Power On By PCI-E) and Linux with sudo ethtool -s {interface} wol g. Wake with Magic Packet to {mac} on UDP port 9.",
     "pt": "Habilite Wake-on-LAN na BIOS/UEFI (Power On By PCI-E) e no Linux com sudo ethtool -s {interface} wol g. Acorde com Magic Packet para {mac} na porta UDP 9."
