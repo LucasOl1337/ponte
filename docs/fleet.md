@@ -51,7 +51,8 @@ Job errors carry a `FLEET_*` code, the stage and `text: {en, pt}`.
 
 ## Known limits
 
-- The destination must be logged in to the agent. Codex in a Ponte terminal uses the destination's `~/.codex/auth.json`; without it `codex resume` opens its login screen.
+- The destination must be logged in to the agent. Codex in a Ponte terminal uses the destination's `~/.codex/auth.json`; without it `codex resume` opens its login screen. An agent may also ask you to trust a new project folder before showing the resumed conversation; Ponte does not bypass that prompt.
+- If the copy succeeds but the remote terminal cannot start, the job stays `done`, its `resume` step records `manual: true` and the error code, and `result.command` gives the resume command. The copied history is kept on the destination.
 - A Codex rollout copied without its `state_5.sqlite` row is found by `codex resume ID` (it scans `~/.codex/sessions`); it may be missing from `codex resume`'s picker until Codex indexes it.
 - Sessions of the last 14 days, 30 per machine. Claude runs from `-p`/SDK and transcripts under 2 KB are not listed.
 - Windows machines and phones are listed, never probed.

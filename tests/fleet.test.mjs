@@ -6,12 +6,13 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, chmod } from 'node:fs/promises';
 import { createFleet, parseSshConfig, parseSshG, routeKind, classifySshFailure, shellQuote, resumeCommand } from '../backend/fleet.mjs';
 import { message, messages } from '../backend/i18n.mjs';
+import { runCommand } from '../backend/process.mjs';
 
 // Two "machines" in temporary folders: this one (HOME=<root>/self) and a
 // notebook reached through a fake ssh that runs the remote command locally
 // with HOME=<root>/<alias>, joining the argv the way the real ssh does (so
 // the quoting the fleet applies is exercised exactly as over the network).
-async function world(t) {
+async function world(t, { mesh, runner } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-fleet-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const self = path.join(root, 'self'), notebook = path.join(root, 'notebook');
@@ -41,7 +42,7 @@ HOME="${root}/$alias" exec sh -c "$*"
   const env = { ...process.env, HOME: self, PONTE_SSH_BIN: ssh, PONTE_TAILSCALE_BIN: tailscale, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
   const created = [];
   const terminals = { createInternal: async value => { created.push(value); return { id: 'a'.repeat(24), title: value.title }; } };
-  const fleet = createFleet({ env, home: self, dataDir: path.join(root, 'data'), terminals });
+  const fleet = createFleet({ env, home: self, dataDir: path.join(root, 'data'), terminals, mesh, runner });
   const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: { ...env, HOME: cwd.startsWith(notebook) ? notebook : self }, encoding: 'utf8' }).trim();
   return { root, self, notebook, fleet, created, git, env };
 }
@@ -76,6 +77,26 @@ async function sharedRepo({ self, notebook, git }) {
 }
 
 const CLAUDE_ID = '5e5e5e5e-0000-4000-8000-00000000f1ee';
+
+// assemble associates mesh peers through the tailnet, then merges SSH aliases.
+// All other commands still use world's fake SSH and temporary HOME.
+async function notebookTailnetRunner(command, args, options) {
+  if (command === options.env.PONTE_TAILSCALE_BIN) {
+    assert.deepEqual(args, ['status', '--json']);
+    return JSON.stringify({
+      Self: { HostName: 'pc' },
+      Peer: { notebook: { HostName: 'notebook', DNSName: 'notebook.example.test.', Online: true } },
+    });
+  }
+  return runCommand(command, args, options);
+}
+
+function notebookMesh(call, paired = true) {
+  return {
+    list: async () => ({ peers: [{ id: '0123456789abcdef', name: 'notebook', paired, online: true }] }),
+    call,
+  };
+}
 
 test('ssh config and failure helpers keep only concrete hosts and stable codes', () => {
   assert.deepEqual(parseSshConfig('Host a b\nHost *.x\nhost c # note\nHost !neg\n'), [{ alias: 'a', names: ['a', 'b'] }, { alias: 'c', names: ['c'] }]);
@@ -141,6 +162,91 @@ test('a Claude session continues here: fast-forward, uncommitted changes, paths 
   assert.ok(text.includes(JSON.stringify(here)) && !text.includes(w.notebook), 'cwd points at this machine');
   assert.deepEqual(w.created, [{ title: 'Claude', directory: here, argv: ['claude', '--resume', CLAUDE_ID] }]);
   assert.match(done.result.note, /git status/);
+});
+
+for (const status of [200, 201]) {
+  test(`self → paired notebook resumes through mesh and returns the remote terminal (${status})`, async t => {
+    const calls = [];
+    const terminal = { id: 'b'.repeat(24), title: 'Claude' };
+    const mesh = notebookMesh(async (...args) => { calls.push(args); return { status, body: terminal }; });
+    const w = await world(t, { mesh, runner: notebookTailnetRunner });
+    const { here, there } = await sharedRepo(w);
+    await claudeSession(w.self, here, CLAUDE_ID, 'REMOTE MESH');
+
+    const done = await w.fleet.wait(w.fleet.handoff({ from: 'self', to: 'ssh:notebook', kind: 'claude', session: CLAUDE_ID }).id, 60000);
+    assert.equal(done.status, 'done', JSON.stringify(done.error));
+    assert.deepEqual(calls, [['0123456789abcdef', {
+      method: 'POST', target: '/api/fleet/resume',
+      body: { kind: 'claude', session: CLAUDE_ID, directory: there },
+    }]]);
+    assert.equal(done.result.destination, there);
+    assert.deepEqual(done.result.command, ['claude', '--resume', CLAUDE_ID]);
+    assert.deepEqual(done.result.terminal, { ...terminal, node: '0123456789abcdef' });
+    assert.deepEqual(done.steps.map(step => step.name), ['session', 'project', 'git', 'copy', 'resume']);
+    const { at, ...resume } = done.steps.at(-1);
+    assert.deepEqual(resume, { name: 'resume', terminal: terminal.id, title: terminal.title, node: '0123456789abcdef' });
+    const copied = await readFile(path.join(w.notebook, '.claude', 'projects', there.replace(/[^A-Za-z0-9]/g, '-'), `${CLAUDE_ID}.jsonl`), 'utf8');
+    assert.match(copied, /REMOTE MESH/);
+    assert.ok(copied.includes(JSON.stringify(there)) && !copied.includes(w.self), 'the remote copy has its cwd rewritten');
+    assert.deepEqual(w.created, [], 'no local terminal is created');
+  });
+}
+
+for (const failure of [
+  { name: 'non-success status', answer: { status: 503, body: { errorCode: 'TERMINAL_UNAVAILABLE' } }, code: 'TERMINAL_UNAVAILABLE' },
+  { name: 'exception', error: new Error('mesh offline'), code: 'FLEET_RESUME_FAILED' },
+]) {
+  test(`remote resume falls back to manual without losing the copy on ${failure.name}`, async t => {
+    const calls = [];
+    const mesh = notebookMesh(async (...args) => {
+      calls.push(args);
+      if (failure.error) throw failure.error;
+      return failure.answer;
+    });
+    const w = await world(t, { mesh, runner: notebookTailnetRunner });
+    const { here, there } = await sharedRepo(w);
+    const source = path.join(await claudeSession(w.self, here, CLAUDE_ID, 'COPY SURVIVES'), `${CLAUDE_ID}.jsonl`);
+    const original = await readFile(source, 'utf8');
+
+    const done = await w.fleet.wait(w.fleet.handoff({ from: 'self', to: 'ssh:notebook', kind: 'claude', session: CLAUDE_ID }).id, 60000);
+    assert.equal(done.status, 'done', JSON.stringify(done.error));
+    assert.equal(done.error, null, 'resume failure does not fail the completed handoff');
+    assert.equal(calls.length, 1);
+    assert.equal(done.result.destination, there);
+    assert.equal(done.result.terminal, null);
+    assert.deepEqual(done.result.command, ['claude', '--resume', CLAUDE_ID]);
+    const { at, ...resume } = done.steps.at(-1);
+    assert.deepEqual(resume, { name: 'resume', manual: true, error: failure.code });
+    assert.ok(done.steps.some(step => step.name === 'copy' && step.files > 0));
+    const copied = await readFile(path.join(w.notebook, '.claude', 'projects', there.replace(/[^A-Za-z0-9]/g, '-'), `${CLAUDE_ID}.jsonl`), 'utf8');
+    assert.match(copied, /COPY SURVIVES/);
+    assert.ok(copied.includes(JSON.stringify(there)) && !copied.includes(w.self));
+    assert.equal(await readFile(source, 'utf8'), original, 'the source is also untouched');
+    assert.deepEqual(w.created, []);
+  });
+}
+
+test('an unpaired notebook keeps the manual resume command and never calls mesh', async t => {
+  const calls = [];
+  const mesh = notebookMesh(async (...args) => { calls.push(args); return { status: 201, body: { id: 'unexpected' } }; }, false);
+  const w = await world(t, { mesh, runner: notebookTailnetRunner });
+  const { here, there } = await sharedRepo(w);
+  await claudeSession(w.self, here, CLAUDE_ID, 'UNPAIRED COPY');
+  const listing = await w.fleet.inventory();
+  assert.deepEqual(listing.machines.find(machine => machine.id === 'ssh:notebook').mesh, {
+    id: '0123456789abcdef', paired: false, online: true, version: null, controlsMe: false,
+  }, 'the destination is mapped to the mesh peer but is not paired');
+
+  const done = await w.fleet.wait(w.fleet.handoff({ from: 'self', to: 'ssh:notebook', kind: 'claude', session: CLAUDE_ID }).id, 60000);
+  assert.equal(done.status, 'done', JSON.stringify(done.error));
+  assert.deepEqual(calls, []);
+  assert.equal(done.result.terminal, null);
+  assert.equal(done.result.destination, there);
+  assert.deepEqual(done.result.command, ['claude', '--resume', CLAUDE_ID]);
+  const { at, ...resume } = done.steps.at(-1);
+  assert.deepEqual(resume, { name: 'resume', manual: true });
+  assert.match(await readFile(path.join(w.notebook, '.claude', 'projects', there.replace(/[^A-Za-z0-9]/g, '-'), `${CLAUDE_ID}.jsonl`), 'utf8'), /UNPAIRED COPY/);
+  assert.deepEqual(w.created, []);
 });
 
 test('a dirty or diverged destination stops the transfer with a clear code and nothing is lost', async t => {

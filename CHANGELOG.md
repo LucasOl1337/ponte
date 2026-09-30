@@ -27,6 +27,14 @@ versionCode 21). See docs/fleet.md.
   Jcode copies); by hand, notebook → PC for Claude (history reopened), PC → notebook for Codex
   (resumed with history), Jcode resumed here, and the phone card in the two-node lab (list,
   a diverged refusal, a successful "Continue here" and "Open terminal"). `npm test`: 398 pass.
+- Follow-up verification: a synthetic Claude conversation went PC → notebook through the
+  running fleet job, and its resume opened a terminal on the paired mesh node over TLS.
+  Reading that terminal through `ponte ctl --node ... terminals read` showed the original
+  history and the notebook's rewritten cwd, after approving only the synthetic folder's
+  trust prompt. The terminal was closed and both test copies archived, not deleted.
+  Five new regression cases cover remote resume (HTTP 200/201), HTTP failure, exceptions
+  and an unpaired destination, preserving the copied history and manual command on failure.
+  `npm test`: 403 pass, 1 skip. The real phone card remains unverified: Redmi was offline.
 
 ## 0.1.0-alpha.31 (2026-09-29)
 
