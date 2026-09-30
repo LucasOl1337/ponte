@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { mkdir, readFile, lstat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { isIPv4 } from 'node:net';
@@ -108,7 +108,13 @@ export function createFleet(options = {}) {
   const runner = options.runner || runCommand;
   const home = options.home || env.HOME || os.homedir();
   const dataDir = options.dataDir;
-  const controlDir = path.join(dataDir, 'fleet');
+  // A Unix socket path has ~104 usable bytes and ssh adds a 17-byte temporary
+  // suffix to the 40-byte %C while it binds: a long dataDir moves the sockets
+  // to a short private folder under the runtime dir instead.
+  const SOCKET_BUDGET = 100 - 1 - 40 - 17;
+  const runtimeBase = env.XDG_RUNTIME_DIR && path.isAbsolute(env.XDG_RUNTIME_DIR) ? env.XDG_RUNTIME_DIR : os.tmpdir();
+  const controlDir = path.join(dataDir, 'fleet').length <= SOCKET_BUDGET ? path.join(dataDir, 'fleet')
+    : path.join(runtimeBase, `ponte-fleet-${createHash('sha256').update(path.resolve(dataDir)).digest('hex').slice(0, 10)}`);
   const sshBin = env.PONTE_SSH_BIN || 'ssh';
   const pythonBin = env.PONTE_PYTHON_BIN || 'python3';
   const tailscaleBin = env.PONTE_TAILSCALE_BIN || 'tailscale';
@@ -190,6 +196,8 @@ export function createFleet(options = {}) {
       if (device.lanIp) byIp.set(device.lanIp, machine);
       for (const name of [device.key, device.dns, shortHost(device.dns)]) if (name) byName.set(name.toLowerCase(), machine);
     }
+    // This machine is always there, Tailscale or not (a VPS may have none).
+    if (!machines.has('self')) machines.set('self', { id: 'self', name: clean(os.hostname(), 64) || 'localhost', tailnet: null, routes: [], mesh: null, kind: 'this' });
     for (const route of routes) {
       const host = route.hostname.toLowerCase();
       let machine = byIp.get(host) || byName.get(host) || byName.get(shortHost(host));
@@ -520,7 +528,8 @@ export function createFleet(options = {}) {
       }
     }
     const fromName = from.name, toName = to.name;
-    return { destination, command, terminal, from: fromName, to: toName, note: continuationNote({ fromName, toName, sourceGit, job }) };
+    return { destination, command, terminal, from: fromName, to: toName, note: continuationNote({ fromName, toName, sourceGit, job }),
+      noteText: { en: continuationNote({ fromName, toName, sourceGit, job }, 'en'), pt: continuationNote({ fromName, toName, sourceGit, job }, 'pt') } };
   }
 
   // A copied session resumed here, in a Ponte terminal (phone, Dev, `ctl`).
@@ -556,12 +565,16 @@ export function resumeCommand(kind, session) {
   return ['jcode', '--resume', session];
 }
 
-function continuationNote({ fromName, toName, sourceGit, job }) {
-  const parts = [`Sessão continuada de ${fromName} para ${toName} pelo Ponte.`];
+// What the resumed agent should know, in both languages for the UI.
+function continuationNote({ fromName, toName, sourceGit, job }, locale = 'pt') {
+  const pt = locale === 'pt';
+  const parts = [pt ? `Sessão continuada de ${fromName} para ${toName} pelo Ponte.` : `Session continued from ${fromName} to ${toName} by Ponte.`];
   if (sourceGit?.repo) {
-    parts.push(`Branch ${sourceGit.branch || '(detached)'} em ${String(sourceGit.head || '').slice(0, 9)}.`);
-    if ((sourceGit.changed || sourceGit.untracked) && job.git !== 'changes') parts.push(`${sourceGit.changed + sourceGit.untracked} arquivo(s) sem commit ficaram em ${fromName}.`);
+    const head = String(sourceGit.head || '').slice(0, 9);
+    parts.push(pt ? `Branch ${sourceGit.branch || '(detached)'} em ${head}.` : `Branch ${sourceGit.branch || '(detached)'} at ${head}.`);
+    const left = (sourceGit.changed || 0) + (sourceGit.untracked || 0);
+    if (left && job.git !== 'changes') parts.push(pt ? `${left} arquivo(s) sem commit ficaram em ${fromName}.` : `${left} uncommitted file(s) stayed on ${fromName}.`);
   }
-  parts.push('Confira `git status` antes de seguir.');
+  parts.push(pt ? 'Confira `git status` antes de seguir.' : 'Check `git status` before going on.');
   return parts.join(' ');
 }

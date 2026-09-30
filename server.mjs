@@ -256,7 +256,11 @@ export async function createApp(options = {}) {
     }
     if (type === 'fleet.probe') return fleet.probe(value.machine, { fresh: true });
     if (type === 'fleet.handoff') { const { type: _, ...rest } = value; return fleet.handoff(rest); }
-    if (type === 'fleet.job') return fleet.job(value.id);
+    // The phone's proxy gives up after 15 s: a short wait keeps polling cheap.
+    if (type === 'fleet.job') {
+      const wait = Number.isInteger(value.wait) ? Math.min(10, Math.max(0, value.wait)) : 0;
+      return wait ? fleet.wait(value.id, wait * 1000) : fleet.job(value.id);
+    }
     if (type === 'fleet.jobs') return fleet.jobs();
     throw new ApiError(400, 'FLEET_INVALID_REQUEST');
   }

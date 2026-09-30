@@ -440,3 +440,10 @@ body[data-keyboard-open=true] .terminal-page{padding-bottom:20px}
 .mesh-request{border-color:#6b7a3f;background:var(--lime-dim)}
 .mesh-buttons{display:flex;gap:6px;flex-shrink:0}
 .mesh-card .hint{margin-top:10px}
+.fleet-card .section-heading{margin-bottom:6px}
+.fleet-sessions-label{margin-top:18px}
+.fleet-row .fleet-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;background:#6b7563;vertical-align:middle}
+.fleet-row .fleet-dot.ok{background:var(--lime)}.fleet-row .fleet-dot.bad{background:var(--danger)}.fleet-row .fleet-dot.warn{background:#e5c07b}
+.fleet-row>div:first-child span{overflow-wrap:anywhere}
+.fleet-job{margin-top:12px;padding:11px 13px;border-radius:12px;border:1px solid #4b6139;background:#2a3422;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.fleet-job.error{border-color:#744c3c;background:#49302966;color:var(--danger)}

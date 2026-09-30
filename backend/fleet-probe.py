@@ -280,7 +280,7 @@ def claude_summary(path):
             entry = record['entrypoint']
         if kind == 'user' and not record.get('isSidechain') and not record.get('isMeta'):
             text = user_text((record.get('message') or {}).get('content'))
-            if text and not text.startswith('<') and not text.startswith('[auto]'):
+            if text and not text.startswith(('<', '[')):  # tags, [auto], [Request interrupted by user]
                 prompt = text
     folder = os.path.basename(os.path.dirname(path))
     for candidate in (start_cwd, cwd):
@@ -603,6 +603,10 @@ def fast_forward(directory, ref, branch):
             out({'ok': True, 'action': 'ahead'})
             return
         fail('DIVERGED', branch=branch)
+    # A fast-forward over local edits could stop halfway or mix them in: the
+    # owner decides what to do with them first.
+    if dirty:
+        fail('DEST_DIRTY', dir=short(root), branch=branch)
     git(root, 'merge', '--ff-only', '--quiet', target)
     out({'ok': True, 'action': 'fast-forward', 'from': head_sha, 'to': target})
 

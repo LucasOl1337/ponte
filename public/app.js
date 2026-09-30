@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.31';
+const UI_VERSION = '0.1.0-alpha.32';
 let token = '';
 let state = null;
 let connected = false;
@@ -232,6 +232,132 @@ document.addEventListener('click', async event => {
   } finally { button.disabled = false; }
 });
 
+// ------------------------------------------------------------------- fleet
+// Every machine the home node reaches (tailnet, ~/.ssh/config, mesh), the health
+// of each SSH route, and agent sessions on the others that can continue here.
+// Always the home node's view (home:true), through /api/action like the mesh,
+// since the phone's proxy only relays /api/state and /api/action.
+let fleetInfo = null, fleetLoadedAt = 0, fleetBusy = false, fleetJob = null, fleetSignature = '';
+const FLEET_REFRESH_MS = 60000;
+async function fleetAction(type, payload = {}, timeout = 14000) {
+  const response = await api('/action', { method:'POST', home:true, timeout, headers:{'Content-Type':'application/json'}, body:JSON.stringify({type,...payload}) });
+  return response.json();
+}
+async function loadFleet(fresh = false) {
+  if (fleetBusy || !meshSelf()) return;
+  if (!fresh && fleetInfo && Date.now() - fleetLoadedAt < FLEET_REFRESH_MS) return;
+  fleetBusy = true; renderFleet();
+  try { fleetInfo = await fleetAction('fleet.list', { deep:true, fresh }); fleetLoadedAt = Date.now(); }
+  catch (error) { if (fresh) toast(error, true); }
+  finally { fleetBusy = false; renderFleet(); }
+}
+function fleetHealth(health) {
+  return ({ ok:[t('Conectada'),'ok'], unchecked:[t('Não conferida'),''], unreachable:[t('Sem conexão'),'bad'], degraded:[t('Instável'),'warn'], offline:[t('Offline'),''], 'no-ssh':[t('Sem SSH'),''] })[health] || [t('Desconhecida'),''];
+}
+const fleetKindLabel = kind => ({ claude:'Claude Code', codex:'Codex', jcode:'Jcode' })[kind] || kind;
+function fleetMachineLine(machine) {
+  const [label] = fleetHealth(machine.health);
+  const parts = [label];
+  const route = (machine.routes || []).find(item => item.alias === machine.sshAlias);
+  if (machine.id !== 'self' && route?.check) parts.push(route.check.ok ? t('SSH {ms} ms',{ms:route.check.ms}) : t('SSH: {code}',{code:route.check.code}));
+  const link = machine.tailnet?.link;
+  if (link === 'direct') parts.push(t('Tailscale direto'));
+  else if (link === 'relay') parts.push(t('Tailscale via relay {relay}',{relay:machine.tailnet.relay || ''}));
+  const tools = Object.entries(machine.probe?.tools || {}).filter(([name, ok]) => ok && ['claude','codex','jcode'].includes(name)).map(([name]) => fleetKindLabel(name));
+  if (tools.length) parts.push(tools.join(', '));
+  const open = (machine.probe?.agents || []).length;
+  if (open) parts.push(i18n.plural('{count} agente aberto','{count} agentes abertos',open));
+  return parts.join(' · ');
+}
+function fleetRemoteSessions() {
+  const here = (fleetInfo?.machines || []).find(machine => machine.id === 'self');
+  const tools = here?.probe?.tools || {};
+  const items = [];
+  for (const machine of fleetInfo?.machines || []) {
+    if (machine.id === 'self' || !machine.probe?.ok) continue;
+    for (const session of machine.probe.sessions || []) if (tools[session.kind] !== false) items.push({ ...session, machine:machine.id, machineName:machine.name });
+  }
+  return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 12);
+}
+function renderFleetJob() {
+  const box = $('#fleet-job');
+  if (!fleetJob) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const job = fleetJob;
+  box.classList.toggle('error', job.status === 'failed');
+  const steps = { session:t('sessão lida'), project:t('projeto encontrado'), clone:t('projeto clonado'), git:t('código atualizado'), changes:t('mudanças aplicadas'), copy:t('conversa copiada'), resume:t('agente reaberto') };
+  const done = (job.steps || []).map(step => steps[step.name]).filter(Boolean).join(' · ');
+  if (job.status === 'running') { box.innerHTML = `<strong>${h('Continuando {kind} de {name}…',{kind:fleetKindLabel(job.kind),name:job.fromName || ''})}</strong><br>${escaped(done)}`; return; }
+  if (job.status === 'failed') {
+    const text = job.error?.text?.[i18n.language === 'pt' ? 'pt' : 'en'] || job.error?.code || t('Não foi possível concluir a ação.');
+    const retry = job.error?.code === 'FLEET_SESSION_LIVE' || job.error?.code === 'FLEET_DEST_NEWER';
+    box.innerHTML = `${escaped(text)}${retry ? `<div class="mesh-buttons" style="margin-top:8px"><button type="button" class="button small" data-fleet-force="1">${h('Continuar mesmo assim')}</button></div>` : ''}`;
+    return;
+  }
+  const terminal = job.result?.terminal;
+  box.innerHTML = `<strong>${h('{kind} continua aqui.',{kind:fleetKindLabel(job.kind)})}</strong><br>${escaped(job.result?.noteText?.[i18n.language === 'pt' ? 'pt' : 'en'] || job.result?.note || '')}${terminal?.id ? `<div class="mesh-buttons" style="margin-top:8px"><button type="button" class="button small primary" data-fleet-open="${escaped(terminal.id)}">${h('Abrir terminal')}</button></div>` : ''}`;
+}
+function renderFleet() {
+  const card = $('#fleet-card');
+  card.hidden = !meshSelf();
+  if (card.hidden) return;
+  $('#fleet-refresh').disabled = fleetBusy;
+  renderFleetJob();
+  const signature = JSON.stringify([fleetInfo?.checkedAt, fleetBusy, fleetJob?.status, i18n.language]);
+  if (signature === fleetSignature) return;
+  fleetSignature = signature;
+  const machines = fleetInfo?.machines || [];
+  const order = { ok:0, degraded:1, unchecked:2, unreachable:3, 'no-ssh':4, offline:5 };
+  // Machines an agent can work on come first; phones and devices with no
+  // SSH route or offline fold into one line so the useful ones stay in view.
+  const workable = machine => machine.id === 'self' || (machine.kind !== 'phone' && !!machine.sshAlias);
+  const others = machines.filter(machine => !workable(machine));
+  const othersLine = others.length ? `<p class="hint">${h('Também no Tailscale: {names}.',{names:others.map(machine => `${machine.name} (${fleetHealth(machine.health)[0].toLowerCase()})`).join(', ')})}</p>` : '';
+  $('#fleet-machines').innerHTML = machines.length ? machines.filter(workable).sort((a, b) => (a.id === 'self' ? -1 : b.id === 'self' ? 1 : (order[a.health] ?? 6) - (order[b.health] ?? 6)))
+    .map(machine => {
+      const [, tone] = fleetHealth(machine.health);
+      const name = machine.id === 'self' ? t('{name} · este aparelho',{name:machine.name}) : machine.name;
+      return `<div class="mesh-row fleet-row"><div><strong><i class="fleet-dot ${tone}"></i>${escaped(name)}</strong><span>${escaped(fleetMachineLine(machine))}</span></div></div>`;
+    }).join('') + othersLine : `<p class="hint">${h(fleetBusy ? 'Conferindo as conexões…' : 'Nenhuma máquina encontrada.')}</p>`;
+  const sessions = fleetRemoteSessions();
+  const busy = fleetJob?.status === 'running';
+  $('#fleet-sessions').innerHTML = sessions.length ? sessions.map(item => {
+    const where = [item.machineName, fleetKindLabel(item.kind), item.cwd, agentAgo(item.updatedAt), item.live ? t('aberto lá') : ''].filter(Boolean).join(' · ');
+    return `<div class="mesh-row fleet-row"><div><strong>${escaped(item.title || item.last || fleetKindLabel(item.kind))}</strong><span>${escaped(where)}</span></div><div class="mesh-buttons"><button type="button" class="button small primary" data-fleet-continue="${escaped(item.id)}" data-fleet-machine="${escaped(item.machine)}" data-fleet-kind="${escaped(item.kind)}"${busy ? ' disabled' : ''}>${h('Continuar aqui')}</button></div></div>`;
+  }).join('') : `<p class="hint">${h(fleetBusy ? 'Procurando sessões…' : 'Nenhuma sessão recente em outra máquina.')}</p>`;
+}
+async function fleetContinue(request) {
+  const from = (fleetInfo?.machines || []).find(machine => machine.id === request.from);
+  try {
+    let job = await fleetAction('fleet.handoff', request);
+    fleetJob = { ...job, fromName: from?.name || request.from, request };
+    renderFleet();
+    while (job.status === 'running') {
+      job = await fleetAction('fleet.job', { id: job.id, wait: 8 });
+      fleetJob = { ...job, fromName: fleetJob.fromName, request };
+      renderFleet();
+    }
+    if (job.status === 'done') { toast(t('{kind} continua aqui.',{kind:fleetKindLabel(job.kind)})); loadFleet(true); }
+  } catch (error) {
+    fleetJob = null; renderFleet(); toast(error, true);
+  }
+}
+function fleetOpenTerminal(id) {
+  if (targetNode) setTargetNode('');
+  const title = fleetKindLabel(fleetJob?.kind);
+  if (!terminalSessions.some(item => item.id === id)) terminalSessions.push({ id, title });
+  selectTerminal(id); terminalPaused = false; navigate('terminais');
+}
+$('#fleet-refresh').addEventListener('click', () => loadFleet(true));
+document.addEventListener('click', event => {
+  const go = event.target.closest('[data-fleet-continue]');
+  if (go && !go.disabled) { fleetContinue({ from:go.dataset.fleetMachine, to:'self', kind:go.dataset.fleetKind, session:go.dataset.fleetContinue }); return; }
+  const force = event.target.closest('[data-fleet-force]');
+  if (force && fleetJob?.request) { fleetContinue({ ...fleetJob.request, force:true }); return; }
+  const open = event.target.closest('[data-fleet-open]');
+  if (open) fleetOpenTerminal(open.dataset.fleetOpen);
+});
+
 function showPairing(error = '') {
   leaveScreen(); clearScreenImage(); cancelPendingRecording();
   clearTimeout(terminalTimer); terminalGeneration++; terminalDrafts.clear(); terminalId = ''; terminalSessions = []; terminalText = null;
@@ -432,7 +558,7 @@ function renderVisiblePage() {
   if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
   else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
   else if (currentPage === 'tela') renderScreenWorkspaces();
-  if (currentPage === 'inicio') loadStartProjects();
+  if (currentPage === 'inicio') { loadStartProjects(); renderFleet(); loadFleet(); }
 }
 // Omarchy lives on numbered workspaces (Super+1…0). The screen gets the same
 // row: the workspace the streamed monitor shows is lit, a dot marks the ones
@@ -2721,7 +2847,7 @@ document.addEventListener('ponte-language-change', () => {
   $$(ownedText).forEach(element => { element.textContent = t(element.textContent); });
   const bannerError = i18n.read($('#connection-banner-text'));
   setConnection(connected,bannerError);
-  if (state) { renderedAllOnce = false; renderState(); updateCapabilities(); renderDesktopTerminals(); }
+  if (state) { renderedAllOnce = false; renderState(); updateCapabilities(); renderDesktopTerminals(); renderFleet(); }
   else {
     $('#hostname').textContent = t('Conectando…');
     $('#dialog-hostname').textContent = t('Seu Omarchy');

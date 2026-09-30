@@ -2,6 +2,32 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.32 (2026-09-30)
+
+Ponte becomes a hub for the machines you reach over Tailscale and SSH: it lists them, checks
+each route and lets an agent session started on one computer continue on another (notebook at
+the office, PC at home). Only the server and the page change; the APK does not (still
+versionCode 21). See docs/fleet.md.
+
+- **Machines and connections.** One list from `tailscale status`, the concrete hosts of
+  `~/.ssh/config` (resolved with `ssh -G`) and the mesh. Each key route is checked through a
+  private SSH master (latency, or `TIMEOUT`/`DNS`/`REFUSED`/`AUTH`/`HOST_KEY`/...), and each
+  reachable machine is probed for its agents and recent Claude Code, Codex and Jcode sessions
+  by a stdlib Python script sent over SSH: nothing is installed there.
+- **Continue here.** A handoff job brings the project by fast-forward (a git bundle of the
+  missing commits), optionally carries uncommitted changes as a patch, copies the session with
+  its paths rewritten and resumes it in a Ponte terminal (`claude --resume`, `codex resume`,
+  `jcode --resume`). A dirty destination, a diverged branch, an open agent or a newer copy
+  stops it with a `FLEET_*` code and en/pt text; nothing is discarded.
+- **Where.** Home card "Machines and connections" on the phone (through `/api/action`, which
+  the phone's proxy relays), `./ponte fleet [list --check|sessions|continue]`, and
+  `ponte ctl fleet ...` for agents.
+- Verified: `tests/fleet.test.mjs` runs real handoffs between two homes through a fake `ssh`
+  (fast-forward plus patch, dirty and diverged refusals, `DEST_NEWER` with backup, Codex and
+  Jcode copies); by hand, notebook → PC for Claude (history reopened), PC → notebook for Codex
+  (resumed with history), Jcode resumed here, and the phone card in the two-node lab (list,
+  a diverged refusal, a successful "Continue here" and "Open terminal"). `npm test`: 398 pass.
+
 ## 0.1.0-alpha.31 (2026-09-29)
 
 The remote desktop page now tells the watched computer which frame arrived, so an internet
