@@ -29,6 +29,7 @@ import sqlite3
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 VERSION = 1
@@ -292,6 +293,16 @@ def claude_summary(path):
     return {'title': title, 'cwd': cwd, 'branch': branch, 'prompt': prompt, 'entry': entry}
 
 
+def scratch(cwd):
+    """A throwaway session: started in a temp directory, outside the home. By
+    path, not by substring (~/Projects/app/tmp is a project), and never inside
+    the home, which may itself live in a temp directory (containers, CI)."""
+    inside = lambda path, root: path == root or path.startswith(root.rstrip('/') + '/')
+    if HOME not in ('', '/') and inside(cwd, HOME):
+        return False
+    return any(inside(cwd, root) for root in {'/tmp', '/var/tmp', tempfile.gettempdir()} if root)
+
+
 def claude_sessions(since):
     base = os.path.join(CLAUDE, 'projects')
     found = []
@@ -320,7 +331,7 @@ def claude_sessions(since):
         info = claude_summary(path)
         if info['entry'] not in (None, 'cli'):
             continue  # claude -p and SDK runs: nothing to continue by hand
-        if not info['cwd'] or '/tmp/' in info['cwd'] or info['cwd'].startswith('/tmp'):
+        if not info['cwd'] or scratch(info['cwd']):
             continue
         result.append({'kind': 'claude', 'id': session_id, 'title': one_line(info['title'] or info['prompt'] or os.path.basename(info['cwd'])), 'last': one_line(info['prompt'], 200), 'cwd': short(info['cwd']), 'branch': info['branch'], 'updatedAt': int(mtime * 1000)})
         if len(result) >= SESSION_LIMIT:
