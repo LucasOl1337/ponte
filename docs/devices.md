@@ -1,6 +1,6 @@
 # Devices: one list of everything this node reaches
 
-The phone/browser Home and the CLI ask their home node for the same list: each computer or phone on the mesh, the tailnet, `~/.ssh/config` and this node's adb, with its kind, status, routes and what can be done with it. The remote desktop (`rd.html`) migration is a later slice. The decision and the migration are in [ADR 0002](adr/0002-one-device-model.md); the words in [CONTEXT.md](../CONTEXT.md#devices-adr-0002).
+Every Ponte surface (the phone/browser Home and header selector, the remote desktop's picker, the CLI) asks its home node for the same list: each computer or phone on the mesh, the tailnet, `~/.ssh/config` and this node's adb, with its kind, status, routes and what can be done with it. The decision and the migration are in [ADR 0002](adr/0002-one-device-model.md); the words in [CONTEXT.md](../CONTEXT.md#devices-adr-0002).
 
 ```sh
 ./ponte devices            # the list

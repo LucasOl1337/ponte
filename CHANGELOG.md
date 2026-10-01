@@ -2,6 +2,28 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.39 (2026-10-01)
+
+One list of your devices on the phone's Home (ADR 0002, slice 4). Page and one new reason
+code; the installed APK keeps working.
+
+- **"Your devices" replaces the separate devices card and the machine list.** One row per
+  device (this PC, the notebook, servers, phones), with kind, state, routes (Ponte, Tailscale,
+  SSH, ADB) and one main action: View screen on the device on screen, otherwise Control,
+  Terminal or Ask for access; Agents and Sessions beside it, Revoke behind "…". When a device
+  cannot be reached the row says why, in words. Incoming requests come first; offline
+  unpaired devices fold under "Show N offline devices".
+- **The header selector reads the same list:** only what can be controlled from here, and the
+  device on screen stays selected if it goes offline.
+- **Agent sessions** are their own card again ("Continue here"), filtered by the selected
+  device with "show all".
+- New reason `SSH_NOT_LISTED`: the device has an SSH alias that is not in Ponte's
+  `ssh.hosts`, instead of "no route".
+- A slow deep check behind the alpha.24 APK's 15 s proxy timeout shows the error, keeps the
+  last good list and retries the cached read after 30 s.
+- Verified: `npm test` 472 pass, 1 skipped; two-node lab with the phone layout (pair, approve,
+  control the notebook, its screen).
+
 ## 0.1.0-alpha.38 (2026-10-01)
 
 The Screen tab: nothing on the PC stays stuck under a floating button, and messages leave.
