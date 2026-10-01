@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+# Synthetic `tailscale status --json` for the two-node lab (tools/lab/mesh.mjs):
+# made-up names on documentation addresses (RFC 5737), never the real tailnet.
+# PONTE_LAB_TITLE says which node is asking (it becomes Self).
+import json, os, sys
+
+DEVICES = [
+    # name, address, OS, online
+    ('pc-teste', '192.0.2.1', 'linux', True),
+    ('notebook-teste', '192.0.2.2', 'linux', True),
+    ('celular-teste', '192.0.2.3', 'android', True),
+    ('servidor-teste', '192.0.2.4', 'linux', True),
+    ('tablet-teste', '192.0.2.5', 'android', False),
+]
+
+
+def node(name, ip, system, online):
+    return {'HostName': name, 'DNSName': f'{name}.exemplo.ts.net.', 'TailscaleIPs': [ip], 'OS': system, 'Online': online,
+            'CurAddr': '', 'Relay': 'gru', 'Tags': [], 'LastSeen': '2026-10-01T09:00:00Z',
+            'sshHostKeys': ['lab'] if system == 'linux' else []}
+
+
+if sys.argv[1:2] != ['status']:
+    sys.exit('lab tailscale: only `status --json`')
+me = os.environ.get('PONTE_LAB_TITLE', 'pc-teste')
+selfDevice = next((item for item in DEVICES if item[0] == me), DEVICES[0])
+print(json.dumps({'BackendState': 'Running', 'MagicDNSSuffix': 'exemplo.ts.net', 'Self': node(*selfDevice),
+                  'Peer': {item[0]: node(*item) for item in DEVICES if item is not selfDevice}}))

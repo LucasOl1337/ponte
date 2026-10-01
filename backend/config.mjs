@@ -31,6 +31,14 @@ export function sshHosts(value) {
   return hosts;
 }
 
+// What kind of computer this node is (pc, notebook, server), shown in the
+// device list of every node. Unset: guessed from a system battery.
+function nodeKind(value) {
+  if (value === undefined) return null;
+  if (!['pc', 'notebook', 'server'].includes(value)) throw new Error('node.kind must be pc, notebook or server.');
+  return value;
+}
+
 function port(value, name) {
   if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error(`${name} must be a port from 1 to 65535.`);
   return value;
@@ -58,6 +66,7 @@ export function runtimeSettings(config = {}, env = process.env) {
     trustedHosts: env.OMARCHY_REMOTE_TRUSTED_HOSTS !== undefined ? env.OMARCHY_REMOTE_TRUSTED_HOSTS.split(',').filter(Boolean) : (config.trustedHosts || []),
     nativeTls: null,
     sshHosts: sshHosts(config.ssh?.hosts),
+    nodeKind: nodeKind(config.node?.kind),
   };
   if (!Array.isArray(settings.trustedHosts) || settings.trustedHosts.some(value => typeof value !== 'string')) throw new Error('trustedHosts must be an array of hostnames.');
   const tls = config.nativeTls;

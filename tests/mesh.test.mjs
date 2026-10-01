@@ -48,7 +48,7 @@ function fakeDesktop(hostname) {
 
 // One node: its own dataDir, CA, owner token, loopback HTTP and tailnet TLS
 // listener (both on 127.0.0.1 here). Discovery and the whois are injected.
-async function node(t, { key, name, discover, identity, meshOptions = {}, rdOptions, notify }) {
+async function node(t, { key, name, discover, identity, meshOptions = {}, rdOptions, notify, appOptions = {} }) {
   const root = await mkdtemp(path.join(os.tmpdir(), `ponte-mesh-${key}-`));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, 'public'));
@@ -58,7 +58,7 @@ async function node(t, { key, name, discover, identity, meshOptions = {}, rdOpti
   const app = await createApp({
     rootDir: root, dataDir: path.join(root, 'private'), token: TOKENS[key], env: {}, nativeTls: { cert: tls.cert, key: tls.key }, caPem: tls.ca,
     desktop, audio: { close: async () => {} }, tailnetIdentity: identity,
-    meshOptions: { name, enabled: true, discover, pollInterval: 40, ...meshOptions }, rdOptions, notify,
+    meshOptions: { name, enabled: true, discover, pollInterval: 40, ...meshOptions }, rdOptions, notify, ...appOptions,
   });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   await new Promise(resolve => app.nativeServer.listen(0, '127.0.0.1', resolve));
@@ -98,8 +98,8 @@ async function until(check, what, timeout = 4000) {
 
 async function twoNodes(t, options = {}) {
   let a, b;
-  a = await node(t, { key: 'a', name: 'pc-teste', identity: options.identityA || owner, discover: async () => [{ ip: '127.0.0.1', port: b.nativePort }] });
-  b = await node(t, { key: 'b', name: 'notebook-teste', identity: options.identityB || owner, discover: async () => [{ ip: '127.0.0.1', port: a.nativePort }], meshOptions: options.meshB, rdOptions: options.rdB, notify: options.notifyB });
+  a = await node(t, { key: 'a', name: 'pc-teste', identity: options.identityA || owner, discover: async () => [{ ip: '127.0.0.1', port: b.nativePort }], meshOptions: options.meshA, appOptions: options.appA });
+  b = await node(t, { key: 'b', name: 'notebook-teste', identity: options.identityB || owner, discover: async () => [{ ip: '127.0.0.1', port: a.nativePort }], meshOptions: options.meshB, rdOptions: options.rdB, notify: options.notifyB, appOptions: options.appB });
   return { a, b };
 }
 
@@ -122,7 +122,8 @@ test('identity: a stable random id and the given name in node.json, private', as
   assert.equal((await stat(path.join(a.dataDir, 'node.json'))).mode & 0o777, 0o600);
   const hello = await a.remote('/api/mesh/hello');
   assert.equal(hello.status, 200);
-  assert.deepEqual(Object.keys(hello.json).sort(), ['caPem', 'name', 'nodeId', 'nodeName', 'os', 'version']);
+  assert.deepEqual(Object.keys(hello.json).sort(), ['caPem', 'kind', 'name', 'nodeId', 'nodeName', 'os', 'version']);
+  assert.ok(['pc', 'notebook', 'server'].includes(hello.json.kind));
   assert.equal(hello.json.name, 'Ponte'); assert.equal(hello.json.nodeId, a.mesh.id); assert.equal(hello.json.caPem, a.tls.ca);
   const again = await createMesh({ dataDir: a.dataDir, enabled: false, env: {} });
   assert.equal(again.id, a.mesh.id, 'the id survives a restart');
@@ -520,4 +521,37 @@ test('rd relay: the owner on A drives B through /api/rd?node=, B sees a peer and
   late.ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKENS.a }));
   assert.equal((await late.next(m => m.t === 'error', 'error')).code, 'PEER_REVOKED');
   assert.equal(a.mesh.isPeer(b.mesh.id), false);
+});
+
+// The device list (ADR 0002) on two real nodes: the fleet is a stub here (the
+// real one would read this machine's tailnet and ~/.ssh/config).
+test('devices: the home node lists itself and its paired node with kind and routes; owner only, never relayed', async t => {
+  const fleet = { overview: async () => ({ tailnet: { state: 'Running' }, machines: [] }) };
+  const app = { fleet, devicesOptions: { adb: false } };
+  const { a, b } = await twoNodes(t, { meshA: { kind: 'pc' }, meshB: { kind: 'notebook' }, appA: app, appB: app });
+  assert.equal((await b.remote('/api/mesh/hello')).json.kind, 'notebook');
+  const before = await json(await a.local('/api/devices?deep=1'));
+  assert.equal(before.status, 200, JSON.stringify(before.body));
+  assert.equal(before.body.v, 1);
+  assert.deepEqual(before.body.devices.map(item => [item.name, item.kind, item.routes[0].state]), [['pc-teste', 'pc', 'self'], ['notebook-teste', 'notebook', 'available']]);
+  assert.deepEqual(before.body.devices[1].can.pair, { ok: true, via: 'ponte' });
+  await pairAtoB(a, b);
+  const listing = await json(await a.local('/api/action', { method: 'POST', body: { type: 'devices.list', deep: true } }));
+  assert.equal(listing.status, 200, JSON.stringify(listing.body));
+  const notebook = listing.body.devices.find(item => item.id === b.mesh.id);
+  assert.equal(notebook.status, 'online');
+  assert.deepEqual(notebook.can.control, { ok: true, via: 'ponte' });
+  // B sees who controls it.
+  const seen = await json(await b.local('/api/devices'));
+  assert.deepEqual(seen.body.devices.find(item => item.id === a.mesh.id).routes[0].controlsMe, true);
+  // Old formats do not change: /api/mesh peers carry no kind or address.
+  const mesh = await json(await a.local('/api/mesh'));
+  for (const field of ['kind', 'ip']) assert.equal(field in mesh.body.peers[0], false, field);
+  assert.equal('kind' in mesh.body.self, false);
+  // Never relayed, never for a peer.
+  assert.equal((await json(await a.local(`/api/devices?node=${b.mesh.id}`))).body.errorCode, 'MESH_INVALID_REQUEST');
+  assert.equal((await json(await a.local(`/api/action?node=${b.mesh.id}`, { method: 'POST', body: { type: 'devices.list' } }))).body.errorCode, 'MESH_OWNER_ONLY');
+  const token = JSON.parse(await readFile(path.join(a.dataDir, 'mesh.json'), 'utf8')).peers[0].token;
+  assert.equal((await b.remote('/api/devices', { token })).json.errorCode, 'MESH_OWNER_ONLY');
+  assert.equal((await b.remote('/api/action', { method: 'POST', token, body: { type: 'devices.list' } })).json.errorCode, 'MESH_OWNER_ONLY');
 });

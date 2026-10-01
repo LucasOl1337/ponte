@@ -2,6 +2,8 @@
 
 Ponte's home node sees every machine you reach: the devices on your Tailscale, the concrete `Host` entries of `~/.ssh/config` and the Ponte mesh. For each one it checks the SSH route (latency or a stable error code), reads what agents it has, and lets a Claude Code, Codex or Jcode session started on one machine continue on another. The typical case: work on the notebook at the office, get home, continue the same conversation on the PC.
 
+The [device list](devices.md) (`./ponte devices`, `/api/devices`) combines these machines with the mesh and adb into one entity per device.
+
 Nothing is installed on the other machines. The probe (`backend/fleet-probe.py`, stdlib only, Python 3.8+) goes over SSH as `python3 -` on stdin.
 
 ## Look

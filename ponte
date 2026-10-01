@@ -1137,6 +1137,45 @@ def fleet_main(argv, sleep=time.sleep):
         print(result['note'])
 
 
+def device_route(route):
+    via = route.get('via')
+    if via == 'ponte':
+        return 'ponte' if route.get('state') == 'self' else f"ponte:{route.get('state')}" + (' (controls this)' if route.get('controlsMe') else '')
+    if via == 'tailscale':
+        return f"tailscale:{route.get('link')}" if route.get('online') and route.get('link') else 'tailscale' if route.get('online') else 'tailscale:offline'
+    if via == 'ssh':
+        check = route.get('check')
+        state = 'unchecked' if not check else f"{check.get('ms')}ms" if check.get('ok') else check.get('code') or 'failed'
+        return f"ssh:{route.get('alias')}:{state}"
+    if via == 'adb':
+        return f"adb:{route.get('state')}"
+    return str(via)
+
+
+def print_devices(listing):
+    home = listing.get('home') or {}
+    print(f"This device: {home.get('name')} ({home.get('id')})")
+    for device in listing.get('devices') or []:
+        routes = ' '.join(device_route(route) for route in device.get('routes') or []) or '-'
+        can = ' '.join(name for name, value in (device.get('can') or {}).items() if value.get('ok') and name != 'info') or '-'
+        mark = ' *' if device.get('self') else ''
+        print(f"  {device.get('name') + mark:<22} {device.get('kind'):<9} {device.get('status'):<8} {routes:<44} {can}")
+        print(f"  {'':<22} {device.get('id')}")
+    for item in listing.get('requests') or []:
+        print(f"Request: {item.get('name')} asks to control this device, code {item.get('code')}. ./ponte mesh approve {item.get('code')}")
+
+
+def devices_main(argv):
+    parser = argparse.ArgumentParser(prog='ponte devices', description='Every device this node reaches (Ponte mesh, Tailscale, SSH, adb): kind, status, routes and what can be done with it. The same list every Ponte surface shows.')
+    parser.add_argument('--check', action='store_true', help='Check every SSH route and probe each machine now (slower).')
+    parser.add_argument('--json', action='store_true', help='Print the server answer as JSON.')
+    args = parser.parse_args(argv)
+    config_file, _, _ = paths()
+    route = '/devices?deep=1&fresh=1' if args.check else '/devices'
+    result = local_api(config_file, 'GET', route, timeout=60)
+    return print(json.dumps(result, indent=2)) if args.json else print_devices(result)
+
+
 def pc_main(argv):
     # SSH-friendly local control over Tailscale. Reuses the Node desktop actions
     # (power, lock, unlock, monitors, RGB) validated by the server, so `ssh
@@ -1327,10 +1366,13 @@ def main():
     if sys.argv[1:2] == ['fleet']:
         fleet_main(sys.argv[2:])
         return
+    if sys.argv[1:2] == ['devices']:
+        devices_main(sys.argv[2:])
+        return
     if sys.argv[1:2] == ['rd']:
         rd_main(sys.argv[2:])
         return
-    parser = argparse.ArgumentParser(description=__doc__, epilog='Desktop app: ./ponte desktop (control Android from this PC). Agent control: ./ponte ctl help. Offline discovery: ./ponte ctl schema or ./ponte desktop schema. Remote desktop: ./ponte rd [device]. Other groups: ./ponte pc --help, ./ponte phone --help, ./ponte mesh --help and ./ponte fleet --help.')
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Desktop app: ./ponte desktop (control Android from this PC). Agent control: ./ponte ctl help. Offline discovery: ./ponte ctl schema or ./ponte desktop schema. Remote desktop: ./ponte rd [device]. Other groups: ./ponte devices --help, ./ponte pc --help, ./ponte phone --help, ./ponte mesh --help and ./ponte fleet --help.')
     parser.add_argument('command', choices=['setup', 'install', 'uninstall', 'start', 'stop', 'restart', 'status', 'logs', 'doctor', 'renew-cert', 'pair', 'serve', 'android-config'])
     parser.add_argument('--local-only', action='store_true', help='Set up HTTP loopback only, without Tailscale or TLS.')
     parser.add_argument('--tailscale-ip', help='Explicit canonical Tailscale IPv4 instead of automatic detection.')

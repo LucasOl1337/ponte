@@ -25,6 +25,7 @@ import { createMesh, peerFailure } from './backend/mesh.mjs';
 import { acceptUpgrade, rejectUpgrade } from './backend/ws.mjs';
 import { createRemoteDesktop } from './backend/rd.mjs';
 import { createFleet } from './backend/fleet.mjs';
+import { createDevices } from './backend/devices.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -218,10 +219,11 @@ export async function createApp(options = {}) {
   // Other nodes pin this CA (or the self-signed leaf when there is no CA).
   const caPem = options.caPem || (settings?.nativeTls?.caFile ? await readFile(settings.nativeTls.caFile, 'utf8') : nativeTls?.cert ? String(nativeTls.cert) : null);
   const mesh = options.mesh || await createMesh({
-    dataDir: initialized.dataDir, env, identity: tailnetIdentity, version: uiVersion, caPem, selfPort: settings?.nativeTls?.port,
+    dataDir: initialized.dataDir, env, identity: tailnetIdentity, version: uiVersion, caPem, selfPort: settings?.nativeTls?.port, kind: settings?.nodeKind,
     enabled: !!settings?.nativeTls && env.PONTE_MESH !== '0', ...options.meshOptions,
   });
   const fleet = options.fleet || createFleet({ env, dataDir: initialized.dataDir, mesh, terminals, sshHosts: options.sshHosts || settings?.sshHosts, ...options.fleetOptions });
+  const devices = options.devices || createDevices({ env, mesh, fleet, ...options.devicesOptions });
   // The owner token, or a paired node's token over the tailnet listener only
   // (bound to that node's address). The RD WebSocket reuses this.
   function authenticate(token, req) {
@@ -436,7 +438,8 @@ export async function createApp(options = {}) {
       // relay, and a paired node never manages pairings here (no chains).
       const nodes = query.getAll('node');
       if (nodes.length > 1) throw new ApiError(400, 'REPEATED_PARAMETER');
-      const meshRoute = pathname === '/api/mesh' || pathname.startsWith('/api/mesh/');
+      // The pairings and the device list are always the home node's own.
+      const meshRoute = pathname === '/api/mesh' || pathname.startsWith('/api/mesh/') || pathname === '/api/devices';
       if (caller.kind === 'peer' && nodes.length) throw new ApiError(403, 'MESH_CHAIN_DENIED');
       if (caller.kind === 'peer' && meshRoute) throw new ApiError(403, 'MESH_OWNER_ONLY');
       if (nodes[0] && nodes[0] !== mesh.id) {
@@ -466,6 +469,11 @@ export async function createApp(options = {}) {
         await fleetRoute(req, res, pathname, query); return;
       }
       if (pathname === '/api/mesh' && req.method === 'GET') { json(res, 200, await mesh.list()); return; }
+      // Every device this node reaches, one model for every surface (ADR 0002).
+      if (pathname === '/api/devices' && req.method === 'GET') {
+        const flag = name => ['1', 'true'].includes(query.get(name));
+        json(res, 200, await limits.only('devices', 2, () => devices.list({ fresh: flag('fresh'), deep: flag('deep') }))); return;
+      }
       const meshAdmin = pathname.match(/^\/api\/mesh\/(pair|approve|deny|revoke)$/);
       if (meshAdmin && req.method === 'POST') {
         const value = await limits.only('body', 8, () => readJson(req, 4096));
@@ -498,6 +506,10 @@ export async function createApp(options = {}) {
           if (typeof value?.type === 'string' && value.type.startsWith('fleet.')) {
             if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
             json(res, value.type === 'fleet.handoff' ? 202 : 200, await fleetCall(value.type, value)); return;
+          }
+          if (value?.type === 'devices.list') {
+            if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
+            json(res, 200, await limits.only('devices', 2, () => devices.list({ fresh: value.fresh === true, deep: value.deep === true }))); return;
           }
           if (typeof value?.type === 'string' && value.type.startsWith('mesh.')) {
             if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
@@ -691,7 +703,7 @@ export async function createApp(options = {}) {
     })();
     return closingPromise;
   }
-  return { server, nativeServer, close, dataDir: initialized.dataDir, mesh, authenticate, rd };
+  return { server, nativeServer, close, dataDir: initialized.dataDir, mesh, devices, authenticate, rd };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

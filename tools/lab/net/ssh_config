@@ -1,0 +1,8 @@
+# Synthetic ~/.ssh/config for the two-node lab: nothing here is reachable.
+Host notebook-teste
+  HostName notebook-teste.exemplo.ts.net
+  Port 2222
+Host servidor-teste
+  HostName 192.0.2.4
+Host vm-trabalho
+  HostName 198.51.100.7
