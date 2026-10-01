@@ -127,6 +127,45 @@ test('a second session takes over: the first gets taken and is closed with 4001;
   assert.ok(app.rd.holder && app.rd.sessions[0] === app.rd.holder);
 });
 
+test('a view-only session never steals the holder, and an input-unavailable session owns nothing', async t => {
+  const inputs = [];
+  const options = {
+    inputMode: 'dry-run', readMonitors: async () => MONITORS, probe: async () => 0, exists: async () => true,
+    clipboard: fakeClipboard(), log: { info() {}, error() {} },
+    makeCapture: () => ({ start() {}, stop() {} }),
+    createInput: () => {
+      const input = { keys: 0, setMonitors() {}, start() {}, stop() {}, alive() {}, key() { this.keys++; } };
+      inputs.push(input);
+      return input;
+    },
+  };
+  const rd = createRemoteDesktop(options);
+  const unavailable = createRemoteDesktop({ ...options, inputMode: 'off' });
+  t.after(async () => { await rd.close(); await unavailable.close(); });
+  const open = async (desktop, hello = {}) => {
+    const ws = Object.assign(new EventEmitter(), {
+      readyState: 'open', bufferedAmount: 0, send() { return true; },
+      close(code, reason) { this.readyState = 'closed'; this.emit('close', code, reason); },
+    });
+    desktop.accept(ws, {}, { authorize: async () => ({ kind: 'owner' }) });
+    ws.emit('message', JSON.stringify({ t: 'hello', v: 1, token: TOKEN, ...hello }), false);
+    await new Promise(resolve => setImmediate(resolve));
+    return ws;
+  };
+  const controller = await open(rd);
+  const holder = rd.holder;
+  const viewer = await open(rd, { input: false });
+  assert.equal(controller.readyState, 'open');
+  assert.equal(rd.holder, holder);
+  assert.equal(rd.sessions.length, 2);
+  viewer.emit('message', JSON.stringify({ t: 'key', code: 'KeyA', down: true }), false);
+  controller.emit('message', JSON.stringify({ t: 'key', code: 'KeyB', down: true }), false);
+  assert.equal(inputs.length, 1);
+  assert.equal(inputs[0].keys, 1, 'only the controller feeds the helper');
+  await open(unavailable);
+  assert.equal(unavailable.holder, null);
+});
+
 test('the hello is required and checked: wrong token → PAIRING_REQUIRED and 1008; bad Origin → 403 before any upgrade', { skip: !canRun }, async t => {
   const { url, port } = await rdApp(t);
   const wrong = await client(url, { token: 'x'.repeat(46) });

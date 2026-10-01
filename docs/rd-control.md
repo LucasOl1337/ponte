@@ -1,73 +1,57 @@
 # Controle do teclado e do mouse no rd
 
-Como a página `rd.html` decide se o teclado e o mouse estão neste aparelho (o PC
-onde a janela está aberta) ou no aparelho da tela, e o que fica de fora.
+A página `rd.html` alterna entre o teclado e mouse deste aparelho e os do aparelho na tela.
 
-## O que a página faz sozinha
+## Alternar
 
-- **Ctrl+Alt+Shift** alterna nos dois sentidos, com ou sem tela cheia. Só
-  conta quando essas três são as únicas teclas apertadas, então Ctrl+Alt+Shift+T
-  continua sendo atalho daqui. As três nunca chegam no aparelho da tela.
-- **Clique na tela** começa a controlar. **Clique na barra** (fora do
-  indicador) devolve.
-- **Segurar Esc 2 s** sai da tela cheia e devolve.
-- O **indicador no meio da barra** diz pra onde as teclas vão
-  ("Teclado e mouse → notebook") e é clicável. Na troca aparece um aviso grande
-  no meio da tela por 1,2 s, e a borda da tela fica verde enquanto controla.
-- O **título da janela** ganha `⌨ nome · ` na frente enquanto controla. É isso
-  que o módulo do Hyprland abaixo usa.
-- Nas **Configurações** (engrenagem), o atalho pode também entrar em tela cheia
-  em vez de só alternar.
+- **Ctrl+X** alterna nos dois sentidos, com ou sem tela cheia. É reservado nesta janela, não recorta. Ctrl+Shift+X, Ctrl+Alt+X e Super+Ctrl+X não alternam. O Ctrl e o X da alternância não vão pro outro aparelho.
+- **Clique na tela** começa a controlar. **Clique na barra**, fora do indicador, devolve. A tela recebe o foco de teclado mesmo depois de trocar aparelho ou monitor pelo seletor.
+- **Segurar Esc 2 s** sai da tela cheia e devolve. Esc curto continua sendo tecla remota.
+- O **indicador da barra** diz pra onde as teclas vão e também alterna com um clique. Controlando, a tela tem borda verde e o título começa com `⌨ nome · `.
+- Ao perder o foco da janela ou esconder a página, o controle é devolvido e as teclas remotas são soltas. Ctrl+X pega de novo.
+- Nas **Configurações**, Ctrl+X pode também entrar em tela cheia em vez de só alternar.
 
 ## O limite do navegador
-
-Fora da tela cheia, o Chrome entrega à página letras, números, Ctrl+C/V e as
-setas, mas não as teclas que o próprio Chrome ou o Hyprland pegam antes:
 
 | Tecla | Na janela | Em tela cheia (Keyboard Lock) |
 | --- | --- | --- |
 | Letras, Ctrl+C/V, setas | vai | vai |
+| Ctrl+X | alterna, não recorta | alterna, não recorta |
 | Ctrl+T, Ctrl+W, Ctrl+N | fica no Chrome | vai |
-| Super e Super+qualquer | fica no Hyprland | vai |
-| Alt+Tab | fica no Hyprland | vai |
+| Super e Super+qualquer | depende do módulo Hyprland abaixo | vai |
+| Alt+Tab | depende do módulo Hyprland abaixo | vai |
 
-Medido na bancada em 2026-10-01: `navigator.keyboard.lock()` resolve fora da
-tela cheia, mas não tem efeito; Ctrl+T abriu aba nova. Em tela cheia, Ctrl+T/W,
-Super e Alt+Tab chegaram ao lab como `KEY_LEFTMETA` etc.
+Keyboard Lock só captura os atalhos do Chrome em tela cheia iniciada pela página. Fora dela, pedir `navigator.keyboard.lock()` não basta. Isso foi medido com o teclado da bancada e o lab em 2026-10-01.
 
-## Opcional: Super pro outro aparelho também na janela
+## Opcional: atalhos do Omarchy na janela
 
-O Hyprland entrega tecla à janela quando ela não tem atalho no submap atual.
-O módulo `tools/hypr/ponte_rd.lua` cria o submap `ponte-rd`, vazio a não ser
-pela saída de emergência, e entra nele só quando a janela ativa é o rd
-(classe `ponte-rd` ou `chrome-…__rd.html-…`) **e** o título começa com `⌨ `.
+`tools/hypr/ponte_rd.lua` cria o submap `ponte-rd` e entra nele só quando a janela ativa é o rd, classe `ponte-rd` ou `chrome-…__rd.html-…`, e o título começa com `⌨ `. As teclas sem bind no submap vão à janela. Assim Super e os atalhos do Omarchy podem chegar no aparelho remoto sem tela cheia.
 
-Sai do submap, devolvendo todos os atalhos do PC:
-
-- quando a página solta o controle (o título perde o `⌨`);
-- quando outra janela ganha o foco;
-- com **Super+Ctrl+Alt+Esc**, que nunca vai pro outro aparelho.
-
-O Chrome ainda pega Ctrl+T/W na janela; pra esses, a tela cheia continua sendo o
-caminho.
+Devolve os atalhos locais quando o título perde a marca, outra janela ganha foco, a janela fecha ou você aperta **Super+Ctrl+Alt+Esc**. Ctrl+X remove a marca na página, portanto devolve também o submap. O Chrome ainda pega Ctrl+T/W na janela.
 
 ```sh
-tools/hypr/ponte-rd-hypr.sh check     # valida a config inteira com o módulo, sem gravar nada
-tools/hypr/ponte-rd-hypr.sh install   # backup + módulo + 1 linha marcada no hyprland.lua
+tools/hypr/ponte-rd-hypr.sh check
+# Só o operador instala na sessão real:
+tools/hypr/ponte-rd-hypr.sh install
 tools/hypr/ponte-rd-hypr.sh status
-tools/hypr/ponte-rd-hypr.sh remove    # tira a linha e o módulo; o hyprland.lua volta igual
+tools/hypr/ponte-rd-hypr.sh remove
 ```
 
-`install` só grava se `Hyprland --verify-config` aprovar a config inteira, e se
-a gravação falhar a validação ele volta o backup. `HYPR_DIR=/uma/cópia` faz tudo
-numa cópia (é assim que `tests/rd-hypr.test.mjs` testa).
+`install` faz backup e só grava se a config inteira passar em `Hyprland --verify-config`. `HYPR_DIR=/uma/cópia` permite testar sem tocar na config viva.
 
-**Instalado no PC do Lucas em 2026-10-01** (backup do `hyprland.lua` antes da linha). O que está provado: a config real com o
-módulo passa no `--verify-config` (Hyprland 0.56.2), o `--verify-config` recusa
-nome de evento errado, e o ciclo instalar/remover devolve o arquivo byte a byte.
-O que só dá pra provar ao vivo: os campos `title`/`class` do objeto janela nos
-eventos `window.active` e `window.title`. Teste ao vivo sugerido, com o Lucas
-olhando: instalar, abrir `ponte rd notebook`, Ctrl+Alt+Shift, conferir
-`hyprctl submap` = `ponte-rd`, apertar Super no notebook, Ctrl+Alt+Shift de
-volta e conferir `hyprctl submap` = `default`. Se algo prender:
-Super+Ctrl+Alt+Esc, e `remove`.
+## Por que o teclado sumia depois de trocar de aparelho
+
+O clique na imagem usava `preventDefault`, que conservava o foco no `<select>` da barra. A página dizia que controlava, mas descartava todo evento de tecla cujo alvo fosse `SELECT`. Reproduzido com notebook → este aparelho → notebook, clique na imagem e teclado nativo da bancada: mouse chegou, Z e Super não. Agora todas as entradas de controle focam a tela não editável e um foco antigo de seletor não bloqueia a injeção.
+
+## Aceite de 1 minuto no aparelho real
+
+Só o dono opera o teclado real. O agente acompanha os logs sem injetar entrada.
+
+1. Abra `ponte rd` no notebook remoto. No seletor, escolha este aparelho e volte ao notebook.
+2. Clique na imagem. Digite `zzz` num campo de teste do notebook e use Super+1. Deve atuar no notebook. A barra deve dizer que está controlando o notebook.
+3. Aperte Ctrl+X. A barra volta pra este aparelho e `hyprctl submap` no PC volta a `default`. Super+1 deve funcionar no PC.
+4. Ctrl+X de novo pega o notebook. Ctrl+Shift+X não pode devolver o controle. Ctrl+C/V devem continuar remotos.
+5. Escolha tela cheia nas configurações. Ctrl+X entra, outro Ctrl+X sai e devolve. Segurar Esc 2 s também devolve.
+6. Abra detalhes técnicos e confira a trilha de teclas. Feche a janela e compare os contadores de teclado no journal de origem e destino.
+
+Se prender: **Super+Ctrl+Alt+Esc** devolve os atalhos locais. Feche a janela e guarde os registros `session closed` dos dois aparelhos.

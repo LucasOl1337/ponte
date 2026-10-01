@@ -212,23 +212,194 @@ test('keys: physical code up and down, no client auto-repeat, everything prevent
   assert.deepEqual(h.sent('key').map(message => `${message.code}${message.down ? 'v' : '^'}`), ['Tabv', 'Tab^', 'F5v', 'F5^', 'MetaLeftv', 'MetaLeft^', 'ControlLeftv', 'KeyWv', 'KeyW^', 'ControlLeft^', 'KeyQv', 'KeyQ^']);
 });
 
-test('Ctrl+Alt+Shift alone releases the control; with another key held it is just a shortcut', async () => {
+test('clicking the screen after choosing a device moves focus off the selector and sends keys', async () => {
   const h = await harness().connect();
-  assert.equal(h.run(`isReleaseChord(new Set(['ControlLeft','AltRight','ShiftLeft']))`), true);
-  assert.equal(h.run(`isReleaseChord(new Set(['ControlLeft','AltLeft','ShiftLeft','KeyT']))`), false);
-  assert.equal(h.run(`isReleaseChord(new Set(['ControlLeft','ShiftLeft']))`), false);
+  const select = h.el('#rd-node');
+  select.focus();
+  assert.equal(h.document.activeElement, select);
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 });
+  assert.equal(h.document.activeElement, h.stage);
+  h.key('keydown', 'KeyZ', { target: select });
+  h.key('keyup', 'KeyZ', { target: select });
+  h.key('keydown', 'MetaLeft', { target: select });
+  h.key('keyup', 'MetaLeft', { target: select });
+  assert.deepEqual(h.sent('key').map(m => m.code), ['KeyZ', 'KeyZ', 'MetaLeft', 'MetaLeft']);
+  assert.equal(h.run('engaged'), true);
+});
+
+test('Ctrl+X releases before forwarding either key, even with another remote key held', async () => {
+  const h = await harness().connect();
   h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
-  h.key('keydown', 'KeyT'); h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftLeft');
-  assert.equal(h.sent('release').length, 0);
-  for (const code of ['ShiftLeft', 'AltLeft', 'ControlLeft', 'KeyT']) h.key('keyup', code);
-  h.key('keydown', 'ControlRight'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftRight');
+  h.key('keydown', 'KeyT');
+  const before = h.input().length;
+  assert.equal(h.key('keydown', 'ControlLeft', { ctrlKey: true }).defaultPrevented, true);
+  assert.equal(h.input().length, before, 'Control waits to see whether X follows');
+  assert.equal(h.key('keydown', 'KeyX', { ctrlKey: true }).defaultPrevented, true);
+  assert.deepEqual(h.input().slice(before), [{ t: 'release' }], 'no remote Ctrl down or X down before release');
   assert.equal(h.sent('release').length, 1);
   assert.equal(h.run('engaged'), false);
   assert.equal(h.document.body.classList.contains('controlling'), false);
+  for (const code of ['KeyX', 'ControlLeft', 'KeyT']) h.key('keyup', code);
+  assert.deepEqual(h.sent('key'), [{ t: 'key', code: 'KeyT', down: true }], 'release clears the held remote key without leaking chord keyups');
   // Once released, keys stay in this browser.
   const after = h.key('keydown', 'KeyA');
   assert.equal(after.defaultPrevented, false);
   assert.equal(h.sent('key').filter(message => message.code === 'KeyA').length, 0);
+});
+
+test('Ctrl+X with either Control key switches once per press, suppresses repeats and both keyup orders', async () => {
+  for (const control of ['ControlLeft', 'ControlRight']) {
+    for (const remote of [false, true]) {
+      for (const order of [[control, 'KeyX'], ['KeyX', control]]) {
+        const h = await harness().connect();
+        if (remote) {
+          h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 });
+          h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+        }
+        const label = `${control}, from ${remote ? 'remote' : 'local'}, ${order.join(' then ')} up`;
+        h.key('keydown', control, { ctrlKey: true });
+        h.key('keydown', control, { ctrlKey: true, repeat: true });
+        h.key('keydown', 'KeyX', { ctrlKey: true });
+        assert.equal(h.run('engaged'), !remote, label);
+        for (const code of ['KeyX', control]) {
+          assert.equal(h.key('keydown', code, { ctrlKey: true, repeat: true }).defaultPrevented, true, label);
+        }
+        assert.equal(h.run('engaged'), !remote, 'auto-repeat cannot switch back');
+        assert.deepEqual(h.sent('key'), [], label);
+        assert.equal(h.sent('release').length, remote ? 1 : 0, label);
+        let ctrlKey = true;
+        for (const code of order) {
+          if (code === control) ctrlKey = false;
+          assert.equal(h.key('keyup', code, { ctrlKey }).defaultPrevented, true, label);
+          const other = order.find(key => key !== code);
+          if (code === order[0]) {
+            assert.equal(h.key('keydown', other, { ctrlKey, repeat: true }).defaultPrevented, true, label);
+          }
+        }
+        assert.deepEqual(h.sent('key'), [], 'neither release order leaves a standalone Ctrl or X');
+        h.key('keydown', control, { ctrlKey: true });
+        h.key('keydown', 'KeyX', { ctrlKey: true });
+        h.key('keyup', 'KeyX', { ctrlKey: true });
+        h.key('keyup', control);
+        assert.equal(h.run('engaged'), remote, 'a fresh press can switch again');
+        assert.equal(h.sent('release').length, 1, label);
+        assert.deepEqual(h.sent('key'), [], label);
+      }
+    }
+  }
+});
+
+test('Ctrl+X accepts the DOM Control flag and physical Control held before taking control', async () => {
+  const h = await harness().connect();
+  assert.equal(h.key('keydown', 'KeyX', { ctrlKey: true }).defaultPrevented, true);
+  assert.equal(h.run('engaged'), true, 'the browser can report Ctrl without a Control keydown');
+  assert.equal(h.key('keyup', 'KeyX', { ctrlKey: true }).defaultPrevented, true);
+  assert.deepEqual(h.sent('key'), []);
+  h.el('#rd-control').dispatchEvent({ type: 'click' });
+  h.key('keydown', 'ControlRight');
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 });
+  h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+  h.key('keydown', 'KeyX');
+  assert.equal(h.run('engaged'), false, 'physical Control is tracked even while input stays local');
+  h.key('keyup', 'ControlRight'); h.key('keyup', 'KeyX');
+  assert.deepEqual(h.sent('key'), [], 'a Control held locally is not lost or forwarded with the switch');
+});
+
+test('Ctrl+Shift/Alt/Meta+X and the old Ctrl+Alt+Shift stay ordinary shortcuts', async () => {
+  for (const [modifier, flag] of [['ShiftRight', 'shiftKey'], ['AltLeft', 'altKey'], ['MetaRight', 'metaKey']]) {
+    for (const physical of [false, true]) {
+      const h = await harness().connect();
+      const fields = { ctrlKey: true, ...(physical ? {} : { [flag]: true }) };
+      h.key('keydown', 'ControlLeft', { ctrlKey: true });
+      if (physical) h.key('keydown', modifier);
+      assert.equal(h.key('keydown', 'KeyX', fields).defaultPrevented, false);
+      h.key('keyup', 'KeyX', fields);
+      if (physical) h.key('keyup', modifier);
+      h.key('keyup', 'ControlLeft');
+      assert.equal(h.run('engaged'), false, `${modifier} does not take control`);
+      assert.deepEqual(h.input(), []);
+      h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+      h.key('keydown', 'ControlLeft', { ctrlKey: true });
+      if (physical) h.key('keydown', modifier);
+      h.key('keydown', 'KeyX', fields); h.key('keyup', 'KeyX', fields);
+      if (physical) h.key('keyup', modifier);
+      h.key('keyup', 'ControlLeft');
+      const codes = physical ? ['ControlLeft', modifier, 'KeyX'] : ['ControlLeft', 'KeyX'];
+      assert.deepEqual(h.sent('key'), [
+        ...codes.map(code => ({ t: 'key', code, down: true })),
+        ...codes.toReversed().map(code => ({ t: 'key', code, down: false })),
+      ], `${modifier} remains a remote shortcut (${physical ? 'physical' : 'DOM flag'})`);
+      assert.equal(h.run('engaged'), true);
+      assert.deepEqual(h.sent('release'), []);
+    }
+  }
+  const h = await harness().connect();
+  for (const remote of [false, true]) {
+    if (remote) { h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 }); }
+    for (const code of ['ControlRight', 'AltLeft', 'ShiftRight']) h.key('keydown', code);
+    assert.equal(h.run('engaged'), remote, 'the retired chord never toggles');
+    for (const code of ['ShiftRight', 'AltLeft', 'ControlRight']) h.key('keyup', code);
+  }
+  assert.deepEqual(h.sent('key').map(message => `${message.code}${message.down ? 'v' : '^'}`), ['ControlRightv', 'AltLeftv', 'ShiftRightv', 'ShiftRight^', 'AltLeft^', 'ControlRight^']);
+  assert.deepEqual(h.sent('release'), []);
+});
+
+test('Ctrl+C flushes pending Control in order and plain X is not a switch', async () => {
+  const h = await harness().connect();
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+  h.key('keydown', 'ControlLeft', { ctrlKey: true });
+  assert.deepEqual(h.sent('key'), []);
+  h.key('keydown', 'KeyC', { ctrlKey: true }); h.key('keyup', 'KeyC', { ctrlKey: true }); h.key('keyup', 'ControlLeft');
+  h.key('keydown', 'KeyX'); h.key('keyup', 'KeyX');
+  assert.deepEqual(h.sent('key').map(message => `${message.code}${message.down ? 'v' : '^'}`), ['ControlLeftv', 'KeyCv', 'KeyC^', 'ControlLeft^', 'KeyXv', 'KeyX^']);
+  assert.equal(h.run('engaged'), true);
+  assert.deepEqual(h.sent('release'), []);
+});
+
+test('pending Control is a mouse modifier and a standalone press still sends down before up', async () => {
+  for (const control of ['ControlLeft', 'ControlRight']) {
+    const h = await harness().connect();
+    h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+    const before = h.input().length;
+    h.key('keydown', control, { ctrlKey: true });
+    assert.equal(h.input().length, before);
+    h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294, ctrlKey: true });
+    h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294, ctrlKey: true });
+    h.key('keyup', control);
+    assert.deepEqual(h.input().slice(before), [
+      { t: 'key', code: control, down: true },
+      { t: 'move', x: 0.5, y: 0.5 },
+      { t: 'btn', b: 0, down: true },
+      { t: 'btn', b: 0, down: false },
+      { t: 'key', code: control, down: false },
+    ], `${control} reaches the remote before the mouse press`);
+    const keysBefore = h.sent('key').length;
+    h.key('keydown', control); h.key('keyup', control);
+    assert.deepEqual(h.sent('key').slice(keysBefore), [{ t: 'key', code: control, down: true }, { t: 'key', code: control, down: false }]);
+  }
+});
+
+test('pending Control reaches the remote before wheel and does not flush on the local bar', async () => {
+  for (const control of ['ControlLeft', 'ControlRight']) {
+    const h = await harness().connect();
+    h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+    const before = h.input().length;
+    h.key('keydown', control, { ctrlKey: true });
+    const local = h.mouse('wheel', h.stage, { target: h.el('#rd-control'), deltaMode: 0, deltaX: 0, deltaY: 100, ctrlKey: true });
+    assert.equal(local.defaultPrevented, false, 'the bar keeps its own wheel');
+    assert.equal(h.input().length, before, 'a bar wheel cannot flush pending Control');
+    const remote = h.mouse('wheel', h.stage, { deltaMode: 0, deltaX: 0, deltaY: 100, ctrlKey: true });
+    assert.equal(remote.defaultPrevented, true);
+    assert.deepEqual(h.input().slice(before), [{ t: 'key', code: control, down: true }], 'Control goes out immediately, before the coalesced wheel');
+    h.raf();
+    h.key('keyup', control);
+    assert.deepEqual(h.input().slice(before), [
+      { t: 'key', code: control, down: true },
+      { t: 'wheel', dx: 0, dy: 120 },
+      { t: 'key', code: control, down: false },
+    ]);
+    assert.equal(h.run('engaged'), true);
+  }
 });
 
 test('holding Esc for 2 s releases; a short Esc is just a key', async () => {
@@ -242,13 +413,15 @@ test('holding Esc for 2 s releases; a short Esc is just a key', async () => {
   assert.equal(h.run('engaged'), false);
 });
 
-test('losing focus or hiding the page sends release; control resumes on focus and the clipboard goes out if it changed', async () => {
+test('losing focus or hiding the page releases control; only explicit retaking resumes clipboard sync', async () => {
   const h = await harness({ clipboard: 'first copy' }).connect();
   h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); await flush();
   assert.deepEqual(h.sent('clip'), [{ t: 'clip', text: 'first copy' }]);
   h.key('keydown', 'ShiftLeft');
   h.window.dispatchEvent({ type: 'blur' });
   assert.equal(h.sent('release').length, 1);
+  assert.equal(h.run('engaged'), false);
+  assert.equal(h.document.title, 'Ponte — remote desktop');
   h.document.hidden = true; h.document.dispatchEvent({ type: 'visibilitychange' });
   assert.equal(h.sent('release').length, 2);
   // Nothing held after the release: the Shift keyup is not sent.
@@ -258,6 +431,12 @@ test('losing focus or hiding the page sends release; control resumes on focus an
   assert.equal(h.sent('clip').length, 1, 'same clipboard is not sent twice');
   h.clip.text = 'second copy';
   h.window.dispatchEvent({ type: 'focus' }); await flush();
+  assert.equal(h.run('engaged'), false, 'focus alone does not take control again');
+  assert.equal(h.sent('clip').length, 1, 'no clipboard sent while control stays local');
+  h.document.hidden = false;
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'KeyX');
+  h.key('keyup', 'KeyX'); h.key('keyup', 'ControlLeft'); await flush();
+  assert.equal(h.run('engaged'), true);
   assert.deepEqual(h.sent('clip').at(-1), { t: 'clip', text: 'second copy' });
   // From the target: written with focus, and not echoed back.
   h.socket.message({ t: 'clip', text: 'from the target' }); await flush();
@@ -684,17 +863,17 @@ test('every rd string has an English translation and the page has no inline scri
   for (const old of ['>Abs<', '>Rel<', 'rd-stats" aria-live="off"></span>']) assert.ok(!html.includes(old), old);
 });
 
-test('Ctrl+Alt+Shift switches both ways without full screen; the indicator, the frame and the window title follow', async () => {
+test('Ctrl+X switches both ways without full screen; the indicator, the frame and the window title follow', async () => {
   const h = await harness().connect();
   assert.equal(h.el('#rd-control').getAttribute('aria-pressed'), 'false');
-  assert.match(h.el('#rd-hint').textContent, /Ctrl\+Alt\+Shift or click the screen to control notebook-teste/);
+  assert.match(h.el('#rd-hint').textContent, /Ctrl\+X or click the screen to control notebook-teste/);
   assert.equal(h.document.title, 'Ponte — remote desktop');
   // Plain keys on this device stay here and nothing goes out.
   assert.equal(h.key('keydown', 'ControlLeft').defaultPrevented, false);
   h.key('keyup', 'ControlLeft');
   // The chord takes the keys to the device on the screen: no full screen, no modifier sent.
-  h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft');
-  const chord = h.key('keydown', 'ShiftLeft');
+  h.key('keydown', 'ControlLeft');
+  const chord = h.key('keydown', 'KeyX');
   assert.equal(chord.defaultPrevented, true);
   assert.equal(h.run('engaged'), true);
   assert.equal(h.document.fullscreenElement, null);
@@ -702,51 +881,79 @@ test('Ctrl+Alt+Shift switches both ways without full screen; the indicator, the 
   assert.equal(h.document.body.classList.contains('controlling'), true);
   assert.equal(h.el('#rd-control').getAttribute('aria-pressed'), 'true');
   assert.equal(h.el('#rd-control-target').textContent, 'Keyboard and mouse → notebook-teste');
-  assert.match(h.el('#rd-hint').textContent, /Ctrl\+Alt\+Shift comes back.*Super and Ctrl\+T stay here/);
+  assert.match(h.el('#rd-hint').textContent, /Ctrl\+X comes back.*Super and Ctrl\+T stay here/);
   assert.equal(h.el('#rd-switch').hidden, false);
   assert.equal(h.el('#rd-switch').textContent, 'Keyboard and mouse → notebook-teste');
   assert.equal(h.document.title, '⌨ notebook-teste · Ponte — remote desktop');
   // Releasing the chord sends nothing (those keys were never sent down).
-  for (const code of ['ShiftLeft', 'AltLeft', 'ControlLeft']) h.key('keyup', code);
+  for (const code of ['KeyX', 'ControlLeft']) h.key('keyup', code);
   assert.equal(h.sent('key').length, 0);
   h.key('keydown', 'KeyA'); h.key('keyup', 'KeyA');
   assert.deepEqual(h.sent('key').map(message => message.code), ['KeyA', 'KeyA']);
   // The same chord comes back.
-  h.key('keydown', 'ControlRight'); h.key('keydown', 'ShiftRight'); h.key('keydown', 'AltRight');
+  h.key('keydown', 'ControlRight'); h.key('keydown', 'KeyX');
   assert.equal(h.run('engaged'), false);
   assert.equal(h.sent('release').length, 1);
   assert.equal(h.el('#rd-control-target').textContent, 'Keyboard and mouse → this device');
   assert.equal(h.el('#rd-switch').textContent, 'Keyboard and mouse → this device');
   assert.equal(h.document.title, 'Ponte — remote desktop');
-  for (const code of ['ControlRight', 'ShiftRight', 'AltRight']) h.key('keyup', code);
-  // A chord with another key held is just a shortcut on this device.
-  h.key('keydown', 'KeyT'); h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftLeft');
+  for (const code of ['ControlRight', 'KeyX']) h.key('keyup', code);
+  // Ctrl+Shift+X stays a shortcut on this device.
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'ShiftLeft'); h.key('keydown', 'KeyX');
   assert.equal(h.run('engaged'), false);
-  for (const code of ['ShiftLeft', 'AltLeft', 'ControlLeft', 'KeyT']) h.key('keyup', code);
+  for (const code of ['KeyX', 'ShiftLeft', 'ControlLeft']) h.key('keyup', code);
   // The indicator is a switch too.
   h.el('#rd-control').dispatchEvent({ type: 'click' });
   assert.equal(h.run('engaged'), true);
   h.el('#rd-control').dispatchEvent({ type: 'click' });
   assert.equal(h.run('engaged'), false);
-  // With no session there is nothing to switch to.
-  const idle = harness();
-  idle.key('keydown', 'ControlLeft'); idle.key('keydown', 'AltLeft'); idle.key('keydown', 'ShiftLeft');
-  assert.equal(idle.run('engaged'), false);
 });
 
-test('the chord can enter full screen instead, from the settings, and it is remembered', async () => {
+test('Ctrl+X can enter full screen instead, from the settings, and it is remembered', async () => {
   const h = await harness().connect();
   h.el('#rd-chord-action').value = 'fullscreen';
   h.el('#rd-chord-action').dispatchEvent({ type: 'change', target: h.el('#rd-chord-action') });
   assert.equal(h.saved.get('ponte-rd-chord'), 'fullscreen');
-  h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftLeft');
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'KeyX');
   await flush();
   assert.equal(h.run('engaged'), true);
   assert.ok(h.document.fullscreenElement);
   assert.deepEqual(h.keyboard.locks, [[]]);
   assert.match(h.el('#rd-hint').textContent, /Everything goes to the device, Super included/);
+  h.key('keyup', 'KeyX'); h.key('keyup', 'ControlLeft');
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'KeyX');
+  h.key('keyup', 'ControlLeft'); h.key('keyup', 'KeyX');
+  assert.equal(h.run('engaged'), false);
+  assert.equal(h.document.fullscreenElement, null);
+  assert.equal(h.keyboard.unlocked, true);
+  assert.deepEqual(h.sent('key'), [], 'fullscreen switches also keep Ctrl and X local');
   const again = await harness({ stored: { 'ponte-rd-chord': 'fullscreen' } }).connect();
   assert.equal(again.el('#rd-chord-action').value, 'fullscreen');
+});
+
+test('Ctrl+X stays local without a session and while settings are open, without poisoning the next switch', async () => {
+  const idle = harness();
+  for (const [type, code, ctrlKey] of [['keydown', 'ControlLeft', true], ['keydown', 'KeyX', true], ['keyup', 'KeyX', true], ['keyup', 'ControlLeft', false]]) {
+    assert.equal(idle.key(type, code, { ctrlKey }).defaultPrevented, false, 'no session does not reserve the local shortcut');
+  }
+  assert.equal(idle.run('engaged'), false);
+  assert.deepEqual(idle.input(), []);
+  await idle.connect();
+  idle.key('keydown', 'ControlLeft'); idle.key('keydown', 'KeyX');
+  idle.key('keyup', 'KeyX'); idle.key('keyup', 'ControlLeft');
+  assert.equal(idle.run('engaged'), true, 'the shortcut works when a session arrives');
+  idle.el('#rd-settings-open').dispatchEvent({ type: 'click' });
+  const before = idle.input().length;
+  for (const [type, code, ctrlKey] of [['keydown', 'ControlRight', true], ['keydown', 'KeyX', true], ['keyup', 'ControlRight', false], ['keyup', 'KeyX', false]]) {
+    assert.equal(idle.key(type, code, { ctrlKey, target: idle.el('#rd-chord-action') }).defaultPrevented, false, 'the dialog owns its keyboard');
+  }
+  assert.equal(idle.run('engaged'), false);
+  assert.equal(idle.input().length, before);
+  idle.el('#rd-settings-close').dispatchEvent({ type: 'click' });
+  idle.key('keydown', 'ControlRight'); idle.key('keydown', 'KeyX');
+  idle.key('keyup', 'ControlRight'); idle.key('keyup', 'KeyX');
+  assert.equal(idle.run('engaged'), true, 'closing the dialog allows a fresh switch');
+  assert.deepEqual(idle.sent('key'), []);
 });
 
 test('the settings: pointer mode, frame limit (reconnects with maxFps), clipboard off, details with the numbers', async () => {
@@ -756,9 +963,9 @@ test('the settings: pointer mode, frame limit (reconnects with maxFps), clipboar
   assert.equal(h.el('#rd-settings').open, true);
   assert.equal(h.run('engaged'), false, 'opening the settings gives the keys back');
   // Inside the settings the chord does nothing (the dialog has the keyboard).
-  h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftLeft');
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'KeyX');
   assert.equal(h.run('engaged'), false);
-  for (const code of ['ShiftLeft', 'AltLeft', 'ControlLeft']) h.key('keyup', code);
+  for (const code of ['KeyX', 'ControlLeft']) h.key('keyup', code);
   h.el('#rd-mode-rel').dispatchEvent({ type: 'click' });
   assert.equal(h.saved.get('ponte-rd-mode'), 'rel');
   assert.equal(h.el('#rd-mode-rel').getAttribute('aria-pressed'), 'true');

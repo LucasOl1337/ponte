@@ -16,7 +16,7 @@
       <select id="rd-node" aria-label="Device" data-i18n-aria-label="Aparelho"></select></label>
     <label class="rd-field"><span class="sr-only" data-i18n="Monitor">Monitor</span>
       <select id="rd-monitor" aria-label="Monitor" data-i18n-aria-label="Monitor"></select></label>
-    <!-- Where the keyboard and mouse go, always in sight; a click or Ctrl+Alt+Shift switches. -->
+    <!-- Where the keyboard and mouse go, always in sight; a click or Ctrl+X switches. -->
     <button type="button" class="rd-control" id="rd-control" aria-pressed="false">
       <span class="rd-control-icon" aria-hidden="true">⌨</span>
       <span class="rd-control-text">
@@ -29,7 +29,7 @@
     <button type="button" class="rd-button" id="rd-fullscreen" title="Full screen also sends Super, Alt+Tab and Ctrl+W to the device" data-i18n-title="A tela cheia também manda Super, Alt+Tab e Ctrl+W pro aparelho" data-i18n="Tela cheia">Full screen</button>
     <button type="button" class="rd-button rd-gear" id="rd-settings-open" aria-haspopup="dialog"><span aria-hidden="true">⚙</span> <span data-i18n="Configurações">Settings</span></button>
   </header>
-  <main class="rd-stage" id="rd-stage" aria-label="Remote screen. Click to control." data-i18n-aria-label="Tela remota. Clique para controlar.">
+  <main class="rd-stage" id="rd-stage" tabindex="-1" aria-label="Remote screen. Click to control." data-i18n-aria-label="Tela remota. Clique para controlar.">
     <canvas id="rd-canvas" width="16" height="9"></canvas>
     <div class="rd-overlay" id="rd-overlay">
       <p id="rd-message" data-i18n="Conectando…">Connecting…</p>
@@ -55,12 +55,13 @@
     <section>
       <h3 data-i18n="Teclado e atalhos">Keyboard and shortcuts</h3>
       <dl class="rd-keys">
-        <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd></dt><dd data-i18n="Alterna o teclado e o mouse entre este aparelho e o que está na tela. Funciona com ou sem tela cheia.">Switches the keyboard and mouse between this device and the one on the screen. Works with or without full screen.</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>X</kbd></dt><dd data-i18n="Alterna o teclado e o mouse entre este aparelho e o que está na tela. Funciona com ou sem tela cheia.">Switches the keyboard and mouse between this device and the one on the screen. Works with or without full screen.</dd>
         <dt data-i18n="Segurar Esc 2 s">Hold Esc 2 s</dt><dd data-i18n="Em tela cheia, sai e volta pra este aparelho.">In full screen, leaves and comes back to this device.</dd>
         <dt data-i18n="Clique na tela">Click the screen</dt><dd data-i18n="Começa a controlar.">Starts controlling.</dd>
       </dl>
+      <p class="rd-help" data-i18n="Ctrl+X é reservado pra alternar, não recorta nesta janela. Ctrl+Shift+X não alterna.">Ctrl+X is reserved for switching, not cutting in this window. Ctrl+Shift+X does not switch.</p>
       <p class="rd-help" data-i18n="Na janela, letras, números e Ctrl+C/V vão pro aparelho, mas Super (os atalhos do Omarchy) e os atalhos do navegador (Ctrl+T, Ctrl+W) ficam neste PC: o navegador só entrega essas teclas em tela cheia. Em tela cheia vai tudo.">In the window, letters, numbers and Ctrl+C/V go to the device, but Super (the Omarchy shortcuts) and the browser's own shortcuts (Ctrl+T, Ctrl+W) stay on this PC: the browser only hands those keys over in full screen. In full screen everything goes.</p>
-      <label class="rd-row"><span data-i18n="O atalho Ctrl+Alt+Shift">The Ctrl+Alt+Shift shortcut</span>
+      <label class="rd-row"><span data-i18n="O atalho Ctrl+X">The Ctrl+X shortcut</span>
         <select id="rd-chord-action">
           <option value="window" data-i18n="só alterna o controle">only switches control</option>
           <option value="fullscreen" data-i18n="alterna e entra em tela cheia (leva o Super)">switches and enters full screen (takes Super too)</option>
