@@ -1313,8 +1313,8 @@
     "pt": "Esta chave de aparelho só vale do aparelho para o qual foi aprovada."
   },
   "MESH_PEER_NOT_FOUND": {
-    "en": "No paired device has that name or id.",
-    "pt": "Nenhum aparelho pareado tem esse nome ou id."
+    "en": "No device with that name or id was found.",
+    "pt": "Nenhum aparelho com esse nome ou id foi encontrado."
   },
   "MESH_PEER_AMBIGUOUS": {
     "en": "More than one device has this name. Use its id.",
