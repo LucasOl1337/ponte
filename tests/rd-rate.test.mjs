@@ -358,6 +358,15 @@ test('acks: recovery on an unchanged tight link probes at most once a minute and
   for (let i = 1; i < probes.length; i++) assert.ok(probes[i].at - probes[i - 1].at >= 60000);
 });
 
+test('acks: no recovery probe on stable LAN, roomy WAN or the highest step', () => {
+  for (const open of [4, 30]) {
+    const { events, c } = simulate({ seconds: 180, capacity: () => 100000, oneWay: open === 4 ? 1 : 12, open });
+    assert.equal(events.filter(e => e.reason === 'probe').length, 0, JSON.stringify(events));
+    if (open === 4) assert.equal(c.mode, 'lan');
+    else assert.equal(c.step, WAN_STEPS.length - 1);
+  }
+});
+
 test('acks: opening on a roomy link climbs as soon as its first keyframe crossed, not after 30 s', () => {
   // A home Tailscale link: 24 ms round trip, 30 Mbps.
   const roomy = simulate({ seconds: 20, capacity: () => 30000 });
