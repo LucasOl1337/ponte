@@ -450,15 +450,17 @@ test('phone timer installs and removes a managed user timer that keeps the adb l
   await assert.rejects(stat(path.join(units, 'ponte-phone.service')));
 });
 
-test('rd opens Chromium in --app mode on rd.html with its own profile, resolving a device name through /api/mesh', async t => {
+test('rd opens Chromium in --app mode on rd.html with its own profile, resolving a device through /api/devices, or /api/mesh on an older server', async t => {
   const f = await fixture(t);
   const http = await import('node:http');
   let meshAnswer = { self: { id: 'aaaaaaaaaaaaaaaa', name: 'pc-teste' }, peers: [{ id: 'feedfacecafebeef', name: 'notebook-teste', online: true, paired: true }, { id: 'bbbbbbbbbbbbbbbb', name: 'pedido', paired: false }] };
+  let devicesAnswer = null; // an older server: no /api/devices
   const requests = [];
   const server = http.createServer((req, res) => {
     requests.push({ url: req.url, authorization: req.headers.authorization });
-    if (!meshAnswer) { res.writeHead(404).end(); return; }
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(meshAnswer));
+    const answer = req.url.startsWith('/api/devices') ? devicesAnswer : meshAnswer;
+    if (!answer) { res.writeHead(404).end(); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(answer));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
@@ -485,6 +487,24 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
   assert.equal((await f.cli(['rd', 'feedfacecafebeef', '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`, 'a node id works without the mesh route');
   await assert.rejects(f.cli(['rd', 'notebook-teste', '--print-url']), error => /device list is unavailable \(HTTP 404\)/.test(error.stderr));
   assert.equal((await f.cli(['rd', '--print-url'])).stdout.trim(), base, 'no mesh route: this machine');
+
+  // A server with the device list (ADR 0002): any id of a device or its name.
+  const ponte = (state, extra = {}) => ({ via: 'ponte', state, online: true, ...extra });
+  devicesAnswer = { v: 1, devices: [
+    { id: 'aaaaaaaaaaaaaaaa', ids: ['aaaaaaaaaaaaaaaa', 'self'], name: 'pc-teste', self: true, routes: [ponte('self')] },
+    { id: 'feedfacecafebeef', ids: ['feedfacecafebeef', 'ssh:notebook-teste', 'tail:notebook-teste'], name: 'notebook-teste', self: false, routes: [ponte('paired'), { via: 'ssh', alias: 'notebook-teste' }] },
+    { id: 'bbbbbbbbbbbbbbbb', ids: ['bbbbbbbbbbbbbbbb'], name: 'pedido', self: false, routes: [ponte('available')] },
+    { id: 'ssh:vm-trabalho', ids: ['ssh:vm-trabalho'], name: 'VM trabalho', self: false, routes: [{ via: 'ssh', alias: 'vm-trabalho' }] },
+  ] };
+  for (const device of ['ssh:notebook-teste', 'TAIL:notebook-teste', 'Notebook-Teste', 'feedfacecafebeef']) {
+    assert.equal((await f.cli(['rd', device, '--print-url'])).stdout.trim(), `${base}&node=feedfacecafebeef`, device);
+  }
+  assert.deepEqual(requests.at(-1), { url: '/api/devices?discover=1', authorization: `Bearer ${token}` });
+  assert.equal((await f.cli(['rd', 'aaaaaaaaaaaaaaaa', '--print-url'])).stdout.trim(), base, 'the home node by its id stays local');
+  await assert.rejects(f.cli(['rd', 'VM trabalho', '--print-url']), error => /VM trabalho does not run Ponte/.test(error.stderr));
+  await assert.rejects(f.cli(['rd', 'pedido', '--print-url']), error => /not paired with this device yet: \.\/ponte mesh pair pedido/.test(error.stderr));
+  await assert.rejects(f.cli(['rd', 'tablet', '--print-url']), error => /No device called 'tablet' \(paired: notebook-teste\)/.test(error.stderr));
+  devicesAnswer = null;
 
   // The menu entry passes --notify: it has no terminal, so a failure becomes a notification.
   await writeFile(path.join(f.bin, 'notify-send'), await readFile(path.join(f.bin, 'tailscale'), 'utf8'), { mode: 0o755 });

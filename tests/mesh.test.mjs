@@ -58,7 +58,9 @@ async function node(t, { key, name, discover, identity, meshOptions = {}, rdOpti
   const app = await createApp({
     rootDir: root, dataDir: path.join(root, 'private'), token: TOKENS[key], env: {}, nativeTls: { cert: tls.cert, key: tls.key }, caPem: tls.ca,
     desktop, audio: { close: async () => {} }, tailnetIdentity: identity,
-    meshOptions: { name, enabled: true, discover, pollInterval: 40, ...meshOptions }, rdOptions, notify, ...appOptions,
+    meshOptions: { name, enabled: true, discover, pollInterval: 40, ...meshOptions }, rdOptions, notify,
+    // Never this machine's real tailnet, ~/.ssh/config or adb in the device list.
+    fleet: { overview: async () => ({ tailnet: { state: 'Running' }, machines: [] }) }, devicesOptions: { adb: false }, ...appOptions,
   });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   await new Promise(resolve => app.nativeServer.listen(0, '127.0.0.1', resolve));
@@ -111,6 +113,8 @@ async function pairAtoB(a, b) {
   const approved = await json(await b.local('/api/action', { method: 'POST', body: { type: 'mesh.approve', code: asked.body.code } }));
   assert.equal(approved.status, 200, JSON.stringify(approved.body));
   await until(async () => (await json(await a.local('/api/mesh'))).body.peers.find(peer => peer.id === b.mesh.id && peer.paired), 'A to hold the link');
+  // mesh.json is written right after: tests read the peer token from it.
+  await until(async () => JSON.parse(await readFile(path.join(a.dataDir, 'mesh.json'), 'utf8').catch(() => '{}')).peers?.some(peer => peer.peerId === b.mesh.id && peer.token), 'A to save the link');
   return asked.body.code;
 }
 
@@ -144,6 +148,7 @@ test('pair, approve on the target, then relay state, an action and the MJPEG str
   assert.equal((await b.local('/api/mesh/approve', { method: 'POST', body: { code: '000000' === asked.body.code ? '111111' : '000000' } })).status, 404);
   assert.equal((await b.local('/api/mesh/approve', { method: 'POST', body: { code: asked.body.code } })).status, 200);
   await until(async () => (await json(await a.local('/api/mesh'))).body.peers.find(peer => peer.paired), 'the link');
+  await until(async () => JSON.parse(await readFile(path.join(a.dataDir, 'mesh.json'), 'utf8').catch(() => '{}')).peers?.length, 'A to save the link');
 
   // What each side keeps: A the token and B's CA, B only a hash bound to A.
   const linkFile = path.join(a.dataDir, 'mesh.json'), grantFile = path.join(b.dataDir, 'mesh.json');
@@ -523,12 +528,9 @@ test('rd relay: the owner on A drives B through /api/rd?node=, B sees a peer and
   assert.equal(a.mesh.isPeer(b.mesh.id), false);
 });
 
-// The device list (ADR 0002) on two real nodes: the fleet is a stub here (the
-// real one would read this machine's tailnet and ~/.ssh/config).
+// The device list (ADR 0002) on two real nodes (the fleet is node()'s stub).
 test('devices: the home node lists itself and its paired node with kind and routes; owner only, never relayed', async t => {
-  const fleet = { overview: async () => ({ tailnet: { state: 'Running' }, machines: [] }) };
-  const app = { fleet, devicesOptions: { adb: false } };
-  const { a, b } = await twoNodes(t, { meshA: { kind: 'pc' }, meshB: { kind: 'notebook' }, appA: app, appB: app });
+  const { a, b } = await twoNodes(t, { meshA: { kind: 'pc' }, meshB: { kind: 'notebook' } });
   assert.equal((await b.remote('/api/mesh/hello')).json.kind, 'notebook');
   const before = await json(await a.local('/api/devices?deep=1'));
   assert.equal(before.status, 200, JSON.stringify(before.body));
@@ -554,4 +556,74 @@ test('devices: the home node lists itself and its paired node with kind and rout
   const token = JSON.parse(await readFile(path.join(a.dataDir, 'mesh.json'), 'utf8')).peers[0].token;
   assert.equal((await b.remote('/api/devices', { token })).json.errorCode, 'MESH_OWNER_ONLY');
   assert.equal((await b.remote('/api/action', { method: 'POST', token, body: { type: 'devices.list' } })).json.errorCode, 'MESH_OWNER_ONLY');
+});
+
+// Slice 2 of ADR 0002: one resolver behind every door. A's fleet (a stub) knows
+// the notebook as ssh:notebook-teste and an SSH-only VM; names are made up.
+function resolverFleet() {
+  const tail = (name, extra = {}) => ({ key: name, name, dns: `${name}.exemplo.ts.net`, ip: null, lanIp: null, os: 'linux', online: true, self: false, tagged: false, sshServer: true, ...extra });
+  const route = alias => ({ alias, names: [alias], hostname: `${alias}.exemplo.ts.net`, port: 22, user: 'eu', kind: 'key', configured: false, label: null, check: null });
+  const machine = (id, name, kind, tailnet, routes) => ({ id, name, kind, tailnet, routes, mesh: null, sshAlias: routes[0]?.alias || null, reachable: false, probe: null, health: 'unknown' });
+  const machines = [machine('self', 'pc-teste', 'this', tail('pc-teste', { self: true }), []),
+    machine('ssh:notebook-teste', 'notebook-teste', 'computer', tail('notebook-teste'), [route('notebook-teste')]),
+    machine('ssh:vm-trabalho', 'VM trabalho', 'server', null, [route('vm-trabalho')])];
+  const calls = [];
+  return { calls, fleet: {
+    overview: async () => ({ tailnet: { state: 'Running' }, machines }),
+    probe: async (id, options) => { calls.push(['probe', id]); return { ok: true, machine: id, ...options }; },
+    handoff: value => { calls.push(['handoff', value.from, value.to]); return { id: '0123456789abcdef', status: 'queued' }; },
+  } };
+}
+
+test('one resolver: ?node=, /api/rd, ctl --node and the fleet take any id of a device or its name; old ids still work', async t => {
+  const b1 = fakeRd(), { fleet, calls } = resolverFleet();
+  const { a, b } = await twoNodes(t, { appA: { fleet }, rdB: b1.rdOptions });
+  const state = async node => json(await a.local(`/api/state?node=${encodeURIComponent(node)}`));
+  // Before pairing: clear refusals, each with the device's own name.
+  assert.deepEqual([(await state('ssh:notebook-teste')).status, (await state('ssh:notebook-teste')).body.errorCode], [409, 'MESH_PEER_NOT_PAIRED']);
+  const vm = await state('VM trabalho');
+  assert.deepEqual([vm.status, vm.body.errorCode, vm.body.errorParameters], [409, 'DEVICE_NOT_PONTE', { name: 'VM trabalho' }]);
+  assert.equal((await state('tablet')).body.errorCode, 'MESH_PEER_NOT_FOUND');
+  await pairAtoB(a, b);
+
+  // ?node=: the mesh id, the fleet id, the tailnet id and the name reach B; self and the home name stay on A.
+  for (const value of [b.mesh.id, 'ssh:notebook-teste', 'tail:notebook-teste', 'Notebook-Teste']) {
+    const answer = await state(value);
+    assert.equal(answer.body.hostname, 'notebook-teste', `${value}: ${JSON.stringify(answer.body).slice(0, 200)}`);
+  }
+  for (const value of ['self', 'pc-teste', a.mesh.id]) assert.equal((await state(value)).body.hostname, 'pc-teste', value);
+
+  // /api/rd?node= by fleet id.
+  const client = await rdClient(a.httpPort, '?node=ssh%3Anotebook-teste');
+  client.ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKENS.a }));
+  assert.equal((await client.next(m => m.t === 'ready', 'ready')).node.id, b.mesh.id);
+  client.ws.close();
+
+  // ponte ctl --node: any id or the name; a device without Ponte is refused before any request.
+  const root = path.dirname(path.dirname(new URL(import.meta.url).pathname));
+  const home = await mkdtemp(path.join(os.tmpdir(), 'ponte-ctl-resolver-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const tokenFile = path.join(home, 'token');
+  await writeFile(tokenFile, TOKENS.a, { mode: 0o600 });
+  const env = { HOME: home, PATH: process.env.PATH, PONTE_CONFIG: path.join(home, 'missing.json'), PONTE_NODE: process.execPath, LANG: 'C.UTF-8' };
+  const ctl = async args => {
+    const result = await run('python3', [path.join(root, 'ponte'), 'ctl', '--url', `http://127.0.0.1:${a.httpPort}`, '--token-file', tokenFile, ...args], { env, timeout: 15000 }).catch(error => error);
+    return { code: result.code ?? 0, body: JSON.parse(result.stdout) };
+  };
+  assert.equal((await ctl(['state', '--node', 'tail:notebook-teste'])).body.data.hostname, 'notebook-teste');
+  assert.equal((await ctl(['state', '--node', 'self'])).body.data.hostname, 'pc-teste');
+  const ssh = await ctl(['state', '--node', 'VM trabalho']);
+  assert.deepEqual([ssh.code, ssh.body.error.code], [2, 'DEVICE_NOT_PONTE']);
+
+  // The fleet: names and any id become self / ssh:ALIAS; ssh:ALIAS goes on untouched.
+  const handoff = async body => json(await a.local('/api/fleet/handoff', { method: 'POST', body: { kind: 'claude', session: '01234567-89ab-4def-8123-456789abcdef', ...body } }));
+  assert.equal((await handoff({ from: 'notebook-teste', to: 'pc-teste' })).status, 202);
+  assert.equal((await handoff({ from: b.mesh.id })).status, 202);
+  assert.equal((await handoff({ from: 'ssh:vm-trabalho', to: 'self' })).status, 202);
+  assert.equal((await handoff({ from: 'tablet' })).body.errorCode, 'MESH_PEER_NOT_FOUND');
+  const probe = await json(await a.local('/api/action', { method: 'POST', body: { type: 'fleet.probe', machine: 'vm trabalho' } }));
+  assert.equal(probe.status, 200, JSON.stringify(probe.body));
+  assert.equal((await ctl(['fleet', 'probe', '--machine', 'VM trabalho'])).code, 0);
+  assert.deepEqual(calls, [['handoff', 'ssh:notebook-teste', 'self'], ['handoff', 'ssh:notebook-teste', undefined], ['handoff', 'ssh:vm-trabalho', 'self'],
+    ['probe', 'ssh:vm-trabalho'], ['probe', 'ssh:vm-trabalho']]);
 });

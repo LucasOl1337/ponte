@@ -40,7 +40,8 @@ const pointParams = () => ({
   x: integer(0, 32767, required),
   y: integer(0, 32767, required),
 });
-const fleetMachine = (options = {}) => string({ maxLength: 68, pattern: `^(?:self|ssh:[A-Za-z0-9][A-Za-z0-9._-]{0,63})${end}`, ...options });
+// self, ssh:ALIAS, or any id or name of a device (ADR 0002): the server resolves it.
+const fleetMachine = (options = {}) => string({ maxLength: 80, pattern: String.raw`^[^\u0000-\u001f\u007f<>/]{1,80}` + end, ...options });
 const button = string({ ...required, enum: ['left', 'right', 'middle'] });
 const workspaceId = integer(1, 100, required);
 const desktopKeys = [

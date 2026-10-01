@@ -55,28 +55,32 @@ requisições. `PONTE_NODE` escolhe o executável Node se necessário.
 ### Outro aparelho da malha (`--node`)
 
 Qualquer comando, exceto `health`, vai pra um aparelho pareado com
-`--node NOME|ID`. O servidor local (o nó de casa) repassa a requisição com o
+`--node APARELHO` (o nome ou qualquer id dele em `./ponte devices`). O servidor local (o nó de casa) repassa a requisição com o
 token de par e o CA fixado daquele aparelho, então o agente continua usando só
 o token local. Nada de SSH, segundo token ou certificado do outro lado.
 
 ```sh
-./ponte mesh list                                  # nomes e ids pareados
+./ponte devices                                    # nomes e ids de cada aparelho
 ./ponte ctl state --node notebook                  # data.node diz quem respondeu
+./ponte ctl state --node ssh:notebook              # qualquer id do aparelho vale
 ./ponte ctl windows --node notebook
 ./ponte ctl terminals create --node notebook
 ./ponte ctl volume set --value 0.3 --node 3f2a9c0d1e4b5a67
 ```
 
-O nome não diferencia maiúsculas e só vale pra aparelho pareado; um id de 16
-hex é usado direto, sem consultar `/api/mesh`. O nome do próprio nó de casa
-fica local. `--dry-run` mostra o caminho com `?node=` pra um id e deixa um nome
+O nome não diferencia maiúsculas; qualquer id da lista (`ssh:ALIAS`,
+`tail:NOME`, o id da malha) também vale, e precisa ser um aparelho com Ponte e
+pareado. Um id de 16 hex é usado direto, sem consultar nada. O próprio nó de
+casa (nome, id ou `self`) fica local. Num servidor sem `/api/devices` (antes da
+fatia 1 do ADR 0002) o nome é procurado em `/api/mesh`, como antes. `--dry-run` mostra o caminho com `?node=` pra um id e deixa um nome
 sem resolver (resolver exige conexão). Erros próprios:
 
 | Código | Quando |
 | --- | --- |
 | `MESH_PEER_NOT_PAIRED` | O aparelho está no tailnet mas não foi pareado: `./ponte mesh pair NOME` e aprove lá |
-| `MESH_PEER_NOT_FOUND` | Nenhum pareado tem esse nome; a mensagem lista os pareados |
-| `MESH_PEER_AMBIGUOUS` | Dois pareados com o mesmo nome: use o id |
+| `MESH_PEER_NOT_FOUND` | Nenhum aparelho tem esse nome ou id; a mensagem lista os pareados |
+| `MESH_PEER_AMBIGUOUS` | Dois aparelhos com o mesmo nome: use um id |
+| `DEVICE_NOT_PONTE` | O aparelho não roda a Ponte (só SSH): use `terminals create --agent ssh --host ALIAS` |
 | `PEER_OFFLINE` / `PEER_REVOKED` / `PEER_UNTRUSTED` | Do relay: aparelho fora, vínculo revogado lá (e esquecido aqui) ou certificado diferente do fixado |
 
 Um par nunca repassa adiante: `--node` só funciona a partir do nó de casa do

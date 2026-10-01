@@ -32,6 +32,7 @@ Health: `ok`, `degraded` (SSH works, the probe failed), `unreachable` (with `TIM
 ```sh
 ./ponte fleet continue claude 5e5e…f1ee --from ssh:notebook            # to this machine
 ./ponte fleet continue codex 01a0…9513 --from self --to ssh:notebook   # or the other way
+./ponte fleet continue claude 5e5e…f1ee --from notebook               # any device id or name works (./ponte devices)
   --git branch    # default: bring the branch by fast-forward
   --git changes   # also carry uncommitted edits and new files as a patch
   --git none      # leave the project alone

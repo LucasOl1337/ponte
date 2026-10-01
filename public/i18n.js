@@ -1244,6 +1244,14 @@
     "en": "More than one device has this name. Use its id.",
     "pt": "Mais de um aparelho tem esse nome. Use o id."
   },
+  "MESH_PEER_NOT_PAIRED": {
+    "en": "{name} runs Ponte but is not paired with this device yet. Ask for access first.",
+    "pt": "{name} tem Ponte, mas ainda não está pareado com este aparelho. Peça acesso primeiro."
+  },
+  "DEVICE_NOT_PONTE": {
+    "en": "{name} does not run Ponte: it can be reached by SSH, not controlled.",
+    "pt": "{name} não roda a Ponte: dá para chegar por SSH, não controlar."
+  },
   "RD_PEER_CONTROL": {
     "en": "{name} is controlling this screen through Ponte.",
     "pt": "{name} está controlando esta tela pela Ponte."

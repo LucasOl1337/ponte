@@ -9,7 +9,7 @@ Every Ponte surface (the phone app, a browser, the remote desktop, the CLI) asks
 ./ponte ctl devices [--deep] [--fresh]
 ```
 
-The same answer comes from `GET /api/devices[?deep=1&fresh=1]` and, for the phone (whose proxy allows no new route), `POST /api/action {"type":"devices.list","deep":true}`. Owner only and never relayed: a peer token gets `MESH_OWNER_ONLY`, `?node=` gets `MESH_INVALID_REQUEST`. Without `deep` the list comes from caches (mesh discovery 30 s, fleet inventory 15 s, SSH checks 45 s, adb 15 s) and never waits on the network.
+The same answer comes from `GET /api/devices[?discover=1|deep=1|fresh=1]` and, for the phone (whose proxy allows no new route), `POST /api/action {"type":"devices.list","deep":true}`. `discover` asks the mesh again (what `/api/mesh` does) without checking SSH. Owner only and never relayed: a peer token gets `MESH_OWNER_ONLY`, `?node=` gets `MESH_INVALID_REQUEST`. Without `deep` the list comes from caches (mesh discovery 30 s, fleet inventory 15 s, SSH checks 45 s, adb 15 s) and never waits on the network.
 
 ## A device
 
@@ -57,3 +57,25 @@ The answer is `{v: 1, home: {id, name}, devices, requests, tailnet: {state}, che
 Reasons (`why`): `SELF`, `NO_PONTE`, `NOT_PAIRED`, `PAIRING_PENDING`, `ALREADY_PAIRED`, `OFFLINE`, `NO_ROUTE`, `NO_SSH`, `SSH_UNREACHABLE`, `UNCHECKED`, `PROBE_FAILED`, `NO_ADB`, `NOT_AVAILABLE`.
 
 adb is read only and only when an adb server already runs on this node (`adb devices -l`; asking would start one). `PONTE_ADB=0` turns it off, `PONTE_ADB_BIN` and `ANDROID_ADB_SERVER_PORT` move it.
+
+## One resolver
+
+Every door that names another device takes any id in its `ids`, or its name without case (ADR 0002, slice 2):
+
+| Door | Takes | Becomes |
+|---|---|---|
+| `?node=` on any `/api/*` route, `/api/rd?node=` | name, any id, `self` | the mesh id of a paired Ponte node; this node for itself |
+| `ponte ctl --node` | the same | the same, resolved by the CLI through `/api/devices?discover=1` |
+| `./ponte rd DEVICE` | the same | the same |
+| `fleet --from/--to`, `fleet probe`, `fleet.check` | the same | `self` or the machine's `ssh:ALIAS` |
+
+Old ids keep their old path: a 16-hex mesh id and `self`/`ssh:ALIAS` for the fleet are passed on without a lookup and fail as they always did. Anything else is looked up in the cached list first; a refusal there gets one more look with the mesh asked again, so a node discovered a second ago is not refused. A CLI talking to a server without `/api/devices` falls back to the names of `/api/mesh`.
+
+| Error | When |
+|---|---|
+| `MESH_PEER_NOT_FOUND` (404) | no device has that name or id |
+| `MESH_PEER_AMBIGUOUS` (409) | two devices share the name and no id matched: use an id |
+| `MESH_PEER_NOT_PAIRED` (409) | it runs Ponte but is not paired with this node: `./ponte mesh pair NAME`, approve there |
+| `DEVICE_NOT_PONTE` (409) | it is reachable only by SSH: use a terminal (`--agent ssh --host ALIAS`), not `?node=` |
+| `FLEET_MACHINE_NOT_FOUND` (404) | the fleet has no SSH machine for it |
+

@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { runCommand } from './process.mjs';
+import { ApiError, runCommand } from './process.mjs';
 
 // The device list (ADR 0002): one entity per computer or phone this node
 // reaches, composed from what the mesh, the fleet and adb already know. It
@@ -15,6 +15,8 @@ export const CAPABILITIES = Object.freeze(['screen', 'control', 'terminal', 'age
 const ADB_TTL = 15000;
 const PHONE_OS = new Set(['android', 'ios']);
 const SERIAL = /^[A-Za-z0-9._:-]{1,64}$/;
+const NODE_ID = /^[a-f0-9]{16}$/;
+const MACHINE_ID = /^(self|ssh:[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/;
 
 const lower = value => String(value || '').toLowerCase();
 const yes = via => ({ ok: true, via });
@@ -186,6 +188,37 @@ export function findDevice(listing, value) {
   return list.find(item => item.ids.some(id => lower(id) === wanted)) || list.filter(item => lower(item.name) === wanted).at(0) || null;
 }
 
+// The one resolver (ADR 0002, slice 2): any id in `ids`, "self", or the name
+// without case. A name two devices share is refused rather than guessed.
+export function resolveDevice(listing, value) {
+  const wanted = lower(value).trim();
+  if (!wanted) throw new ApiError(404, 'MESH_PEER_NOT_FOUND');
+  const list = listing?.devices || [];
+  const byId = list.find(item => item.ids.some(id => lower(id) === wanted));
+  if (byId) return byId;
+  const named = list.filter(item => lower(item.name) === wanted);
+  if (named.length > 1) throw new ApiError(409, 'MESH_PEER_AMBIGUOUS');
+  if (!named.length) throw new ApiError(404, 'MESH_PEER_NOT_FOUND');
+  return named[0];
+}
+
+// What ?node= needs: null for this node, the mesh id of a paired one.
+export function nodeTarget(device) {
+  if (device.self) return null;
+  const ponte = device.routes.find(route => route.via === 'ponte');
+  if (!ponte) throw new ApiError(409, 'DEVICE_NOT_PONTE', { name: device.name });
+  if (ponte.state !== 'paired') throw new ApiError(409, 'MESH_PEER_NOT_PAIRED', { name: device.name });
+  return device.id;
+}
+
+// What the fleet needs: "self" or the ssh:ALIAS of the machine.
+export function fleetMachine(device) {
+  if (device.self) return 'self';
+  const machine = device.ids.find(id => MACHINE_ID.test(id));
+  if (!machine) throw new ApiError(404, 'FLEET_MACHINE_NOT_FOUND');
+  return machine;
+}
+
 // Is an adb server already up? Asking `adb devices` would start one.
 function adbServerUp(port, timeout = 300) {
   return new Promise(resolve => {
@@ -215,16 +248,37 @@ export function createDevices({ mesh, fleet, env = process.env, runner = runComm
     return adbInflight;
   }
 
-  // Fast by default (caches only, like mesh.view()); `deep` checks SSH routes
-  // and probes machines, `fresh` skips every cache.
-  async function list({ fresh = false, deep = false } = {}) {
+  // Fast by default (caches only, like mesh.view()); `discover` asks the mesh
+  // again (what /api/mesh does), `deep` also checks SSH routes and probes
+  // machines, `fresh` skips every cache.
+  async function list({ fresh = false, deep = false, discover = false } = {}) {
     const [meshView, fleetView, adbView] = await Promise.all([
-      deep || fresh ? mesh.list() : Promise.resolve(mesh.view()),
+      deep || fresh || discover ? mesh.list() : Promise.resolve(mesh.view()),
       fleet ? fleet.overview({ fresh, deep }).catch(() => null) : null,
       adbDevices().catch(() => []),
     ]);
     return composeDevices({ mesh: meshView, nodes: mesh.nodes?.() || null, fleet: fleetView, adb: adbView, now: now() });
   }
 
-  return { list, find: async value => findDevice(await list(), value) };
+  // From the caches first. A refusal they cause (a node not discovered yet
+  // looks unknown or Ponte-less) gets one more look with the mesh asked
+  // again, like the old name lookup of /api/mesh.
+  const RETRY = new Set(['MESH_PEER_NOT_FOUND', 'DEVICE_NOT_PONTE', 'MESH_PEER_NOT_PAIRED']);
+  async function resolve(value, use = device => device) {
+    if (!String(value ?? '').trim()) throw new ApiError(404, 'MESH_PEER_NOT_FOUND');
+    try { return use(resolveDevice(await list(), value)); } catch (error) {
+      if (!RETRY.has(error.code)) throw error;
+    }
+    return use(resolveDevice(await list({ discover: true }), value));
+  }
+
+  // Old ids pass through untouched (and fail as they always did); anything
+  // else goes through the resolver.
+  return {
+    list,
+    find: async value => findDevice(await list(), value),
+    resolve: value => resolve(value),
+    node: async value => NODE_ID.test(value) ? value : resolve(value, nodeTarget),
+    machine: async value => typeof value !== 'string' || MACHINE_ID.test(value) ? value : resolve(value, fleetMachine),
+  };
 }
