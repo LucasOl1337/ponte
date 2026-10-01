@@ -266,9 +266,9 @@ export function createRemoteDesktop({
       if (!pick) throw Object.assign(new Error('no monitor'), { code: 'MONITORS_UNAVAILABLE' });
       this.monitor = pick.name;
       if (this.ended) return;
-      if (holder && holder !== this) holder.take();
-      holder = this;
       if (this.caps.input && this.wantsInput) {
+        if (holder && holder !== this) holder.take();
+        holder = this;
         this.input = createInput({ python, dryRun: inputMode === 'dry-run', logFile: inputLog, mapping, env, spawn, now, log });
         this.input.setMonitors(this.monitors);
         this.input.start();
