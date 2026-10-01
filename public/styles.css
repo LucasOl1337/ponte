@@ -319,17 +319,17 @@ body[data-keyboard-open=true] .screen-toolbar > .icon-button { height: 32px; }
 .screen-mic svg{width:22px;height:22px}
 .screen-mic.recording{background:#f3ad9e;border-color:#f3ad9e;color:#2b1410}
 .screen-mic:disabled{opacity:.35}
-.screen-dictate-status{position:fixed;right:76px;bottom:calc(100px + env(safe-area-inset-bottom));z-index:45;margin:0;max-width:60vw;padding:8px 12px;border-radius:12px;background:#0f140de6;border:1px solid #3a4534;font-size:12px}
+.screen-dictate-status{margin:0;padding:8px 12px;border-radius:12px;background:#0f140de6;border:1px solid #3a4534;font-size:12px}
 .viewer-page .screen-card{position:relative}
 @media(max-width:700px),(max-height:600px){
   body[data-screen-keyboard=true] .viewer-page{top:0;bottom:auto;width:100%;height:calc(var(--remote-viewport-height,100vh) - var(--screen-composer-h,0px))}
-  body[data-keyboard-open=true] .screen-fabs,body[data-keyboard-open=true] .screen-dictate-status{bottom:calc(var(--remote-viewport-top,0px) + var(--screen-composer-h,0px) + 12px);top:auto}
+  body[data-keyboard-open=true] .screen-fabs{bottom:calc(var(--remote-viewport-top,0px) + var(--screen-composer-h,0px) + 12px);top:auto}
   /* Bar open with the keyboard dismissed: it sits above the app nav, and the
      monitor and the floating buttons make room for it. */
   body[data-screen-composer=true] .screen-composer{bottom:calc(84px + env(safe-area-inset-bottom))}
   body[data-screen-composer=true][data-keyboard-open=true] .screen-composer{bottom:0}
   body[data-screen-composer=true]:not([data-screen-keyboard=true]) .viewer-page{bottom:calc(84px + env(safe-area-inset-bottom) + var(--screen-composer-h,0px))}
-  body[data-screen-composer=true]:not([data-keyboard-open=true]) .screen-fabs,body[data-screen-composer=true]:not([data-keyboard-open=true]) .screen-dictate-status{bottom:calc(96px + env(safe-area-inset-bottom) + var(--screen-composer-h,0px))}
+  body[data-screen-composer=true]:not([data-keyboard-open=true]) .screen-fabs{bottom:calc(96px + env(safe-area-inset-bottom) + var(--screen-composer-h,0px))}
   /* While typing, only the keyboard and mic buttons stay; the others would sit
      on top of the (now smaller) monitor. */
   body[data-screen-composer=true] #screen-switch-monitor,body[data-screen-composer=true] #screen-rotate{display:none}
@@ -351,7 +351,6 @@ body[data-current-page=tela] .bottom-nav{backdrop-filter:none;background:#24291f
   .screen-fab{width:40px;height:40px}
   .screen-scroll{border-radius:20px}
   .screen-mic{width:46px;height:46px}
-  .screen-dictate-status{right:66px;bottom:16px}
 }
 /* The old landscape layout split the card into image + side controls. With the
    single-mode screen there is nothing beside the monitor: let it fill. */
@@ -363,6 +362,26 @@ body[data-current-page=tela] .bottom-nav{backdrop-filter:none;background:#24291f
 }
 .screen-mic span{display:none}
 .screen-mic.recording svg{width:22px;height:22px}
+/* Nothing on the PC may stay stuck under a control. In portrait the buttons
+   are one row along the bottom edge: a landscape monitor leaves that band
+   black, so at 1x they cover none of the image, and the zoomed view gets an
+   overscroll of the row's height (app.js, screenControlInsets) so the PC's
+   bottom edge can be panned up above them. */
+@media (orientation:portrait){
+  .screen-fabs{flex-direction:row;align-items:center;gap:8px;right:12px}
+  .screen-scroll{flex-direction:row}
+  .screen-scroll .screen-fab+.screen-fab{border-top:0;border-left:1px solid #454e38}
+}
+/* Messages on the screen are glanceable, not furniture: they sit at the top
+   (below the workspace strip, black band in portrait), take two lines at most,
+   let touches through to the PC, leave after a reading time and on the first
+   touch on the monitor (app.js, screenMessageMs / dismissScreenMessages). */
+.screen-dictate-status,body[data-current-page=tela] .toast{position:fixed;top:calc(54px + env(safe-area-inset-top));bottom:auto;left:50%;right:auto;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);z-index:46;pointer-events:none;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;text-align:center;overflow-wrap:anywhere}
+.screen-dictate-status[hidden],body[data-current-page=tela] .toast[hidden]{display:none!important}
+body[data-screen-keyboard=true] .screen-dictate-status,body[data-screen-keyboard=true][data-current-page=tela] .toast{top:calc(8px + var(--remote-viewport-top,0px))}
+/* Both at once: the toast stacks under the bubble (two lines tall at most). */
+body[data-current-page=tela]:has(.screen-dictate-status:not([hidden])) .toast{top:calc(116px + env(safe-area-inset-top))}
+body[data-screen-keyboard=true][data-current-page=tela]:has(.screen-dictate-status:not([hidden])) .toast{top:calc(70px + var(--remote-viewport-top,0px))}
 /* Command composer: a place to build a command with the full keyboard, reuse
    past ones, and send it (type + Enter) in one confident tap. */
 .cmd-composer{margin:14px 0 6px}

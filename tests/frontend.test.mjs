@@ -123,6 +123,11 @@ function mappingContext() {
     globalThis.scaleMonitorRegion = scaleMonitorRegion;
     globalThis.regionsClose = regionsClose;
     globalThis.nativePreviewRegion = nativePreviewRegion;
+    globalThis.screenControlInsets = screenControlInsets;
+    globalThis.fitScreenBase = fitScreenBase;
+    globalThis.screenPanBounds = screenPanBounds;
+    globalThis.clampPan = clampPan;
+    globalThis.screenFrame = screenFrame;
   `, context);
   return context;
 }
@@ -165,6 +170,110 @@ test('touch mapping converts zoom and pan into monitor pixels', () => {
   assert.deepEqual(pinched, { x: 480, y: 270, w: 960, h: 540 });
 });
 
+// Poco F7 em retrato (394x769 css de preview), monitor ultrawide 3440x1440.
+const portraitPreview = { left: 0, top: 0, width: 394, height: 769 };
+const portraitRow = { left: 70, top: 700, width: 320, height: 62 }; // linha de botões na faixa de baixo
+const workspaceStrip = { left: 196, top: 8, width: 190, height: 44 };
+const landscapePreview = { left: 0, top: 0, width: 853, height: 394 };
+const landscapeRail = { left: 793, top: 40, width: 52, height: 340 }; // trilho vertical à direita
+
+test('free area: each control takes its own edge off the preview, with a cap', () => {
+  const m = mappingContext();
+  const plain = value => JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(m.screenControlInsets(portraitPreview, [portraitRow, workspaceStrip])), { top: 58, right: 0, bottom: 75, left: 0 });
+  assert.deepEqual(plain(m.screenControlInsets(landscapePreview, [landscapeRail])), { top: 0, right: 66, bottom: 0, left: 0 });
+  // Hidden or off-preview controls cost nothing.
+  assert.deepEqual(plain(m.screenControlInsets(portraitPreview, [{ left: 0, top: 0, width: 0, height: 0 }, { left: 500, top: 0, width: 40, height: 40 }])), { top: 0, right: 0, bottom: 0, left: 0 });
+  // A control as tall as the preview never shrinks the monitor below 55%.
+  const huge = plain(m.screenControlInsets(landscapePreview, [{ left: 300, top: 0, width: 553, height: 394 }]));
+  assert.ok(huge.right <= 853 * 0.45 + 1);
+});
+
+test('1x frame: an ultrawide in portrait fits clear of the controls without shrinking', () => {
+  const m = mappingContext();
+  const plain = value => JSON.parse(JSON.stringify(value));
+  const frame = plain(m.screenFrame(portraitPreview, { w: 3440, h: 1440 }, [portraitRow, workspaceStrip]));
+  // The letterbox already has room: the image keeps the full width.
+  assert.equal(Math.round(frame.w), 394);
+  assert.deepEqual(frame.pan, { top: 58, right: 0, bottom: 75, left: 0 });
+  const bounds = m.screenPanBounds(portraitPreview, frame.fit, frame.w, frame.h);
+  const top = (bounds.y.min + bounds.y.max) / 2;
+  assert.ok(top + frame.h <= portraitRow.top, 'image ends above the button row');
+  assert.ok(top >= workspaceStrip.top + workspaceStrip.height, 'image starts below the workspace strip');
+  // In landscape the rail collides, so the image shrinks to the free width.
+  const wide = plain(m.screenFrame(landscapePreview, { w: 3440, h: 1440 }, [landscapeRail]));
+  assert.ok(wide.w <= 853 - 66 + 0.5);
+  const xb = m.screenPanBounds(landscapePreview, wide.fit, wide.w, wide.h).x;
+  assert.ok((xb.min + xb.max) / 2 + wide.w <= landscapeRail.left, 'image ends left of the rail');
+});
+
+test('zoomed pan overscrolls by the control insets so no PC pixel is stuck under a button', () => {
+  const m = mappingContext();
+  const insets = { top: 58, right: 0, bottom: 75, left: 0 };
+  // 8x of a 394-wide base, the case Lucas hit: the bottom-right corner.
+  const sw = 394 * 8, sh = 165 * 8;
+  const bounds = m.screenPanBounds(portraitPreview, insets, sw, sh);
+  assert.equal(bounds.x.min, 394 - sw);
+  assert.equal(bounds.x.max, 0);
+  assert.equal(bounds.y.min, 769 - 75 - sh, 'bottom edge stops at the top of the button row');
+  assert.equal(bounds.y.max, 58, 'top edge stops under the workspace strip');
+  // Panned all the way, the last PC row sits right above the buttons.
+  const panY = m.clampPan(-99999, bounds.y);
+  assert.equal(panY + sh, portraitRow.top - 6);
+  // Landscape rail: the right edge comes out from under it.
+  const lx = m.screenPanBounds(landscapePreview, { top: 0, right: 66, bottom: 0, left: 0 }, 787 * 5, 330 * 5).x;
+  assert.equal(m.clampPan(-99999, lx) + 787 * 5, 853 - 66);
+  // Smaller than the free area: it may move inside it, never under a control.
+  const small = m.screenPanBounds(portraitPreview, insets, 394, 165);
+  assert.equal(small.y.min, 58);
+  assert.equal(small.y.max, 769 - 75 - 165);
+});
+
+test('screen messages last as long as it takes to read them', () => {
+  const m = mappingContext();
+  vm.runInContext(source.slice(source.indexOf('function screenMessageMs'), source.indexOf('function toast(')) + ';globalThis.screenMessageMs = screenMessageMs;', m);
+  assert.equal(m.screenMessageMs('Pronto'), 2500 + 55 * 6);
+  assert.equal(m.screenMessageMs('x'.repeat(400)), 9000);
+  assert.equal(m.screenMessageMs('Pronto', true), Math.round((2500 + 55 * 6) * 1.5));
+  assert.equal(m.screenMessageMs('x'.repeat(400), true), 13500);
+});
+
+test('the "you said" bubble and toasts leave on their own and on the first touch', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  h.run("navigate('tela')");
+  const bubble = h.el('#screen-dictate-status');
+  // Progress stays until it changes.
+  h.run("dictationStatus($('#screen-dictate-status'), 'Transcrevendo…')");
+  assert.equal(bubble.hidden, false);
+  assert.equal(h.run('dictationTimers.size'), 0);
+  // What was heard leaves after the reading time.
+  h.run("dictationStatus($('#screen-dictate-status'), 'Você disse: abre o terminal', false, true)");
+  assert.equal(bubble.hidden, false);
+  await h.runTimer(h.run("dictationTimers.get($('#screen-dictate-status'))"));
+  assert.equal(bubble.hidden, true);
+  // A touch on the stream dismisses what is only there to be read.
+  h.run("dictationStatus($('#screen-dictate-status'), 'Você disse: oi', false, true); toast('Copiado')");
+  assert.equal(bubble.hidden, false);
+  assert.equal(h.el('#toast').hidden, false);
+  h.run('dismissScreenMessages()');
+  assert.equal(bubble.hidden, true);
+  assert.equal(h.el('#toast').hidden, true);
+  assert.equal(h.run('dictationTimers.size'), 0);
+  // The toast timer itself hides it too.
+  h.run("toast('Copiado')");
+  await h.runTimer(h.run('toastTimer'));
+  assert.equal(h.el('#toast').hidden, true);
+  // A real finger on the stream does the dismissing.
+  h.run("connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#monitor-select').value='HDMI-A-1'");
+  h.run("dictationStatus($('#screen-dictate-status'), 'Você disse: oi', false, true); toast('Copiado')");
+  const preview = h.el('#screen-preview');
+  preview.dispatchEvent({ type: 'pointerdown', pointerId: 9, clientX: 100, clientY: 100, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  assert.equal(bubble.hidden, true);
+  assert.equal(h.el('#toast').hidden, true);
+  preview.dispatchEvent({ type: 'pointerup', pointerId: 9, clientX: 100, clientY: 100, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  await flushTicks();
+});
 
 test('Android permission dialog keeps the pending microphone request, while background closes it', () => {
   const handlerSource = source.slice(source.indexOf("window.addEventListener('ponte-native-pause'"), source.indexOf("window.addEventListener('hashchange'"));
