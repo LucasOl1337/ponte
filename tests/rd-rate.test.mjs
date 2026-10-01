@@ -315,15 +315,47 @@ test('acks: frames in flight for over a second step down without waiting for any
   assert.ok(clock - 4000 <= 1300, `after ${clock - 4000} ms`);
 });
 
-test('acks: a keyframe burst measures the capacity, and a climb after the calm goes straight to what it carries (once a minute)', () => {
+test('acks: recovery measures a fresh keyframe before climbing, never trusting the fall sample', () => {
   // Opens at W3 on a link that fell to 1.2 Mbps, then grows to 30 Mbps at 20 s.
   const { events, c } = simulate({ seconds: 240, capacity: t => t < 20000 ? 1200 : 30000 });
   const ups = events.filter(e => e.reason === 'up');
   assert.ok(ups.length >= 1, JSON.stringify(events));
-  // The first climb is one step (the samples so far saw 1.2 Mbps); its keyframe sees 30 Mbps, and the next one goes to the top.
-  assert.equal(ups[1]?.step, 5, JSON.stringify(ups));
+  const probe = events.find(e => e.reason === 'probe');
+  const down = events.find(e => e.reason === 'down');
+  assert.ok(probe && probe.at - down.at >= 60000, JSON.stringify(events));
+  assert.equal(probe.step, down.step, 'measure at the safe delta rate');
+  // The floor's tiny keyframe and the 50 ms ack floor only prove W2.
+  // Larger keyframes of later runs measure more room, never a blind jump.
+  assert.equal(ups[0]?.step, 2, JSON.stringify(events));
+  assert.equal(ups[1]?.step, 4, JSON.stringify(events));
   assert.ok(ups[1].at - ups[0].at >= 60000);
+  assert.ok(ups[0].at - probe.at >= 30000, 'a measured climb still waits 30 s calm');
   assert.equal(c.step, 5);
+});
+
+test('acks: isolated coalescing jitter does not starve calm, but a sustained small queue does', () => {
+  function run(queueAt) {
+    const t = control({ caps: { ack: true, key: true } });
+    t.c.open(30);
+    let seq = 0, decision = null;
+    for (let ms = 100; ms <= 35000; ms += 100) {
+      t.at(ms); t.c.sent(1000, false, ++seq);
+      t.pass(30 + queueAt(ms)); t.c.ack(seq);
+      if (ms % 1000 === 0) decision = t.c.tick() || decision;
+    }
+    return decision;
+  }
+  assert.equal(run(ms => ms % 5000 === 0 ? 80 : 0)?.reason, 'up', 'isolated jitter');
+  assert.equal(run(ms => ms % 5000 < 1000 ? 80 : 0), null, 'sustained 80 ms queue');
+  assert.equal(run(ms => ms % 5000 === 0 ? 160 : 0), null, 'large spike still resets calm');
+});
+
+test('acks: recovery on an unchanged tight link probes at most once a minute and never climbs blind', () => {
+  const { events } = simulate({ seconds: 240, capacity: () => 1200 });
+  assert.equal(events.filter(e => e.reason === 'up').length, 0, JSON.stringify(events));
+  const probes = events.filter(e => e.reason === 'probe');
+  assert.ok(probes.length >= 2, JSON.stringify(events));
+  for (let i = 1; i < probes.length; i++) assert.ok(probes[i].at - probes[i - 1].at >= 60000);
 });
 
 test('acks: opening on a roomy link climbs as soon as its first keyframe crossed, not after 30 s', () => {

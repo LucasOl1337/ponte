@@ -49,6 +49,10 @@ const SAMPLE_FRESH_MS = 2 * 60000, SAMPLE_HEADROOM = 1.25, SAMPLE_CLEARS_BACKOFF
 // on the steps, before any fall, a keyframe that crossed with twice the room a
 // higher step needs, 2 s without a queue, climbs there at once.
 const OPEN_WINDOW_MS = 20000, OPEN_CALM_MS = 2000, OPEN_HEADROOM = 2;
+// After a fall, calm only proves the current step fits. Its old keyframe
+// cannot tell whether the link recovered. Refresh it within the same restart
+// budget before climbing, and require the same headroom as the fast opening.
+const RECOVERY_SAMPLE_MS = 60000;
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
@@ -69,7 +73,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   let mode = 'lan', step = INITIAL_STEP, shedding = false;
   let openedAt = now(), openRtt = null;
   let lastRestartAt = -Infinity, lastDownAt = -Infinity, lastUpAt = -Infinity, upTo = null, atStepSince = now();
-  let lastUncalmAt = now(), lastReportAt = -Infinity, badStreak = 0;
+  let lastUncalmAt = now(), uncalmSince = null, lastReportAt = -Infinity, badStreak = 0;
   let lastKey = null, opening = false;
   let stage = view;
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
@@ -137,7 +141,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     step = next; lastRestartAt = t; badStreak = 0; shedding = false; lastUncalmAt = t;
     // Frames of the old run still queued say nothing about the new one, nor
     // do the ones sent behind them: judge again once they have drained.
-    badSince = null; judgeFrom = inFlight.length ? Infinity : t;
+    badSince = null; uncalmSince = null; judgeFrom = inFlight.length ? Infinity : t;
     return { reason, params: params() };
   }
 
@@ -244,7 +248,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       // A keyframe that crossed the link in one burst measured its capacity.
       const burst = arrived.find(item => item.keyframe && item.bytes >= SAMPLE_MIN_BYTES);
       if (burst) {
-        sample = { at: t, kbps: burst.bytes * 8 / Math.max(SAMPLE_MIN_MS, t - burst.at - before) };
+        sample = { at: t, sentAt: burst.at, kbps: burst.bytes * 8 / Math.max(SAMPLE_MIN_MS, t - burst.at - before) };
         for (const [target] of backoff) if (sample.kbps >= SAMPLE_CLEARS_BACKOFF * WAN_STEPS[target].kbps) backoff.delete(target);
       }
       drained(t);
@@ -261,7 +265,12 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       if (shedding) return queue < QUEUE_BAD_MS || !inFlight.length ? change('key', 0) : null;
       if (frame.at < judgeFrom) { lastUncalmAt = t; return null; }
       if (keyframeExcuse(t, 100)) return null;
-      if (queue >= QUEUE_CALM_MS) lastUncalmAt = t;
+      // Acks wait up to 50 ms on the page. Isolated phase/jitter spikes are
+      // not a standing queue and must not restart the whole 30 s calm.
+      if (queue >= QUEUE_CALM_MS) {
+        uncalmSince ??= t;
+        if (queue > QUEUE_BAD_MS || t - uncalmSince >= BAD_SUSTAIN_MS) lastUncalmAt = t;
+      } else uncalmSince = null;
       if (queue > QUEUE_EMERGENCY_MS || queued(queue, t)) return congested(queue, queue > QUEUE_EMERGENCY_MS);
       return emergency(t);
     },
@@ -325,6 +334,17 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       }
       if (t - lastUncalmAt < UP_CALM_MS || t - lastRestartAt < UP_CALM_MS) return null;
       if (t - lastDownAt < DOWN_QUIET_MS || t - lastUpAt < UP_EVERY_MS) return null;
+      if (acking && lastDownAt > -Infinity) {
+        // One same-step keyframe, never more than once a minute. Unlike a
+        // blind climb it measures room without increasing the delta rate.
+        if (!sample || sample.sentAt < lastDownAt + DOWN_QUIET_MS || t - sample.at > RECOVERY_SAMPLE_MS) {
+          if (t - lastRestartAt < UP_EVERY_MS) return null;
+          return change('probe', step);
+        }
+        let target = WAN_STEPS.findLastIndex(s => s.kbps <= sample.kbps / OPEN_HEADROOM);
+        while (target > step && (backoff.get(target)?.retryAt ?? 0) > t) target--;
+        return target > step ? change('up', target) : null;
+      }
       // A fresh capacity sample may skip steps; a step that failed waits its backoff.
       const fit = sample && t - sample.at <= SAMPLE_FRESH_MS ? WAN_STEPS.findLastIndex(s => s.kbps <= sample.kbps / SAMPLE_HEADROOM) : -1;
       let target = Math.max(step + 1, fit);
