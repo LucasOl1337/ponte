@@ -1,8 +1,321 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#151714"><meta name="description" content="Ponte is an open source Android remote for Omarchy, with touch controls and live monitor views over Tailscale."><title>Ponte · Your Omarchy desktop, within reach</title><link rel="icon" href="assets/icon.svg"><link rel="stylesheet" href="site.css"><script src="site.js" defer></script><link rel="canonical" href="https://lucasol1337.github.io/ponte/"><meta property="og:type" content="website"><meta property="og:locale" content="en_US"><meta property="og:title" content="Ponte · Your Omarchy desktop, within reach"><meta property="og:description" content="Open source Android remote for Omarchy over Tailscale. Touch controls and live monitor views. English by default, Portuguese optional. Experimental alpha."><meta property="og:url" content="https://lucasol1337.github.io/ponte/"><meta property="og:image" content="https://lucasol1337.github.io/ponte/assets/hero.png"><meta property="og:image:alt" content="AI-generated concept artwork: a lime glass bridge connects a phone and desktop monitors."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Ponte · Your Omarchy desktop, within reach"><meta name="twitter:description" content="Open source Android remote for Omarchy over Tailscale. Experimental alpha with English and Portuguese interfaces."><meta name="twitter:image" content="https://lucasol1337.github.io/ponte/assets/hero.png"><meta name="twitter:image:alt" content="AI-generated concept artwork: a lime glass bridge connects a phone and desktop monitors."></head>
-<body><header><a class="wordmark" href="#" aria-label="Ponte home" id="home-link">ponte<span>.</span></a><nav><label class="language"><span class="sr-only" data-t="language">Language</span><select id="language" aria-label="Language"><option value="en">English</option><option value="pt">Português</option></select></label><a href="https://github.com/LucasOl1337/ponte">GitHub ↗</a></nav></header>
-<main><section class="hero"><img src="assets/hero.png" alt="" class="hero-art"><div class="hero-copy"><p class="eyebrow" data-t="alpha">OPEN SOURCE ALPHA</p><h1 data-t="headline">Your Omarchy desktop,<br><em>within reach.</em></h1><p class="lead" data-t="intro">Touch controls and live monitor views on your Android phone. Connected through your own Tailscale network.</p><a class="button" href="https://github.com/LucasOl1337/ponte#try-it" data-t="setup">Set up Ponte ↗</a><a class="text-link" href="presentation.pdf" data-t="deck">View presentation</a></div></section>
-<section class="product"><div><p class="eyebrow" data-t="controlLabel">ON YOUR PHONE</p><h2 data-t="controlTitle">The controls<br>you came for.</h2><p data-t="controlText">Move the pointer, send text, switch windows and adjust the volume. Pair once and open the app from your home screen.</p><p class="small" data-t="languageNote">English by default. Switch to Portuguese whenever you want. Ponte remembers your preference.</p></div><figure><img src="assets/app-en-control.png" alt="Ponte control interface in English" id="app-preview" width="390" height="844"><figcaption data-t="preview">English browser preview of the running app. Physical Redmi evidence is linked below.</figcaption></figure></section>
-<section class="video"><p class="eyebrow" data-t="videoLabel">LIVE MONITOR VIEWS</p><h2 data-t="videoTitle">See what is happening<br>on your PC.</h2><div class="columns"><p data-t="videoText">Select a monitor, pause the stream, zoom in or use fullscreen. The stream stops when you leave the live view.</p><p class="small" data-t="videoLimit">MJPEG profiles up to 10 fps. No system audio. The local test with three monitors measured 7.1–7.3 fps per stream. Cellular performance has not been measured.</p></div><a class="text-link" href="https://github.com/LucasOl1337/ponte/blob/main/docs/evidence.md" data-t="evidence">Read the real device evidence ↗</a></section>
-<section class="release"><div><p class="eyebrow" data-t="releaseLabel">A FIRST RELEASE</p><h2 data-t="releaseTitle">Open source.<br>Built for your PC.</h2></div><div><p data-t="releaseText">MIT licensed, with a local Node.js server and no production npm dependencies. Your Android build uses your own server address and certificate.</p><p class="small" data-t="releaseLimit">This is an experimental alpha. Initial setup still requires a personal APK build and a pairing key. Android recording verification is in progress.</p><a class="button" href="https://github.com/LucasOl1337/ponte" data-t="source">Explore the source ↗</a></div></section></main>
-<footer><span class="wordmark">ponte<span>.</span></span><p data-t="independent">An independent project for Omarchy. No official endorsement. Cover artwork generated with AI. App captures are identified separately.</p><a href="https://github.com/LucasOl1337/ponte/blob/main/docs/assets.md" data-t="credits">Credits</a></footer></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ponte · Your Omarchy desktop, within reach</title>
+<meta name="description" content="Open source Android remote for Omarchy over Tailscale. Touch the monitor, type, switch windows, and see live views. Experimental alpha.">
+<meta name="theme-color" content="#151714">
+<link rel="icon" href="media/logo.svg">
+<link rel="canonical" href="https://lucasol1337.github.io/ponte/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Ponte · Your Omarchy desktop, within reach">
+<meta property="og:description" content="Open source Android remote for Omarchy over Tailscale. Experimental alpha.">
+<meta property="og:image" content="media/poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#151714;--sf:#20231e;--sf2:#272b24;--bd:#34392f;--bds:#454e38;
+  --ink:#f4f2e9;--ink2:#c8d0bd;--ink3:#a3aa99;--acc:#d5f888;--acch:#c4ea6f;--gra:#1a2114;
+  --max:1120px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"Noto Sans","Segoe UI",system-ui,sans-serif;font-size:17px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+code,.mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:22px 0;gap:16px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.04em;font-size:22px;color:var(--ink);text-decoration:none}
+.brand:hover{text-decoration:none}
+.brand img{width:28px;height:24px}
+.brand b{color:var(--acc);font-weight:650}
+.nav .links{display:flex;gap:20px;align-items:center;font-size:14px}
+.nav .links a{color:var(--ink3)}.nav .links a:hover{color:var(--ink);text-decoration:none}
+.lang{background:var(--sf);color:var(--acc);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;font:inherit;min-height:44px}
+.btn{display:inline-flex;align-items:center;gap:10px;padding:13px 22px;border-radius:12px;font-weight:600;font-size:15px;border:1px solid transparent;transition:.15s}
+.btn.acc{background:var(--acc);color:var(--gra)}.btn.acc:hover{background:var(--acch);text-decoration:none}
+.btn.ghost{border-color:var(--bds);color:var(--ink2)}.btn.ghost:hover{background:var(--sf2);text-decoration:none;color:var(--ink)}
+.hero{padding:64px 0 36px;display:grid;grid-template-columns:1.02fr .98fr;gap:48px;align-items:center}
+.k{font-size:12px;letter-spacing:.26em;font-weight:650;color:var(--acc);text-transform:uppercase;margin:0 0 18px}
+h1{font-size:clamp(42px,5.8vw,72px);line-height:1.04;letter-spacing:-.03em;margin:0 0 20px;font-weight:550}
+h1 em{color:var(--acc);font-style:normal}
+.lead{font-size:20px;color:var(--ink2);max-width:520px;margin:0 0 28px}
+.cta{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.cta small{color:var(--ink3);font-size:13px;width:100%;margin-top:4px}
+.video{position:relative;border-radius:16px;overflow:hidden;background:#000;border:1px solid var(--bd);box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.video video{display:block;width:100%;height:auto}
+.vcap{color:var(--ink3);font-size:13.5px;margin:10px 0 0}
+.pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:52px 0 0}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:26px 26px 24px}
+.card h3{margin:14px 0 8px;font-size:20px;letter-spacing:-.01em}
+.card p{margin:0;color:var(--ink3);font-size:15.5px}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 8px rgba(213,248,136,.14)}
+section{padding:84px 0 0}
+h2{font-size:clamp(30px,4vw,44px);line-height:1.08;letter-spacing:-.02em;margin:0 0 14px;font-weight:550}
+.sub{color:var(--ink3);font-size:18px;max-width:680px;margin:0 0 34px}
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center;margin-top:40px}
+.feat.rev .shot{order:-1}
+.feat h3{font-size:26px;letter-spacing:-.015em;margin:0 0 10px;font-weight:550}
+.feat p{color:var(--ink2);margin:0 0 12px}
+.feat ul{margin:12px 0 0;padding-left:18px;color:var(--ink2)}
+.feat li{margin:6px 0}
+.shot{border-radius:22px;overflow:hidden;border:1px solid var(--bd);background:#10140e;box-shadow:0 24px 60px rgba(0,0,0,.4);max-width:390px;margin:0 auto}
+.shot img{display:block;width:100%;height:auto}
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:36px}
+.step{background:var(--sf);border:1px solid var(--bd);border-radius:14px;padding:22px}
+.step .n{font-family:"JetBrains Mono",monospace;color:var(--acc);font-size:13px;margin-bottom:10px}
+.step h4{margin:0 0 6px;font-size:17px}.step p{margin:0;color:var(--ink3);font-size:14.5px}
+.nums{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:36px}
+.num{background:var(--sf2);border-radius:14px;padding:22px}
+.num b{display:block;font-size:32px;letter-spacing:-.02em;font-weight:800}
+.num span{color:var(--ink3);font-size:14px}
+table{width:100%;border-collapse:collapse;margin-top:34px;background:var(--sf);border:1px solid var(--bd);border-radius:16px;overflow:hidden}
+th,td{padding:15px 18px;text-align:left;border-bottom:1px solid var(--bd);font-size:15.5px;vertical-align:top}
+th{color:var(--ink3);font-weight:600;font-size:13px;letter-spacing:.14em;text-transform:uppercase;background:var(--sf2)}
+tr:last-child td{border-bottom:0}
+td.y{color:var(--ink)}td.n{color:var(--ink3)}
+td:first-child{color:var(--ink2);width:28%}
+.foot-note{color:var(--ink3);font-size:13.5px;margin-top:12px}
+pre{background:var(--sf);border:1px solid var(--bd);border-radius:14px;padding:20px 22px;overflow:auto;font-size:14px;line-height:1.6;color:var(--ink2);margin:0}
+pre .c{color:var(--ink3)}pre .a{color:var(--acc)}
+footer{margin-top:96px;padding:40px 0 60px;border-top:1px solid var(--bd);color:var(--ink3);font-size:14px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .6s ease,transform .6s ease}
+.reveal.in{opacity:1;transform:none}
+@media (max-width:900px){
+  .hero{grid-template-columns:1fr;padding-top:28px}
+  .pillars,.flow,.nums{grid-template-columns:1fr 1fr}
+  .feat{grid-template-columns:1fr}.feat.rev .shot{order:0}
+  .nav .links a:not(.keep){display:none}
+}
+@media (max-width:560px){.pillars,.flow,.nums{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.reveal{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <a class="brand" href="#" aria-label="Ponte home"><img src="media/logo.svg" alt="">ponte<b>.</b></a>
+    <div class="links">
+      <a href="#como" data-t="navHow">How it works</a>
+      <a href="#telas" data-t="navScreens">Screens</a>
+      <a href="#compare" data-t="navCompare">Compare</a>
+      <a href="#instalar" data-t="navInstall">Set up</a>
+      <a class="keep" href="https://github.com/LucasOl1337/ponte">GitHub ↗</a>
+      <label><span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Language</span>
+        <select class="lang" id="language" aria-label="Language"><option value="en">EN</option><option value="pt">PT</option></select>
+      </label>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <p class="k" data-t="kicker">Open source alpha · Omarchy · Tailscale</p>
+      <h1 data-t="headline">Your desktop.<br><em>From anywhere.</em></h1>
+      <p class="lead" data-t="lead">Touch controls and live monitor views on an Android phone, over your own tailnet. Independent experimental alpha.</p>
+      <div class="cta">
+        <a class="btn acc" href="https://github.com/LucasOl1337/ponte#try-it" data-t="cta">Set up Ponte ↗</a>
+        <a class="btn ghost" href="https://github.com/LucasOl1337/ponte" data-t="code">View the code</a>
+        <small data-t="ctaNote">No generic APK. You build one for your PC. Live video and pairing were verified on a Redmi Note 13 Pro+ running Android 14.</small>
+      </div>
+    </div>
+    <div>
+      <div class="video">
+        <video controls playsinline preload="metadata" poster="media/poster.jpg">
+          <source src="media/ponte-promo-web.mp4" type="video/mp4">
+        </video>
+      </div>
+      <p class="vcap" data-t="vcap">Narration: Lucas Oliveira, official OmniVoice profile. The app on screen is a bench-local demo with its own synthetic desktop, not the author's live session.</p>
+    </div>
+  </header>
+
+  <div class="pillars">
+    <div class="card reveal"><div class="dot"></div><h3 data-t="p1t">Your tailnet, not a vendor cloud</h3><p data-t="p1">The phone talks to your PC over Tailscale TLS. A device on the same account pairs without a password. Ponte has no analytics SDK.</p></div>
+    <div class="card reveal"><div class="dot"></div><h3 data-t="p2t">The monitor is the UI</h3><p data-t="p2">Tap clicks. Long-press right-clicks or drags. Pinch zooms. Two fingers scroll. Tap a text field and the Android keyboard types on the PC.</p></div>
+    <div class="card reveal"><div class="dot"></div><h3 data-t="p3t">Omarchy-shaped controls</h3><p data-t="p3">Workspaces, RGB lights, lock, suspend, terminals that do not steal the PC's focus. Built for this desktop, not a generic remote-desktop clone.</p></div>
+  </div>
+
+  <section id="como">
+    <h2 data-t="howTitle">How it works</h2>
+    <p class="sub" data-t="howSub">A Node server on your Omarchy PC. An Android shell that pins your certificate. HTTP stays on loopback.</p>
+    <div class="flow">
+      <div class="step reveal"><div class="n">01</div><h4 data-t="s1t">Build for your PC</h4><p data-t="s1">Setup writes a local config and certificate. The APK pins that leaf. Somebody else's APK will not talk to your machine.</p></div>
+      <div class="step reveal"><div class="n">02</div><h4 data-t="s2t">Same Tailscale account</h4><p data-t="s2">Open the app. If the phone is on your tailnet, it connects on its own. No pairing key to type.</p></div>
+      <div class="step reveal"><div class="n">03</div><h4 data-t="s3t">Touch the monitor</h4><p data-t="s3">Screen is the first page. The stream is authenticated MJPEG. It stops when you leave.</p></div>
+      <div class="step reveal"><div class="n">04</div><h4 data-t="s4t">Keep it private</h4><p data-t="s4">A paired phone is physical access. Tailscale membership stays your job. Read the security model before you add a second device.</p></div>
+    </div>
+  </section>
+
+  <section id="telas">
+    <h2 data-t="screensTitle">The running app</h2>
+    <p class="sub" data-t="screensSub">Captures from a bench-local demo on 15 September 2026. The streamed desktop is a synthetic Omarchy scene, isolated from the author's Hyprland session. Physical Redmi shots from 5 September 2026 stay in the evidence notes.</p>
+
+    <div class="feat">
+      <div>
+        <h3 data-t="hHome">Home: the PC is already there</h3>
+        <p data-t="pHome">Hostname, windows, workspaces, the focused app. Pick a monitor and a quality profile, then open the screen. English is the default; Portuguese sticks once you choose it.</p>
+      </div>
+      <div class="shot reveal"><img src="media/phone-home.png" alt="Ponte home: connected PC card, monitor selector and Open screen"></div>
+    </div>
+
+    <div class="feat rev">
+      <div>
+        <h3 data-t="hScreen">Screen: live monitor, direct touch</h3>
+        <p data-t="pScreen">The monitor fills the phone. Sharp streams native pixels at up to 15 fps. There is no system audio. This is for control and checking progress, not gaming.</p>
+        <ul>
+          <li data-t="lScreen1">Verified live frames on a Redmi Note 13 Pro+ (Android 14), 5 September 2026</li>
+          <li data-t="lScreen2">A local three-monitor sample measured 7.11–7.33 fps and 78–177 ms to the first frame</li>
+        </ul>
+      </div>
+      <div class="shot reveal"><img src="media/phone-tela.png" alt="Ponte screen page showing a live demo desktop on DP-2"></div>
+    </div>
+
+    <div class="feat">
+      <div>
+        <h3 data-t="hTerm">Terminals: type without stealing focus</h3>
+        <p data-t="pTerm">Private tmux sessions for the phone. Send runs the command. Speak drops a transcript into the composer. The PC's focused window stays put.</p>
+      </div>
+      <div class="shot reveal"><img src="media/phone-terminais.png" alt="Ponte terminals page with a demo shell, Send, and key row"></div>
+    </div>
+
+    <div class="feat rev">
+      <div>
+        <h3 data-t="hWin">Windows: one tap to the next focus</h3>
+        <p data-t="pWin">Browse workspaces and open windows, then focus the one you want. The list is the live Hyprland client list of the demo instance.</p>
+      </div>
+      <div class="shot reveal"><img src="media/phone-janelas.png" alt="Ponte windows page listing Alacritty, Notes and Browser"></div>
+    </div>
+
+    <div class="feat">
+      <div>
+        <h3 data-t="hPower">Power, lights, session</h3>
+        <p data-t="pPower">Per-monitor DPMS, smart sleep, RGB presets through Magma, lock, suspend, restart. Unlock types the password on the PC only while the Omarchy lock is up. It is never stored on the phone.</p>
+      </div>
+      <div class="shot reveal"><img src="media/phone-home-power.png" alt="Ponte power card with monitor toggles, RGB presets and session actions"></div>
+    </div>
+
+    <div class="feat rev">
+      <div>
+        <h3 data-t="hVoice">Voice: record here, play there</h3>
+        <p data-t="pVoice">Record on the phone, review, send. Files live on your PC. Dictation uses Sussurro when it is running, or any OpenAI-compatible endpoint. Audio is transcribed and discarded. Android recording on a physical device is still pending retest.</p>
+      </div>
+      <div class="shot reveal"><img src="media/phone-voz.png" alt="Ponte voice page with the Start recording control"></div>
+    </div>
+  </section>
+
+  <section id="numeros">
+    <h2 data-t="numTitle">Measured, not promised</h2>
+    <p class="sub" data-t="numSub">Short local samples and changelog facts. Cellular and geographically remote Tailscale were not measured.</p>
+    <div class="nums">
+      <div class="num reveal"><b>7.1–7.3</b><span data-t="n1">fps per stream in a 4.54 s three-monitor capture, 5 Sep 2026</span></div>
+      <div class="num reveal"><b>78–177 ms</b><span data-t="n2">to the first frame on that same sample</span></div>
+      <div class="num reveal"><b>15 fps</b><span data-t="n3">Sharp profile cap (native pixels). No system audio</span></div>
+      <div class="num reveal"><b>0</b><span data-t="n4">production npm dependencies. MIT licensed</span></div>
+    </div>
+    <p class="foot-note" data-t="numNote">Sources: <a href="https://github.com/LucasOl1337/ponte/blob/main/docs/evidence.md">docs/evidence.md</a> (5 Sep 2026) and <a href="https://github.com/LucasOl1337/ponte/blob/main/CHANGELOG.md">CHANGELOG</a> 0.1.0-alpha.5 / alpha.13. The fps sample is a PC-side capture, not an Android frame-rate or battery test.</p>
+  </section>
+
+  <section id="compare">
+    <h2 data-t="cmpTitle">Ponte, RustDesk, or Sunshine?</h2>
+    <p class="sub" data-t="cmpSub">Different jobs. Ponte is a phone remote for one Omarchy PC. RustDesk is a general remote desktop. Sunshine + Moonlight is game streaming with audio.</p>
+    <table>
+      <thead><tr><th></th><th>Ponte</th><th>RustDesk + Tailscale</th><th>Sunshine + Moonlight</th></tr></thead>
+      <tbody>
+        <tr><td data-t="c1">What it is for</td><td class="y" data-t="c1p">Android control of an Omarchy desktop</td><td class="n" data-t="c1r">Generic remote desktop, any OS</td><td class="n" data-t="c1s">Low-latency game and desktop streaming</td></tr>
+        <tr><td data-t="c2">Network</td><td class="y" data-t="c2p">Your Tailscale account. Auto-pair on the same user</td><td class="y" data-t="c2r">Works over Tailscale without a public relay</td><td class="n" data-t="c2s">Your LAN or whatever you put in front of it</td></tr>
+        <tr><td data-t="c3">Live picture</td><td class="n" data-t="c3p">MJPEG, up to 15 fps, no system audio</td><td class="y" data-t="c3r">Desktop protocol, typically with audio</td><td class="y" data-t="c3s">Hardware encode, high fps, with audio</td></tr>
+        <tr><td data-t="c4">Omarchy extras</td><td class="y" data-t="c4p">Lights, lock, terminals, workspaces</td><td class="n" data-t="c4r">No</td><td class="n" data-t="c4s">No</td></tr>
+        <tr><td data-t="c5">First install</td><td class="n" data-t="c5p">Personal APK build, still one-shot</td><td class="y" data-t="c5r">Install the client, connect by IP or ID</td><td class="n" data-t="c5s">Host + Moonlight client, PIN pair</td></tr>
+        <tr><td data-t="c6">License</td><td class="y">MIT</td><td class="y">GPL-3.0</td><td class="y">GPL-3.0</td></tr>
+        <tr><td data-t="c7">Vendor account</td><td class="y" data-t="c7p">None</td><td class="y" data-t="c7r">None if you stay on your tailnet</td><td class="y" data-t="c7s">None</td></tr>
+      </tbody>
+    </table>
+    <p class="foot-note" data-t="cmpNote">Dated 15 Sep 2026. Ponte facts: this repo's changelog and evidence notes. RustDesk over Tailscale: Tailscale docs, last validated 15 Dec 2025. Sunshine capture and audio: GamingOnLinux, 18 May 2026. If a row went stale, <a href="https://github.com/LucasOl1337/ponte/issues">open an issue</a>.</p>
+  </section>
+
+  <section id="instalar">
+    <h2 data-t="instTitle">Set it up</h2>
+    <p class="sub" data-t="instSub">Omarchy/Hyprland, Node 22+, Python 3.12+, OpenSSL 3, Tailscale on both devices. You need hyprctl, ydotool, wtype, grim, wpctl, ffmpeg, tmux.</p>
+    <pre><span class="c"># from a graphical session, not a headless SSH</span>
+git clone https://github.com/LucasOl1337/ponte.git
+cd ponte
+./ponte setup
+./ponte install
+./android/build.sh
+
+<span class="c"># then install .work/Ponte.apk on your phone, privately</span></pre>
+    <p class="foot-note" data-t="instNote">The APK contains your server address and public certificate. Do not redistribute it. Full paths, TLS renewal and troubleshooting: <a href="https://github.com/LucasOl1337/ponte/blob/main/docs/setup.md">setup guide</a>. Tested scope: <a href="https://github.com/LucasOl1337/ponte/blob/main/docs/evidence.md">evidence</a>.</p>
+  </section>
+
+  <footer>
+    <div data-t="footL">Ponte · independent project for Omarchy · MIT · no official endorsement</div>
+    <div><a href="https://github.com/LucasOl1337/ponte">GitHub</a> · <a href="https://github.com/LucasOl1337/ponte/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/LucasOl1337/ponte/blob/main/docs/assets.md" data-t="credits">Credits</a></div>
+  </footer>
+</div>
+<script>
+const pt = {
+  navHow:'Como funciona', navScreens:'Telas', navCompare:'Comparar', navInstall:'Instalar',
+  kicker:'Alfa de código aberto · Omarchy · Tailscale',
+  headline:'Seu desktop.<br><em>De qualquer lugar.</em>',
+  lead:'Controle por toque e monitores ao vivo no Android, pela sua própria rede Tailscale. Alfa experimental independente.',
+  cta:'Configurar o Ponte ↗', code:'Ver o código',
+  ctaNote:'Não existe APK genérico. Você gera um pro seu PC. Vídeo ao vivo e pareamento foram conferidos num Redmi Note 13 Pro+ com Android 14.',
+  vcap:'Narração: Lucas Oliveira, perfil oficial do OmniVoice. O app na tela é uma demo isolada com desktop sintético, não a sessão ao vivo do autor.',
+  p1t:'Sua tailnet, não a nuvem de ninguém', p1:'O celular fala com o PC por TLS no Tailscale. No mesmo account, o pareamento entra sozinho. O Ponte não tem SDK de analytics.',
+  p2t:'O monitor é a interface', p2:'Toque clica. Toque longo é botão direito ou arrasta. Pinça dá zoom. Dois dedos rolam. Toca num campo de texto e o teclado do Android digita no PC.',
+  p3t:'Controles no formato Omarchy', p3:'Áreas de trabalho, luzes RGB, bloqueio, suspender, terminais que não roubam o foco do PC. Feito pra este desktop, não um clone genérico.',
+  howTitle:'Como funciona', howSub:'Um servidor Node no seu Omarchy. Um shell Android que pina o seu certificado. HTTP fica no loopback.',
+  s1t:'Compila pro seu PC', s1:'O setup grava config e certificado locais. O APK pina essa folha. O APK de outra pessoa não fala com a sua máquina.',
+  s2t:'Mesmo account Tailscale', s2:'Abre o app. Se o celular está na sua tailnet, entra sozinho. Sem chave pra digitar.',
+  s3t:'Toca no monitor', s3:'Tela é a primeira página. O stream é MJPEG autenticado. Para quando você sai.',
+  s4t:'Trata como acesso físico', s4:'Um celular pareado é acesso físico. A membership do Tailscale continua sendo sua. Leia o modelo de segurança antes de colocar um segundo aparelho.',
+  screensTitle:'O app rodando', screensSub:'Capturas de uma demo isolada em 15 de setembro de 2026. O desktop na transmissão é uma cena sintética, fora da sessão Hyprland do autor. As fotos no Redmi de 5 de setembro continuam nas notas de evidência.',
+  hHome:'Início: o PC já está lá', pHome:'Hostname, janelas, áreas, o app em foco. Escolhe o monitor e a qualidade, depois abre a tela. Inglês é o padrão; português grava quando você escolhe.',
+  hScreen:'Tela: monitor ao vivo, toque direto', pScreen:'O monitor ocupa o celular. Nítido manda pixels nativos a até 15 fps. Não tem áudio do sistema. Serve pra controlar e conferir, não pra jogar.',
+  lScreen1:'Quadros ao vivo conferidos num Redmi Note 13 Pro+ (Android 14), 5 de setembro de 2026',
+  lScreen2:'Uma amostra local com três monitores mediu 7,11–7,33 fps e 78–177 ms até o primeiro quadro',
+  hTerm:'Terminais: digita sem roubar o foco', pTerm:'Sessões tmux privadas pro celular. Enviar roda o comando. Falar joga a transcrição no compositor. A janela em foco no PC fica onde está.',
+  hWin:'Janelas: um toque pro próximo foco', pWin:'Percorre áreas e janelas, depois foca a que você quer. A lista é o client list vivo do Hyprland da instância de demo.',
+  hPower:'Energia, luzes, sessão', pPower:'DPMS por monitor, dormir inteligente, presets RGB pelo Magma, bloquear, suspender, reiniciar. Desbloquear digita a senha no PC só com o lock do Omarchy na tela. A senha não fica no celular.',
+  hVoice:'Voz: grava aqui, toca lá', pVoice:'Grava no celular, confere, envia. Os arquivos ficam no PC. A ditação usa o Sussurro quando ele está no ar, ou qualquer endpoint compatível com OpenAI. O áudio é transcrito e descartado. A gravação no aparelho físico ainda pende reteste.',
+  numTitle:'Medido, não prometido', numSub:'Amostras locais curtas e fatos do changelog. Celular e Tailscale geograficamente remoto não foram medidos.',
+  n1:'fps por stream numa captura de 4,54 s com três monitores, 5 set 2026',
+  n2:'até o primeiro quadro nessa mesma amostra',
+  n3:'teto do perfil Nítido (pixels nativos). Sem áudio do sistema',
+  n4:'dependências npm de produção. Licença MIT',
+  numNote:'Fontes: <a href="https://github.com/LucasOl1337/ponte/blob/main/docs/evidence.md">docs/evidence.md</a> (5 set 2026) e <a href="https://github.com/LucasOl1337/ponte/blob/main/CHANGELOG.md">CHANGELOG</a> 0.1.0-alpha.5 / alpha.13. A amostra de fps é captura no PC, não teste de taxa no Android nem de bateria.',
+  cmpTitle:'Ponte, RustDesk ou Sunshine?', cmpSub:'Trabalhos diferentes. O Ponte é um remoto de celular pra um PC Omarchy. RustDesk é desktop remoto genérico. Sunshine + Moonlight é stream de jogo com áudio.',
+  c1:'Pra que serve', c1p:'Controle Android de um desktop Omarchy', c1r:'Desktop remoto genérico, qualquer SO', c1s:'Stream de jogo e desktop com pouca latência',
+  c2:'Rede', c2p:'Sua conta Tailscale. Pareamento automático no mesmo usuário', c2r:'Funciona no Tailscale sem relay público', c2s:'Sua LAN ou o que você colocar na frente',
+  c3:'Imagem ao vivo', c3p:'MJPEG, até 15 fps, sem áudio do sistema', c3r:'Protocolo de desktop, em geral com áudio', c3s:'Encode em hardware, fps alto, com áudio',
+  c4:'Extras Omarchy', c4p:'Luzes, lock, terminais, áreas de trabalho', c4r:'Não', c4s:'Não',
+  c5:'Primeira instalação', c5p:'APK pessoal, ainda é um passo só seu', c5r:'Instala o cliente, conecta por IP ou ID', c5s:'Host + cliente Moonlight, PIN',
+  c6:'Licença', c7:'Conta de fornecedor', c7p:'Nenhuma', c7r:'Nenhuma se você ficar na sua tailnet', c7s:'Nenhuma',
+  cmpNote:'Datado em 15 set 2026. Fatos do Ponte: changelog e evidências deste repo. RustDesk no Tailscale: docs da Tailscale, última validação em 15 dez 2025. Capture e áudio do Sunshine: GamingOnLinux, 18 mai 2026. Se alguma linha envelheceu, <a href="https://github.com/LucasOl1337/ponte/issues">abra um issue</a>.',
+  instTitle:'Instalar', instSub:'Omarchy/Hyprland, Node 22+, Python 3.12+, OpenSSL 3, Tailscale nos dois. Precisa de hyprctl, ydotool, wtype, grim, wpctl, ffmpeg, tmux.',
+  instNote:'O APK traz o endereço e o certificado público do seu servidor. Não redistribua. Caminhos, renovação de TLS e troubleshooting: <a href="https://github.com/LucasOl1337/ponte/blob/main/docs/setup.md">guia de setup</a>. Escopo testado: <a href="https://github.com/LucasOl1337/ponte/blob/main/docs/evidence.md">evidências</a>.',
+  footL:'Ponte · projeto independente para Omarchy · MIT · sem endosso oficial',
+  credits:'Créditos'
+};
+const nodes=[...document.querySelectorAll('[data-t]')];
+const en=Object.fromEntries(nodes.map(n=>[n.dataset.t,n.innerHTML]));
+const select=document.querySelector('#language');
+function apply(lang){
+  lang=lang==='pt'?'pt':'en';
+  const cat=lang==='pt'?pt:en;
+  for(const n of nodes) if(cat[n.dataset.t]!=null) n.innerHTML=cat[n.dataset.t];
+  document.documentElement.lang=lang==='pt'?'pt-BR':'en';
+  document.title=lang==='pt'?'Ponte · Seu Omarchy, por perto':'Ponte · Your Omarchy desktop, within reach';
+  select.value=lang;
+  try{localStorage.setItem('ponte-site-language',lang)}catch{}
+}
+let saved='en'; try{saved=localStorage.getItem('ponte-site-language')||'en'}catch{}
+apply(saved);
+select.addEventListener('change',()=>apply(select.value));
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.15});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
