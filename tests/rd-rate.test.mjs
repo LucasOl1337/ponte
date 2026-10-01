@@ -217,7 +217,7 @@ test('on the floor, a queue that keeps growing sheds frames until it drains, the
 // bottleneck of `capacity(t)` kbps with `oneWay` ms each way, and a page that
 // acks the last frame it got at most every 50 ms. Decisions are applied like
 // the session does; the report has what happened.
-function simulate({ seconds, capacity, oneWay = 12, open = 30, caps = { ack: true, key: true }, onDecision } = {}) {
+function simulate({ seconds, capacity, oneWay = 12, open = 30, caps = { ack: true, key: true }, onDecision, keyBytes = null } = {}) {
   let clock = 0, seq = 0, restartAt = 0, nextFrame = 450, linkFree = 0, lastAckSent = -Infinity, pendingAck = null;
   const c = createRateControl({ now: () => clock, caps });
   const arrivals = [], acks = [], events = [], delays = [];
@@ -234,7 +234,7 @@ function simulate({ seconds, capacity, oneWay = 12, open = 30, caps = { ack: tru
     if (clock >= nextFrame) {
       nextFrame += 1000 / params.fps;
       if (!shed) {
-        const bytes = keyNext ? params.kbps * 44 : Math.round(params.kbps * 125 / params.fps);
+        const bytes = keyNext ? keyBytes ?? params.kbps * 44 : Math.round(params.kbps * 125 / params.fps);
         const keyframe = keyNext; keyNext = false;
         seq++;
         const start = Math.max(clock + oneWay, linkFree);
@@ -317,7 +317,7 @@ test('acks: frames in flight for over a second step down without waiting for any
 
 test('acks: recovery measures a fresh keyframe before climbing, never trusting the fall sample', () => {
   // Opens at W3 on a link that fell to 1.2 Mbps, then grows to 30 Mbps at 20 s.
-  const { events, c } = simulate({ seconds: 240, capacity: t => t < 20000 ? 1200 : 30000 });
+  const { events, c } = simulate({ seconds: 300, capacity: t => t < 20000 ? 1200 : 30000 });
   const ups = events.filter(e => e.reason === 'up');
   assert.ok(ups.length >= 1, JSON.stringify(events));
   const probe = events.find(e => e.reason === 'probe');
@@ -329,7 +329,7 @@ test('acks: recovery measures a fresh keyframe before climbing, never trusting t
   assert.equal(ups[0]?.step, 2, JSON.stringify(events));
   assert.equal(ups[1]?.step, 4, JSON.stringify(events));
   assert.ok(ups[1].at - ups[0].at >= 60000);
-  assert.ok(ups[0].at - probe.at >= 30000, 'a measured climb still waits 30 s calm');
+  assert.ok(ups[0].at - probe.at >= 60000, 'probe and climb share the minute restart budget');
   assert.equal(c.step, 5);
 });
 
@@ -365,6 +365,22 @@ test('acks: no recovery probe on stable LAN, roomy WAN or the highest step', () 
     if (open === 4) assert.equal(c.mode, 'lan');
     else assert.equal(c.step, WAN_STEPS.length - 1);
   }
+});
+
+test('acks: tiny recovery keys allow only one-step trials, with backoff on a tight link', () => {
+  const roomy = simulate({ seconds: 420, keyBytes: 19000, capacity: t => t < 8000 ? 1200 : 30000 });
+  const ups = roomy.events.filter(e => e.reason === 'up');
+  const down = roomy.events.find(e => e.reason === 'down');
+  assert.ok(down && ups.length, JSON.stringify(roomy.events));
+  let previous = down.step;
+  for (const up of ups) { assert.equal(up.step, previous + 1); previous = up.step; }
+  assert.equal(roomy.c.step, WAN_STEPS.length - 1, 'a still terminal is not stuck');
+
+  const tight = simulate({ seconds: 1200, keyBytes: 19000, capacity: () => 1200 });
+  const trials = tight.events.filter(e => e.reason === 'up' && e.step === 2);
+  assert.ok(trials.length >= 2, JSON.stringify(tight.events));
+  for (let i = 1; i < trials.length; i++) assert.ok(trials[i].at - trials[i - 1].at >= 120000);
+  for (const trial of trials) assert.ok(tight.events.some(e => e.reason === 'down' && e.at > trial.at && e.at - trial.at <= 20000));
 });
 
 test('acks: opening on a roomy link climbs as soon as its first keyframe crossed, not after 30 s', () => {

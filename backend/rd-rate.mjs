@@ -52,7 +52,7 @@ const OPEN_WINDOW_MS = 20000, OPEN_CALM_MS = 2000, OPEN_HEADROOM = 2;
 // After a fall, calm only proves the current step fits. Its old keyframe
 // cannot tell whether the link recovered. Refresh it within the same restart
 // budget before climbing, and require the same headroom as the fast opening.
-const RECOVERY_SAMPLE_MS = 60000;
+const RECOVERY_SAMPLE_MS = SAMPLE_FRESH_MS;
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
@@ -335,10 +335,19 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       if (t - lastUncalmAt < UP_CALM_MS || t - lastRestartAt < UP_CALM_MS) return null;
       if (t - lastDownAt < DOWN_QUIET_MS || t - lastUpAt < UP_EVERY_MS) return null;
       if (acking && lastDownAt > -Infinity) {
+        if (uncalmSince !== null || t - lastRestartAt < UP_EVERY_MS) return null;
+        // A still terminal can make a keyframe below the sampling threshold.
+        // Once that fresh key landed, retain the ADR's one-step trial instead
+        // of probing the same unmeasurable picture forever. No jump, and the
+        // failed-step backoff still applies.
+        if (lastKey && lastKey.bytes < SAMPLE_MIN_BYTES && keyLanded(t)
+          && lastKey.at >= lastDownAt + DOWN_QUIET_MS && t - lastKey.at <= RECOVERY_SAMPLE_MS) {
+          const target = step + 1;
+          return (backoff.get(target)?.retryAt ?? 0) <= t ? change('up', target) : null;
+        }
         // One same-step keyframe, never more than once a minute. Unlike a
         // blind climb it measures room without increasing the delta rate.
         if (!sample || sample.sentAt < lastDownAt + DOWN_QUIET_MS || t - sample.at > RECOVERY_SAMPLE_MS) {
-          if (t - lastRestartAt < UP_EVERY_MS) return null;
           return change('probe', step);
         }
         let target = WAN_STEPS.findLastIndex(s => s.kbps <= sample.kbps / OPEN_HEADROOM);
