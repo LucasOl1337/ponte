@@ -5,7 +5,8 @@ All notable changes to Ponte. The project is an experimental alpha; entries desc
 ## 0.1.0-alpha.35 (2026-10-01)
 
 The remote desktop page (`rd.html`) says in words where the keyboard goes and how the
-connection is, and has a settings panel. Pages only; no APK, no server change.
+connection is, and has a settings panel; the phone keyboard stops opening on taps that
+are not on a field. Server and pages; the installed APK keeps working.
 
 - **Ctrl+Alt+Shift now switches both ways, without full screen.** Before, the chord only
   released and taking control needed a click or full screen. Only the chord alone counts
@@ -20,6 +21,15 @@ connection is, and has a settings panel. Pages only; no APK, no server change.
   (was Abs/Rel), the key list and what the window cannot get (Super, Ctrl+T), the chord
   can also enter full screen, a frame limit (60/30/15, sent as `maxFps`), clipboard
   sharing on/off, language.
+- **Fix: the phone keyboard opened on any tap on the Maestri canvas.** The server called
+  any focused fcitx input context a text field, and Maestri keeps its own focused 97% of
+  the time it is active (45 real canvas clicks: same context before and after). A left tap
+  now brings back the context focused before it and whether the active window changed;
+  the phone opens the keyboard by itself only when the tap caused the focus in the same
+  window (none -> one, or another field). A tap that also activates another window does
+  not open it; the keyboard button always does; an automatic bar closes when the focus
+  leaves its field; new "Auto keyboard" switch in the bar's options. Lab: canvas tapped
+  3x, old rule opened 3, new 0, fields still open. Older pages keep the old answer.
 - **Optional, not installed:** `tools/hypr/ponte_rd.lua` + `tools/hypr/ponte-rd-hypr.sh`
   (check/install/remove) put Hyprland in an empty submap while the rd window's title has
   the `⌨` mark, so Super reaches the device from the window too; exit with
