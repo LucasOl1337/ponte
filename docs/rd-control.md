@@ -62,7 +62,7 @@ tools/hypr/ponte-rd-hypr.sh remove    # tira a linha e o módulo; o hyprland.lua
 a gravação falhar a validação ele volta o backup. `HYPR_DIR=/uma/cópia` faz tudo
 numa cópia (é assim que `tests/rd-hypr.test.mjs` testa).
 
-**Ainda não instalado no PC do Lucas.** O que está provado: a config real com o
+**Instalado no PC do Lucas em 2026-10-01** (backup do `hyprland.lua` antes da linha). O que está provado: a config real com o
 módulo passa no `--verify-config` (Hyprland 0.56.2), o `--verify-config` recusa
 nome de evento errado, e o ciclo instalar/remover devolve o arquivo byte a byte.
 O que só dá pra provar ao vivo: os campos `title`/`class` do objeto janela nos
