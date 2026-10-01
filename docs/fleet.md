@@ -58,4 +58,5 @@ Job errors carry a `FLEET_*` code, the stage and `text: {en, pt}`.
 - If the copy succeeds but the remote terminal cannot start, the job stays `done`, its `resume` step records `manual: true` and the error code, and `result.command` gives the resume command. The copied history is kept on the destination.
 - A Codex rollout copied without its `state_5.sqlite` row is found by `codex resume ID` (it scans `~/.codex/sessions`); it may be missing from `codex resume`'s picker until Codex indexes it.
 - Sessions of the last 14 days, 30 per machine. Claude runs from `-p`/SDK and transcripts under 2 KB are not listed.
+- A Claude session started in a temp directory (`/tmp`, `/var/tmp`, `$TMPDIR`) and outside the home is a scratch run and is not listed; a project folder named `tmp` is, and so is anything inside a home that itself lives in a temp directory.
 - Windows machines and phones are listed, never probed.

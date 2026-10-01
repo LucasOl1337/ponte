@@ -164,6 +164,20 @@ test('a Claude session continues here: fast-forward, uncommitted changes, paths 
   assert.match(done.result.note, /git status/);
 });
 
+test('sessions started in a temp directory are hidden, by path: a project folder named tmp and a home inside a temp directory are not', async t => {
+  const w = await world(t);
+  // The test homes live under the temp directory, like a container's or CI's home.
+  const project = path.join(w.notebook, 'Projects', 'app', 'tmp', 'fixture');
+  const scratch = path.join(w.root, 'scratch');
+  await mkdir(project, { recursive: true });
+  await mkdir(scratch, { recursive: true });
+  const SCRATCH_ID = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f', PROJECT_ID = '1e1e1e1e-1e1e-4e1e-8e1e-1e1e1e1e1e1e';
+  await claudeSession(w.notebook, project, PROJECT_ID, 'in a project');
+  await claudeSession(w.notebook, scratch, SCRATCH_ID, 'scratch');
+  const listed = (await w.fleet.sessions({ fresh: true })).sessions.filter(item => item.machine === 'ssh:notebook').map(item => [item.id, item.cwd]);
+  assert.deepEqual(listed, [[PROJECT_ID, '~/Projects/app/tmp/fixture']]);
+});
+
 for (const status of [200, 201]) {
   test(`self → paired notebook resumes through mesh and returns the remote terminal (${status})`, async t => {
     const calls = [];
