@@ -2,6 +2,33 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.35 (2026-10-01)
+
+The remote desktop page (`rd.html`) says in words where the keyboard goes and how the
+connection is, and has a settings panel. Pages only; no APK, no server change.
+
+- **Ctrl+Alt+Shift now switches both ways, without full screen.** Before, the chord only
+  released and taking control needed a click or full screen. Only the chord alone counts
+  (Ctrl+Alt+Shift+T stays a shortcut here) and it never reaches the device. The bar's
+  centre shows "Keyboard and mouse → notebook" (clickable), a big notice flashes for
+  1.2 s on each switch, the stage gets a green frame and the window title starts with
+  `⌨ notebook ·` while controlling.
+- **The bar says the connection in words.** "Good connection" / "Unstable connection ·
+  picture arriving late (up to 106 ms)" / "Bad", worst of the last 3 s; fps, Mbps, RTT
+  and p95 moved to the settings' technical details with a legend.
+- **Settings (gear):** pointer "Direct" / "Locked (games and 3D)" with an explanation
+  (was Abs/Rel), the key list and what the window cannot get (Super, Ctrl+T), the chord
+  can also enter full screen, a frame limit (60/30/15, sent as `maxFps`), clipboard
+  sharing on/off, language.
+- **Optional, not installed:** `tools/hypr/ponte_rd.lua` + `tools/hypr/ponte-rd-hypr.sh`
+  (check/install/remove) put Hyprland in an empty submap while the rd window's title has
+  the `⌨` mark, so Super reaches the device from the window too; exit with
+  Super+Ctrl+Alt+Esc. See `docs/rd-control.md`.
+- Verified: `npm test` 412 pass (new: both-way chord, settings, link verdict,
+  install/remove byte for byte on a copy); the lab in a Chromium bench (keys reached the
+  fake desktop as `KEY_A` only after the chord; the chord itself sent nothing); the live
+  Hyprland config with the module passes `Hyprland --verify-config`.
+
 ## 0.1.0-alpha.34 (2026-10-01)
 
 A readable screen at once, and one device model under every surface (ADR 0002, slices 1-3).

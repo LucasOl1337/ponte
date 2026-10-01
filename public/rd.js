@@ -9,6 +9,14 @@ const $ = selector => document.querySelector(selector);
 
 const TOKEN_KEY = 'ponte-pair-token';
 const MODE_KEY = 'ponte-rd-mode';
+const CHORD_KEY = 'ponte-rd-chord';
+const FPS_KEY = 'ponte-rd-fps';
+const CLIPBOARD_KEY = 'ponte-rd-clipboard';
+const FPS_CHOICES = [60, 30, 15];
+// Controlling, the window title starts with this: a compositor rule (Hyprland
+// submap, docs/rd-control.md) can hand Super to the page only while it is set.
+const TITLE_MARK = '⌨ ';
+const SWITCH_SHOW_MS = 1600;
 const HEADER_BYTES = 16;
 const MAX_DECODE_QUEUE = 2;
 // Outside the LAN frames arrive in bursts and a dropped delta costs a new
@@ -65,7 +73,7 @@ function wheelUnits(event) {
   return { dx: (event.deltaX || 0) * scale, dy: (event.deltaY || 0) * scale };
 }
 
-// Ctrl+Alt+Shift together and nothing else releases the control.
+// Ctrl+Alt+Shift together and nothing else switches the control (both ways).
 function isReleaseChord(pressed) {
   const kinds = new Set();
   for (const code of pressed) {
@@ -74,6 +82,25 @@ function isReleaseChord(pressed) {
     kinds.add(kind);
   }
   return kinds.size === 3;
+}
+
+// How the link feels, in words: good, unstable or bad and the main reason.
+// `expectedFps` is what the session asked for (30 at most over the internet);
+// p95 is the frame latency (send to draw) over the last 5 s.
+function linkQuality({ fps, expectedFps = 60, rtt = null, p95 = null, drops = 0 } = {}) {
+  const reasons = [];
+  let level = 'good';
+  const worse = next => { if (next === 'bad' || level === 'good') level = next; };
+  if (rtt !== null && rtt > 150) { worse('bad'); reasons.push({ key: 'rtt', value: Math.round(rtt) }); }
+  else if (rtt !== null && rtt > 60) { worse('unstable'); reasons.push({ key: 'rtt', value: Math.round(rtt) }); }
+  if (p95 !== null && p95 > 250) { worse('bad'); reasons.push({ key: 'jitter', value: Math.round(p95) }); }
+  else if (p95 !== null && p95 > 100) { worse('unstable'); reasons.push({ key: 'jitter', value: Math.round(p95) }); }
+  if (typeof fps === 'number' && expectedFps > 0) {
+    if (fps < expectedFps * 0.5) { worse('bad'); reasons.push({ key: 'fps', value: Math.round(fps) }); }
+    else if (fps < expectedFps * 0.8) { worse('unstable'); reasons.push({ key: 'fps', value: Math.round(fps) }); }
+  }
+  if (drops > 2) { worse('unstable'); reasons.push({ key: 'drops', value: drops }); }
+  return { level, reasons };
 }
 
 // The contract does not fix the byte order of the 16-byte header; network order
@@ -150,6 +177,13 @@ if (location.hash.length > 1) {
 
 let mode = 'abs';
 try { if (localStorage.getItem(MODE_KEY) === 'rel') mode = 'rel'; } catch {}
+let chordAction = 'window';     // 'window' | 'fullscreen': what Ctrl+Alt+Shift does when it takes control
+try { if (localStorage.getItem(CHORD_KEY) === 'fullscreen') chordAction = 'fullscreen'; } catch {}
+let fpsLimit = 60;
+try { const stored = Number(localStorage.getItem(FPS_KEY)); if (FPS_CHOICES.includes(stored)) fpsLimit = stored; } catch {}
+let clipboardOn = true;
+try { if (localStorage.getItem(CLIPBOARD_KEY) === 'off') clipboardOn = false; } catch {}
+const linkLevels = [];          // the last few seconds' link levels, worst wins
 let socket = null;
 let session = null;            // the last `ready`
 let littleEndian = null;       // header byte order, detected per connection
@@ -259,7 +293,7 @@ function connect() {
   socket = current;
   current.addEventListener('open', () => {
     if (socket !== current) return;
-    const hello = { t: 'hello', v: 1, token, maxFps: 60, caps: { ack: true, key: true } };
+    const hello = { t: 'hello', v: 1, token, maxFps: fpsLimit, caps: { ack: true, key: true } };
     if (wantedMonitor) hello.monitor = wantedMonitor;
     const view = stageView();
     if (view) hello.view = view;
@@ -274,6 +308,9 @@ function closed(event) {
   socket = null; session = null;
   dropInput();
   closeDecoder();
+  // `engaged` stays: an automatic reconnect keeps controlling, as before.
+  renderLink();
+  renderControl();
   if (event && (event.code === 4401 || event.code === 4403 || event.code === 1008)) { if (!stopped) stopped = 'auth'; }
   if (stopped === 'taken') { overlay(t('Outro aparelho assumiu o controle deste PC.'), true); return; }
   if (stopped === 'auth') { overlay(stopMessage || t('A chave foi recusada. Pareie de novo com ./ponte rd.'), true); return; }
@@ -374,6 +411,8 @@ function ready(message) {
   renderMonitors();
   renderNodes();
   renderMode();
+  renderSettings();
+  renderControl();
   inflight.clear();
   waitingKey = true;
   // A new codec or picture size starts a new decoder; a new stream on the same
@@ -544,6 +583,7 @@ function tick() {
   send(report);
   window.ponteRdStats = { ...report, hardware, keyboardLock, pointerLock, engaged, mode, monitor: session.monitor, probe: lastProbe };
   renderStats(frame, glass);
+  renderLink(frame);
 }
 const round = value => Math.round(value * 10) / 10;
 const ms = value => `${Math.round(value)} ms`;
@@ -562,6 +602,80 @@ function renderStats(frame = windowStats(frameLatency, nowEpoch()), glass = wind
   $('#rd-stats').textContent = parts.filter(Boolean).join(' · ');
 }
 
+// The bar says good / unstable / bad and why, in words; the numbers live in the
+// settings' technical details. The worst of the last 3 s, so one late second
+// does not make it blink.
+const LINK_TEXT = { good: 'Conexão boa', unstable: 'Conexão instável', bad: 'Conexão ruim' };
+function reasonText(reason) {
+  switch (reason.key) {
+    case 'rtt': return t('ida e volta de {ms} ms', { ms: reason.value });
+    case 'jitter': return t('imagem chegando com atraso (até {ms} ms)', { ms: reason.value });
+    case 'fps': return t('só {fps} quadros por segundo', { fps: reason.value });
+    case 'drops': return t('{count} quadros perdidos', { count: reason.value });
+    default: return '';
+  }
+}
+let lastLink = null;
+function renderLink(frame = windowStats(frameLatency, nowEpoch())) {
+  const chip = $('#rd-link');
+  if (!session) { chip.hidden = true; lastLink = null; linkLevels.length = 0; $('#rd-link-reason').textContent = ''; return; }
+  const expectedFps = Math.min(session.fps || fpsLimit, fpsLimit, linkMode === 'wan' ? 30 : Infinity);
+  const now = linkQuality({ fps: meters.fps, expectedFps, rtt, p95: frame ? frame.p95 : null, drops: meters.drops });
+  linkLevels.push(now);
+  if (linkLevels.length > 3) linkLevels.shift();
+  const rank = { good: 0, unstable: 1, bad: 2 };
+  const shown = linkLevels.reduce((worst, item) => rank[item.level] > rank[worst.level] ? item : worst);
+  lastLink = shown;
+  const reason = shown.reasons.length ? reasonText(shown.reasons[0]) : '';
+  chip.hidden = false;
+  chip.setAttribute('data-level', shown.level);
+  $('#rd-link-text').textContent = reason ? `${t(LINK_TEXT[shown.level])} · ${reason}` : t(LINK_TEXT[shown.level]);
+  $('#rd-link-reason').textContent = shown.reasons.length ? shown.reasons.map(reasonText).join(' · ') : t('Nada fora do normal agora.');
+}
+
+// ---- where the keyboard and mouse go ------------------------------------------------
+
+// The device on the screen, by name: the one the server says it is, else the
+// picker's label, else a plain word.
+function targetName() {
+  return session?.node?.name || nodes.find(node => node.id === nodeId)?.name || t('o aparelho da tela');
+}
+
+const BASE_TITLE = 'Ponte — área de trabalho remota';
+function renderTitle() {
+  const base = t(BASE_TITLE);
+  document.title = engaged && session ? `${TITLE_MARK}${targetName()} · ${base}` : base;
+}
+
+// The always-visible indicator: who gets the keys now, and how to switch.
+function renderControl() {
+  const button = $('#rd-control');
+  const full = !!document.fullscreenElement;
+  button.setAttribute('aria-pressed', String(engaged));
+  button.disabled = !session;
+  if (engaged && session) {
+    $('#rd-control-target').textContent = t('Teclado e mouse → {name}', { name: targetName() });
+    $('#rd-hint').textContent = full
+      ? t('Tudo vai pro aparelho, até Super. Ctrl+Alt+Shift ou segure Esc pra voltar.')
+      : t('Ctrl+Alt+Shift volta pra este aparelho. Super e Ctrl+T ficam aqui (a tela cheia leva tudo).');
+  } else {
+    $('#rd-control-target').textContent = t('Teclado e mouse → este aparelho');
+    $('#rd-hint').textContent = session ? t('Ctrl+Alt+Shift ou clique na tela pra controlar {name}.', { name: targetName() }) : '';
+  }
+  renderTitle();
+}
+
+// A big, short notice in the middle of the screen on every switch.
+let switchTimer = 0;
+function showSwitch() {
+  const element = $('#rd-switch');
+  element.textContent = engaged ? t('Teclado e mouse → {name}', { name: targetName() }) : t('Teclado e mouse → este aparelho');
+  element.setAttribute('data-to', engaged ? 'remote' : 'local');
+  element.hidden = false;
+  clearTimeout(switchTimer);
+  switchTimer = setTimeout(() => { element.hidden = true; }, SWITCH_SHOW_MS);
+}
+
 // ---- control state -------------------------------------------------------------------
 
 const inputAllows = kind => session?.input?.[kind] !== false;
@@ -570,6 +684,8 @@ function engage(mayPrompt = false) {
   if (engaged || !session) return;
   engaged = true;
   document.body.classList.add('controlling');
+  renderControl();
+  showSwitch();
   clipboardOut(mayPrompt);
 }
 
@@ -586,8 +702,22 @@ function releaseRemote() { dropInput(); send({ t: 'release' }); }
 // Keys and buttons stop going out; full screen stays (the bar was clicked).
 function disengage(tell = true) {
   if (tell) releaseRemote(); else dropInput();
+  const was = engaged;
   engaged = false;
   document.body.classList.remove('controlling');
+  renderControl();
+  if (was) showSwitch();
+}
+
+// Ctrl+Alt+Shift (or the indicator) while this device has the keys: take them
+// to the device on the screen, in the window or, if chosen, in full screen
+// (the only place the browser hands over Super and its own shortcuts).
+function takeControl() {
+  if (!session || engaged) return;
+  if (chordAction === 'fullscreen' && !document.fullscreenElement) { enterFullscreen(); return; }
+  document.activeElement?.blur?.();
+  engage();
+  if (mode === 'rel' && inputAllows('rel') && !document.pointerLockElement) lockPointer();
 }
 
 // Release the control: leave full screen and pointer lock, and tell the target.
@@ -631,12 +761,18 @@ async function enterFullscreen() {
   if (!navigator.keyboard?.lock) keyboardLock = 'unsupported';
   else try { await navigator.keyboard.lock(); keyboardLock = 'locked'; } catch { keyboardLock = 'refused'; note(t('Sem trava de teclado: atalhos do sistema continuam no seu PC.')); }
   if (mode === 'rel') lockPointer();
+  renderControl();
 }
 
 // ---- keyboard ---------------------------------------------------------------------------
 
+// Keys held on this device while it has the keyboard: only to see the switch
+// chord. Nothing of it is ever sent.
+const localPressed = new Set();
+
 function keyEvent(event) {
-  if (!engaged || !session || !inputAllows('keys')) return;
+  if (!engaged) { localKey(event); return; }
+  if (!session || !inputAllows('keys')) return;
   // Only an open selector in the bar keeps its keys; a focused bar button
   // (Full screen was just clicked) must not swallow them.
   if (event.target?.tagName === 'SELECT') return;
@@ -649,13 +785,28 @@ function keyEvent(event) {
     if (event.repeat) return;
     pressed.add(code);
     send({ t: 'key', code, down: true });
-    if (isReleaseChord(pressed)) { releaseControl(); note(t('Controle solto.')); return; }
-    if (code === 'Escape') { clearTimeout(escTimer); escTimer = setTimeout(() => { releaseControl(); note(t('Controle solto.')); }, ESC_HOLD_MS); }
+    if (isReleaseChord(pressed)) { releaseControl(); return; }
+    if (code === 'Escape') { clearTimeout(escTimer); escTimer = setTimeout(() => releaseControl(), ESC_HOLD_MS); }
   } else {
     if (code === 'Escape') clearTimeout(escTimer);
     if (!pressed.delete(code)) return;
     send({ t: 'key', code, down: false });
   }
+}
+
+// This device has the keyboard: keys stay here, except Ctrl+Alt+Shift alone,
+// which hands keyboard and mouse to the device on the screen. The modifiers it
+// took are never sent down, so the far side sees no stray Ctrl.
+function localKey(event) {
+  const code = event.code;
+  if (!code) return;
+  if (event.type === 'keyup') { localPressed.delete(code); return; }
+  if (event.repeat) return;
+  localPressed.add(code);
+  if (!session || !inputAllows('keys') || $('#rd-settings').open || !isReleaseChord(localPressed)) return;
+  event.preventDefault();
+  localPressed.clear();
+  takeControl();
 }
 
 // ---- mouse ---------------------------------------------------------------------------------
@@ -756,7 +907,7 @@ async function clipboardReadable(mayPrompt) {
 }
 
 async function clipboardOut(mayPrompt = false) {
-  if (!session || !inputAllows('clipboard') || !navigator.clipboard?.readText) return;
+  if (!session || !clipboardOn || !inputAllows('clipboard') || !navigator.clipboard?.readText) return;
   if (!(await clipboardReadable(mayPrompt))) { if (pendingClip !== null) await clipboardWrite(); return; }
   if (pendingClip !== null) await clipboardWrite();
   let text;
@@ -768,7 +919,7 @@ async function clipboardOut(mayPrompt = false) {
 }
 
 async function clipboardIn(text) {
-  if (typeof text !== 'string' || text === lastClip) return;
+  if (!clipboardOn || typeof text !== 'string' || text === lastClip) return;
   pendingClip = text;
   if (document.hasFocus()) await clipboardWrite();
 }
@@ -820,7 +971,7 @@ function renderNodes() {
     entries = [option(nodeId, target?.name || t('Este aparelho'), true)];
   } else {
     entries = nodes.map(node => {
-      const label = node.self ? t('{name} (este)', { name: node.name }) : node.online ? node.name : t('{name} (offline)', { name: node.name });
+      const label = node.self ? t('{name} (este aparelho)', { name: node.name }) : node.online ? node.name : t('{name} (offline)', { name: node.name });
       return option(node.self ? '' : node.id, label, node.self ? !nodeId || nodeId === node.id : nodeId === node.id, !node.self && !node.online);
     });
     if (nodeId && !nodes.some(node => node.id === nodeId)) entries.push(option(nodeId, target?.name || nodeId, true));
@@ -912,6 +1063,40 @@ function finishProbe(failure) {
   renderStats();
 }
 
+// ---- settings --------------------------------------------------------------------------------------
+
+// One place for what was spread over the bar: pointer, the switch shortcut,
+// frame limit, clipboard, language and the technical numbers.
+function openSettings(details = false) {
+  if (engaged) disengage();
+  renderSettings();
+  const dialog = $('#rd-settings');
+  if (!dialog.open) dialog.showModal();
+  if (details) $('#rd-details').scrollIntoView?.({ block: 'start' });
+}
+function renderSettings() {
+  $('#rd-chord-action').value = chordAction;
+  $('#rd-fps').value = String(fpsLimit);
+  $('#rd-clipboard').checked = clipboardOn;
+  $('#rd-clipboard').disabled = session ? !inputAllows('clipboard') : false;
+}
+function setChordAction(value) {
+  chordAction = value === 'fullscreen' ? 'fullscreen' : 'window';
+  try { localStorage.setItem(CHORD_KEY, chordAction); } catch {}
+}
+// The server reads maxFps only from the hello, so a new limit reconnects.
+function setFpsLimit(value) {
+  if (!FPS_CHOICES.includes(value) || value === fpsLimit) return;
+  fpsLimit = value;
+  try { localStorage.setItem(FPS_KEY, String(fpsLimit)); } catch {}
+  if (socket) { reconnectAttempt = 0; connect(); }
+}
+function setClipboard(on) {
+  clipboardOn = !!on;
+  try { localStorage.setItem(CLIPBOARD_KEY, clipboardOn ? 'on' : 'off'); } catch {}
+  if (!clipboardOn) pendingClip = null;
+}
+
 // ---- wiring -----------------------------------------------------------------------------------------
 
 function start() {
@@ -925,7 +1110,7 @@ function start() {
   for (const name of ['contextmenu', 'auxclick']) window.addEventListener(name, event => { if (!event.target?.closest?.('.rd-bar')) event.preventDefault(); });
   window.addEventListener('keydown', keyEvent, true);
   window.addEventListener('keyup', keyEvent, true);
-  window.addEventListener('blur', () => { if (session) releaseRemote(); });
+  window.addEventListener('blur', () => { localPressed.clear(); if (session) releaseRemote(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && session) releaseRemote(); });
   window.addEventListener('focus', () => { if (engaged) clipboardOut(); });
   window.addEventListener('resize', layout);
@@ -935,6 +1120,7 @@ function start() {
     document.body.classList.remove('bar-peek');
     // Leaving full screen (Esc held 2 s with the keyboard lock) releases.
     if (!full && engaged) releaseControl();
+    renderControl();
     layout();
   });
   document.addEventListener('pointerlockchange', () => {
@@ -942,7 +1128,16 @@ function start() {
     if (!document.pointerLockElement && engaged && mode === 'rel' && !document.fullscreenElement) releaseControl();
   });
   $('#rd-bar').addEventListener('mouseleave', () => document.body.classList.remove('bar-peek'));
-  $('#rd-bar').addEventListener('mousedown', () => { if (engaged) disengage(); });
+  // A click on the bar gives the keys back to this device, except on the
+  // indicator, whose own click is the switch.
+  $('#rd-bar').addEventListener('mousedown', event => { if (engaged && !event.target?.closest?.('#rd-control')) disengage(); });
+  $('#rd-control').addEventListener('click', () => { if (engaged) releaseControl(); else takeControl(); });
+  $('#rd-link').addEventListener('click', () => openSettings(true));
+  $('#rd-settings-open').addEventListener('click', () => openSettings());
+  $('#rd-settings-close').addEventListener('click', () => $('#rd-settings').close());
+  $('#rd-chord-action').addEventListener('change', event => setChordAction(event.target.value));
+  $('#rd-fps').addEventListener('change', event => setFpsLimit(Number(event.target.value)));
+  $('#rd-clipboard').addEventListener('change', event => setClipboard(event.target.checked));
   $('#rd-mode-abs').addEventListener('click', () => setMode('abs'));
   $('#rd-mode-rel').addEventListener('click', () => setMode('rel'));
   $('#rd-fullscreen').addEventListener('click', enterFullscreen);
@@ -951,8 +1146,10 @@ function start() {
   $('#rd-retry').addEventListener('click', () => { reconnectAttempt = 0; connect(); });
   $('#rd-probe').hidden = !probeEnabled;
   $('#rd-probe').addEventListener('click', startProbe);
-  document.addEventListener('ponte-language-change', () => renderStats());
+  document.addEventListener('ponte-language-change', () => { renderStats(); renderControl(); renderNodes(); if (session) renderLink(); });
   renderMode();
+  renderSettings();
+  renderControl();
   renderNodes();
   layout();
   setInterval(tick, 1000);

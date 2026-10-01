@@ -16,16 +16,18 @@
       <select id="rd-node" aria-label="Device" data-i18n-aria-label="Aparelho"></select></label>
     <label class="rd-field"><span class="sr-only" data-i18n="Monitor">Monitor</span>
       <select id="rd-monitor" aria-label="Monitor" data-i18n-aria-label="Monitor"></select></label>
-    <div class="rd-segment" role="group" aria-label="Pointer" data-i18n-aria-label="Ponteiro">
-      <button type="button" id="rd-mode-abs" aria-pressed="true" title="Absolute: the pointer goes where you point" data-i18n-title="Absoluto: o ponteiro vai aonde você aponta" data-i18n="Abs">Abs</button>
-      <button type="button" id="rd-mode-rel" aria-pressed="false" title="Relative: pointer lock with raw movement, for games and 3D" data-i18n-title="Relativo: ponteiro travado com movimento cru, pra jogo e 3D" data-i18n="Rel">Rel</button>
-    </div>
-    <button type="button" class="rd-button" id="rd-fullscreen" data-i18n="Tela cheia">Full screen</button>
-    <button type="button" class="rd-button" id="rd-probe" hidden data-i18n="Sonda">Probe</button>
+    <!-- Where the keyboard and mouse go, always in sight; a click or Ctrl+Alt+Shift switches. -->
+    <button type="button" class="rd-control" id="rd-control" aria-pressed="false">
+      <span class="rd-control-icon" aria-hidden="true">⌨</span>
+      <span class="rd-control-text">
+        <strong id="rd-control-target" data-i18n="Teclado e mouse neste aparelho">Keyboard and mouse on this device</strong>
+        <span class="rd-hint" id="rd-hint"></span>
+      </span>
+    </button>
     <span class="rd-status" id="rd-status" role="status" aria-live="polite"></span>
-    <span class="rd-stats" id="rd-stats" aria-live="off"></span>
-    <span class="rd-hint" id="rd-hint" data-i18n="Soltar: Ctrl+Alt+Shift ou segure Esc">Release: Ctrl+Alt+Shift or hold Esc</span>
-    <label class="language-choice"><span class="sr-only" data-i18n="Idioma">Language</span><select data-language-select aria-label="Language" data-i18n-aria-label="Idioma"><option value="en">EN</option><option value="pt">PT</option></select></label>
+    <button type="button" class="rd-link" id="rd-link" hidden title="Connection details" data-i18n-title="Detalhes da conexão"><span class="rd-link-dot" aria-hidden="true"></span><span id="rd-link-text"></span></button>
+    <button type="button" class="rd-button" id="rd-fullscreen" title="Full screen also sends Super, Alt+Tab and Ctrl+W to the device" data-i18n-title="A tela cheia também manda Super, Alt+Tab e Ctrl+W pro aparelho" data-i18n="Tela cheia">Full screen</button>
+    <button type="button" class="rd-button rd-gear" id="rd-settings-open" aria-haspopup="dialog"><span aria-hidden="true">⚙</span> <span data-i18n="Configurações">Settings</span></button>
   </header>
   <main class="rd-stage" id="rd-stage" aria-label="Remote screen. Click to control." data-i18n-aria-label="Tela remota. Clique para controlar.">
     <canvas id="rd-canvas" width="16" height="9"></canvas>
@@ -33,9 +35,64 @@
       <p id="rd-message" data-i18n="Conectando…">Connecting…</p>
       <button type="button" class="rd-button" id="rd-retry" hidden data-i18n="Retomar o controle">Take control back</button>
     </div>
+    <p class="rd-switch" id="rd-switch" hidden aria-live="polite"></p>
     <p class="rd-note" id="rd-note" hidden></p>
   </main>
-  <script src="/i18n.js?v=0.1.0-alpha.34"></script>
-  <script src="/rd.js?v=0.1.0-alpha.34"></script>
+  <dialog class="rd-settings" id="rd-settings" aria-labelledby="rd-settings-title">
+    <div class="rd-settings-head">
+      <h2 id="rd-settings-title" data-i18n="Configurações">Settings</h2>
+      <button type="button" class="rd-button" id="rd-settings-close" data-i18n="Fechar">Close</button>
+    </div>
+    <section>
+      <h3 data-i18n="Ponteiro">Pointer</h3>
+      <div class="rd-segment" role="group" aria-label="Pointer" data-i18n-aria-label="Ponteiro">
+        <button type="button" id="rd-mode-abs" aria-pressed="true" data-i18n="Direto">Direct</button>
+        <button type="button" id="rd-mode-rel" aria-pressed="false" data-i18n="Travado (jogos e 3D)">Locked (games and 3D)</button>
+      </div>
+      <p class="rd-help" data-i18n="Direto: o ponteiro do aparelho vai exatamente aonde você aponta. É o normal pra trabalhar.">Direct: the device's pointer goes exactly where you point. The usual way to work.</p>
+      <p class="rd-help" data-i18n="Travado: o ponteiro some deste PC e o movimento vai cru, como num jogo ou programa 3D. Esc devolve o ponteiro.">Locked: the pointer disappears from this PC and raw movement goes out, as in a game or 3D app. Esc gives the pointer back.</p>
+    </section>
+    <section>
+      <h3 data-i18n="Teclado e atalhos">Keyboard and shortcuts</h3>
+      <dl class="rd-keys">
+        <dt><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd></dt><dd data-i18n="Alterna o teclado e o mouse entre este aparelho e o que está na tela. Funciona com ou sem tela cheia.">Switches the keyboard and mouse between this device and the one on the screen. Works with or without full screen.</dd>
+        <dt data-i18n="Segurar Esc 2 s">Hold Esc 2 s</dt><dd data-i18n="Em tela cheia, sai e volta pra este aparelho.">In full screen, leaves and comes back to this device.</dd>
+        <dt data-i18n="Clique na tela">Click the screen</dt><dd data-i18n="Começa a controlar.">Starts controlling.</dd>
+      </dl>
+      <p class="rd-help" data-i18n="Na janela, letras, números e Ctrl+C/V vão pro aparelho, mas Super (os atalhos do Omarchy) e os atalhos do navegador (Ctrl+T, Ctrl+W) ficam neste PC: o navegador só entrega essas teclas em tela cheia. Em tela cheia vai tudo.">In the window, letters, numbers and Ctrl+C/V go to the device, but Super (the Omarchy shortcuts) and the browser's own shortcuts (Ctrl+T, Ctrl+W) stay on this PC: the browser only hands those keys over in full screen. In full screen everything goes.</p>
+      <label class="rd-row"><span data-i18n="O atalho Ctrl+Alt+Shift">The Ctrl+Alt+Shift shortcut</span>
+        <select id="rd-chord-action">
+          <option value="window" data-i18n="só alterna o controle">only switches control</option>
+          <option value="fullscreen" data-i18n="alterna e entra em tela cheia (leva o Super)">switches and enters full screen (takes Super too)</option>
+        </select></label>
+    </section>
+    <section>
+      <h3 data-i18n="Imagem">Picture</h3>
+      <label class="rd-row"><span data-i18n="Limite de quadros">Frame limit</span>
+        <select id="rd-fps">
+          <option value="60" data-i18n="60 por segundo (padrão)">60 per second (default)</option>
+          <option value="30" data-i18n="30 por segundo">30 per second</option>
+          <option value="15" data-i18n="15 por segundo (conexão fraca)">15 per second (weak connection)</option>
+        </select></label>
+      <p class="rd-help" data-i18n="A qualidade se ajusta sozinha à conexão; aqui fica só o teto. Mudar reconecta.">Quality adapts to the connection by itself; this is only the ceiling. Changing it reconnects.</p>
+    </section>
+    <section>
+      <h3 data-i18n="Área de transferência">Clipboard</h3>
+      <label class="rd-row rd-check"><input type="checkbox" id="rd-clipboard" checked> <span data-i18n="Copiar e colar entre este aparelho e o da tela">Copy and paste between this device and the one on the screen</span></label>
+    </section>
+    <section>
+      <h3 data-i18n="Idioma">Language</h3>
+      <label class="language-choice"><span class="sr-only" data-i18n="Idioma">Language</span><select data-language-select aria-label="Language" data-i18n-aria-label="Idioma"><option value="en">English</option><option value="pt">Português</option></select></label>
+    </section>
+    <section id="rd-details">
+      <h3 data-i18n="Detalhes técnicos">Technical details</h3>
+      <p class="rd-link-reason" id="rd-link-reason"></p>
+      <p class="rd-stats" id="rd-stats" aria-live="off"></p>
+      <p class="rd-help" data-i18n="fps: quadros desenhados por segundo. RTT: ida e volta até o aparelho. quadro: do envio até aparecer aqui (média e p95, o pior em 20). hw/sw: decodificação na placa de vídeo ou no processador.">fps: frames drawn per second. RTT: round trip to the device. frame: from sending to showing here (mean and p95, the worst in 20). hw/sw: decoding on the graphics card or on the processor.</p>
+      <button type="button" class="rd-button" id="rd-probe" hidden data-i18n="Sonda">Probe</button>
+    </section>
+  </dialog>
+  <script src="/i18n.js?v=0.1.0-alpha.33"></script>
+  <script src="/rd.js?v=0.1.0-alpha.33"></script>
 </body>
 </html>

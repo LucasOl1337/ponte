@@ -2,31 +2,74 @@
    the tokens from styles.css; the bar hides in full screen and comes back when
    the pointer touches the top edge. */
 body.rd{height:100vh;overflow:hidden;background:#000;display:flex;flex-direction:column;user-select:none}
-.rd-bar{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 12px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;z-index:2;transition:transform .16s}
+.rd-bar{display:flex;align-items:center;gap:10px;min-height:52px;padding:5px 12px;background:var(--bg);border-bottom:1px solid var(--border);font-size:12px;z-index:2;transition:transform .16s}
 .rd-bar .brand{font-size:18px;letter-spacing:-.8px;margin-right:4px}
 .rd-bar select{min-height:30px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:9px;padding:3px 6px;font-size:12px;max-width:190px}
-.rd-bar .language-choice select{min-height:30px;min-width:54px}
 .rd-button,.rd-segment button{white-space:nowrap;min-height:30px;padding:3px 11px;border-radius:9px;background:var(--surface);border:1px solid var(--border);font-size:12px;color:var(--text)}
 .rd-button:hover,.rd-segment button:hover{background:var(--surface2)}
 .rd-segment{display:inline-flex}
-.rd-segment button{border-radius:0}
+.rd-segment button{border-radius:0;min-height:36px;padding:4px 14px}
 .rd-segment button:first-child{border-radius:9px 0 0 9px}
 .rd-segment button:last-child{border-radius:0 9px 9px 0;border-left:0}
 .rd-segment button[aria-pressed="true"]{background:var(--lime-dim);color:var(--lime);border-color:#4b5a33}
 .rd-status{color:var(--danger);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:30vw}
 .rd-status:empty{display:none}
-.rd-stats{margin-left:auto;min-width:0;flex:0 1 auto;color:var(--muted);font:11px/1.3 ui-monospace,"JetBrains Mono",monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.rd-hint{color:var(--muted);font-size:11px;white-space:nowrap;flex:none}
-@media (max-width:1180px){.rd-bar .brand{display:none}.rd-bar{gap:7px}}
-body.rd.controlling .rd-hint{color:var(--lime)}
+
+/* Where the keyboard and mouse go: the biggest thing on the bar, in the middle. */
+.rd-control{margin:0 auto;display:flex;align-items:center;gap:10px;min-width:0;max-width:min(620px,52vw);padding:5px 14px 5px 10px;border-radius:12px;background:var(--surface);border:1px solid var(--border);color:var(--text);text-align:left}
+.rd-control:hover:not(:disabled){background:var(--surface2)}
+.rd-control-icon{font-size:20px;line-height:1;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:var(--surface2);color:var(--muted);flex:none}
+.rd-control-text{display:flex;flex-direction:column;min-width:0}
+.rd-control-text strong{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rd-hint{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rd-hint:empty{display:none}
+body.rd.controlling .rd-control{background:var(--lime-dim);border-color:var(--lime)}
+body.rd.controlling .rd-control-icon{background:var(--lime);color:#1d2814}
+body.rd.controlling .rd-control-text strong{color:var(--lime)}
+body.rd.controlling .rd-hint{color:#d6e2c4}
+
+/* Connection in words; the numbers are in the settings. */
+.rd-link{display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:3px 10px;border-radius:20px;background:transparent;border:1px solid var(--border);color:var(--muted);font-size:11px;white-space:nowrap;max-width:28vw;overflow:hidden;text-overflow:ellipsis}
+.rd-link:hover{background:var(--surface)}
+.rd-link-dot{width:8px;height:8px;border-radius:50%;background:var(--lime);flex:none}
+.rd-link[data-level="unstable"]{color:#e4c49c;border-color:#65533b}
+.rd-link[data-level="unstable"] .rd-link-dot{background:#e8b45c}
+.rd-link[data-level="bad"]{color:var(--danger);border-color:#744c3c}
+.rd-link[data-level="bad"] .rd-link-dot{background:#ef6f5a}
+@media (max-width:1180px){.rd-bar .brand{display:none}.rd-bar{gap:7px}.rd-gear span:last-child{display:none}}
+@media (max-width:900px){.rd-hint{display:none}.rd-link #rd-link-text{display:none}}
+
 .rd-stage{position:relative;flex:1;min-height:0;overflow:hidden;background:#000;cursor:default}
 body.rd.controlling.rel .rd-stage{cursor:none}
 .rd-stage canvas{position:absolute;left:0;top:0;image-rendering:auto}
+/* A frame around the picture while it gets the keys: seen even in full screen, where the bar hides. */
+.rd-stage::after{content:"";position:absolute;inset:0;pointer-events:none;border:2px solid transparent;transition:border-color .16s}
+body.rd.controlling .rd-stage::after{border-color:var(--lime)}
 .rd-overlay{position:absolute;inset:0;background:#000000b8;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;color:var(--muted);font-size:14px;pointer-events:none}
 .rd-overlay[hidden]{display:none}
 .rd-overlay button{pointer-events:auto}
+.rd-switch{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);padding:14px 26px;border-radius:16px;background:#151714e8;border:1px solid var(--border);color:var(--text);font-size:22px;font-weight:600;letter-spacing:-.4px;pointer-events:none;box-shadow:0 10px 40px #0009;animation:appear .16s ease-out;white-space:nowrap}
+.rd-switch[data-to="remote"]{border-color:var(--lime);color:var(--lime)}
 .rd-note{position:absolute;right:14px;bottom:12px;padding:6px 11px;border-radius:10px;background:#151714d9;border:1px solid var(--border);color:var(--muted);font-size:11px;pointer-events:none}
 /* Full screen: the stage covers everything and the bar only peeks from the top. */
 body.rd.fullscreen .rd-bar{position:fixed;left:0;right:0;top:0;transform:translateY(-100%)}
 body.rd.fullscreen.bar-peek .rd-bar{transform:none}
-body.rd.fullscreen .rd-hint{display:inline}
+
+/* Settings */
+.rd-settings{width:520px;font-size:13px;user-select:text}
+.rd-settings-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px}
+.rd-settings h2{font-size:22px}
+.rd-settings section{border-top:1px solid #3d4b31;padding:14px 0 12px}
+.rd-settings h3{font-size:11px;font-weight:650;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.rd-help{color:var(--muted);font-size:12px;line-height:1.55;margin-top:8px}
+.rd-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}
+.rd-row select,.rd-settings .language-choice select{min-height:34px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:9px;padding:4px 8px;font-size:12px;max-width:290px}
+.rd-check{justify-content:flex-start}
+.rd-check input{width:18px;height:18px;accent-color:var(--lime)}
+.rd-keys{display:grid;grid-template-columns:max-content 1fr;gap:8px 14px;margin:0}
+.rd-keys dt{font-weight:600;white-space:nowrap}
+.rd-keys dd{margin:0;color:#c8d0bd}
+.rd-settings kbd{display:inline-block;min-width:20px;padding:1px 6px;border-radius:6px;border:1px solid #4d5c3e;border-bottom-width:2px;background:var(--surface);font:600 11px/1.6 var(--font);text-align:center}
+.rd-link-reason{font-size:13px;margin-bottom:6px}
+.rd-stats{color:var(--muted);font:11px/1.5 ui-monospace,"JetBrains Mono",monospace;overflow-wrap:anywhere}
+.rd-stats:empty{display:none}
