@@ -459,7 +459,7 @@ test('live stream authenticates, validates query/live monitor, then sends contin
     const { value, done } = await reader.read(); assert.equal(done, false);
     received = Buffer.concat([received, value]);
   }
-  assert.match(received.toString('latin1'), /Content-Length: 4\r\nX-Frame-Timestamp: \d{13}\r\n\r\n/);
+  assert.match(received.toString('latin1'), /Content-Length: 4\r\nX-Frame-Timestamp: \d{13}\r\nX-Capture-Ms: \d+\r\n\r\n/);
   const callsBeforeAbort = f.calls.filter(call => call.command === 'grim').length;
   assert.ok(callsBeforeAbort >= 3);
   assert.deepEqual(f.calls.filter(call => call.command === 'grim')[0].args, ['-c', '-t', 'jpeg', '-q', '65', '-s', '0.50', '-o', 'DP-1', '-']);

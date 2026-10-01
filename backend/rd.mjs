@@ -246,10 +246,13 @@ export function createRemoteDesktop({
       // What the page can do beyond the first protocol version, and its stage size.
       const announced = hello.caps && typeof hello.caps === 'object' ? hello.caps : {};
       this.page = { ack: announced.ack === true, key: announced.key === true };
+      // The phone app watches the video only: its touches go through the desktop actions.
+      this.wantsInput = hello.input !== false;
       const view = hello.view && typeof hello.view === 'object' ? hello.view : null;
       this.view = view && Number.isFinite(view.width) && view.width >= 320 && view.width <= 16384 ? { width: Math.round(view.width), height: Math.round(Number(view.height) || 0) } : null;
       this.control = createRateControl({ maxFps: this.fps, caps: this.page, view: this.view, now });
       this.seq = 0; this.waitKey = true; this.keyWanted = false; this.announced = null; this.ended = false; this.shedding = false;
+      this.linkSent = 'lan'; // what a page assumes until told
       this.failures = 0; this.lastUnitAt = now();
       this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, decisions: [], pesToSend: [], lastToSend: [], early: 0 };
     }
@@ -265,13 +268,14 @@ export function createRemoteDesktop({
       if (this.ended) return;
       if (holder && holder !== this) holder.take();
       holder = this;
-      if (this.caps.input) {
+      if (this.caps.input && this.wantsInput) {
         this.input = createInput({ python, dryRun: inputMode === 'dry-run', logFile: inputLog, mapping, env, spawn, now, log });
         this.input.setMonitors(this.monitors);
         this.input.start();
       }
       this.capture = makeCapture({ mode: captureMode, scene: labScene, env, spawn, log, onUnit: unit => this.unit(unit), onExit: info => this.captureExit(info) });
       this.capture.start(this.captureParams(pick));
+      this.sendLink();
       this.stopClipboard = clip.watch(text => {
         if (this.ended || text === this.lastClip || Buffer.byteLength(text) > MAX_CLIP_BYTES) return;
         this.lastClip = text;
@@ -287,9 +291,19 @@ export function createRemoteDesktop({
       return { monitor: monitor.name, width: monitor.width, height: monitor.height, fps, kbps: rate, keyint: wan ? wan.keyint : 1, scale: wan ? scaleBox(monitor, wan.maxWidth) : null };
     }
 
+    // The page tolerates a longer decoder queue outside the LAN: frames arrive
+    // there in bursts, and a dropped delta costs a restart and a keyframe.
+    sendLink() {
+      const mode = this.control.mode;
+      if (this.linkSent === mode) return;
+      this.linkSent = mode;
+      this.sendJson({ t: 'link', mode });
+    }
+
     // One encoder restart for a decision of the rate control.
     apply(decision) {
       if (!decision || this.ended) return;
+      this.sendLink();
       if (decision.reason === 'shed') { this.shedding = true; return; }
       this.shedding = false;
       // What the old run still has to send only delays the new keyframe.
@@ -409,6 +423,10 @@ export function createRemoteDesktop({
         // and a decoder that lost its reference and needs a keyframe.
         case 'ack': this.apply(this.control.ack(m.seq)); break;
         case 'keyframe': this.apply(this.control.key()); break;
+        // The stage changed size (a window resized or put in full screen).
+        case 'view':
+          if (num(m.width) && m.width >= 320 && m.width <= 16384) this.apply(this.control.view({ width: Math.round(m.width), height: Math.round(Number(m.height) || 0) }));
+          break;
         case 'clip':
           if (typeof m.text !== 'string' || Buffer.byteLength(m.text) > MAX_CLIP_BYTES || m.text === this.lastClip) break;
           this.lastClip = m.text;

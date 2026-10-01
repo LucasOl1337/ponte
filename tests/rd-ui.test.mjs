@@ -366,6 +366,13 @@ test('acks: the last frame that arrived, on arrival, at most every 50 ms; a drop
   assert.equal(h.sent('keyframe').length, 2, 'still waiting after 3 s: asks again');
   h.socket.message(unit(true, 7)); h.advance(4000); h.socket.message(unit(false, 8));
   assert.equal(h.sent('keyframe').length, 2, 'the keyframe came');
+  // Outside the LAN frames arrive in bursts: a few waiting is not late, a second of them (60 at 60 fps) is.
+  h.socket.message(JSON.stringify({ t: 'link', mode: 'wan' }));
+  h.advance(4000); h.decoder.decodeQueueSize = 12; h.socket.message(unit(false, 9));
+  h.decoder.decodeQueueSize = 0; h.socket.message(unit(false, 10));
+  assert.equal(h.sent('keyframe').length, 2, 'a burst of 12 is decoded, no new run asked');
+  h.decoder.decodeQueueSize = 61; h.socket.message(unit(false, 11));
+  assert.equal(h.sent('keyframe').length, 3, 'over a second behind: a keyframe after all');
   // A new connection starts counting seqs again.
   h.socket.close(1006);
   h.timer(500).callback();

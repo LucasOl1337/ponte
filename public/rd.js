@@ -11,6 +11,9 @@ const TOKEN_KEY = 'ponte-pair-token';
 const MODE_KEY = 'ponte-rd-mode';
 const HEADER_BYTES = 16;
 const MAX_DECODE_QUEUE = 2;
+// Outside the LAN frames arrive in bursts and a dropped delta costs a new
+// encoder run and a keyframe: only a second of frames waiting is late there.
+const WAN_DECODE_QUEUE_SECONDS = 1;
 const MAX_CONFIGURE_QUEUE = 30; // about a second at 30 fps while the decoder is being set up
 const WHEEL_UNIT = 120;
 const CLIP_LIMIT = 1024 * 1024;
@@ -172,6 +175,7 @@ let decoderConfig = null;
 let configuring = null;
 let queuedChunks = [];
 let waitingKey = true;
+let linkMode = 'lan', viewSent = null, viewTimer = 0;
 let hardware = '';
 let decoderFailures = 0;
 let hardwareFailed = false;   // for the rest of the page's life
@@ -247,7 +251,7 @@ function connect() {
   if (socket) { const old = socket; socket = null; try { old.close(1000); } catch {} }
   if (!token) { stopped = 'auth'; overlay(t('Abra pelo ./ponte rd ou por um link de pareamento: este navegador ainda não tem a chave.')); return; }
   stopped = ''; stopMessage = '';
-  session = null; littleEndian = null; waitingKey = true; inflight.clear(); pingSamples.length = 0;
+  session = null; littleEndian = null; waitingKey = true; inflight.clear(); pingSamples.length = 0; linkMode = 'lan';
   clearTimeout(ackTimer); ackTimer = 0; ackSeq = 0; ackSent = 0; keyframeAskedAt = -Infinity;
   overlay(reconnectAttempt ? t('Reconectando…') : t('Conectando…'));
   const current = new WebSocket(socketAddress());
@@ -259,6 +263,7 @@ function connect() {
     if (wantedMonitor) hello.monitor = wantedMonitor;
     const view = stageView();
     if (view) hello.view = view;
+    viewSent = view;
     current.send(JSON.stringify(hello));
   });
   current.addEventListener('message', event => { if (socket === current) receive(event.data); });
@@ -285,6 +290,17 @@ function stageView() {
   const width = Math.round((stage?.clientWidth || 0) * ratio), height = Math.round((stage?.clientHeight || 0) * ratio);
   return width >= 320 && height > 0 ? { width, height } : null;
 }
+
+// A stage that grew (full screen, a maximized window) lifts the width limit
+// the hello set; the server restarts only when that limit really changes.
+function sendView() {
+  viewTimer = 0;
+  const view = stageView();
+  if (!view || !session || (viewSent && viewSent.width === view.width && viewSent.height === view.height)) return;
+  viewSent = view;
+  send({ t: 'view', ...view });
+}
+window.addEventListener('resize', () => { clearTimeout(viewTimer); viewTimer = setTimeout(sendView, 600); });
 
 // On arrival, before decoding: the server reads the link's queue from it.
 function acknowledge(seq) {
@@ -318,6 +334,7 @@ function receive(data) {
   switch (message.t) {
     case 'ready': ready(message); break;
     case 'pong': pong(message); break;
+    case 'link': linkMode = message.mode === 'wan' ? 'wan' : 'lan'; break;
     case 'clip': clipboardIn(message.text); break;
     case 'taken':
       // Another client took this target: no automatic reconnect, or the two
@@ -448,7 +465,8 @@ function video(buffer) {
 function decode(chunk, burst = false) {
   // Until the decoder has worked through that burst, a full queue is expected.
   if (!burst && catchingUp && decoder && decoder.decodeQueueSize <= MAX_DECODE_QUEUE) catchingUp = false;
-  const late = !burst && decoder?.decodeQueueSize > (catchingUp ? MAX_CONFIGURE_QUEUE : MAX_DECODE_QUEUE);
+  const steady = linkMode === 'wan' ? Math.max(MAX_DECODE_QUEUE, Math.round((session?.fps || 30) * WAN_DECODE_QUEUE_SECONDS)) : MAX_DECODE_QUEUE;
+  const late = !burst && decoder?.decodeQueueSize > (catchingUp ? MAX_CONFIGURE_QUEUE : steady);
   if (!decoder || decoder.state !== 'configured') { waitingKey = true; framesDropped++; if (!chunk.key) askKeyframe(); return; }
   if (!chunk.key) {
     if (waitingKey || late) { waitingKey = true; framesDropped++; askKeyframe(); return; }

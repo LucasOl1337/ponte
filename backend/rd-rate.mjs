@@ -65,6 +65,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   let lastRestartAt = -Infinity, lastDownAt = -Infinity, lastUpAt = -Infinity, upTo = null, atStepSince = now();
   let lastUncalmAt = now(), lastReportAt = -Infinity, badStreak = 0;
   let lastKey = null;
+  let stage = view;
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
   // Ack path: frames sent and not acked yet, ages of the acked ones, acked bytes.
@@ -72,7 +73,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   const inFlight = [], ages = [], acked = [];
 
   const widthLimit = () => {
-    const limits = [WAN_STEPS[step].width, finite(view?.width)].filter(Boolean);
+    const limits = [WAN_STEPS[step].width, finite(stage?.width)].filter(Boolean);
     return limits.length ? Math.min(...limits) : null;
   };
   const params = () => mode === 'lan' ? null : {
@@ -89,9 +90,14 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     if (t - from < 300) return null;
     return acked.reduce((sum, item) => sum + (item.at > from ? item.bytes : 0), 0) * 8 / (t - from);
   };
-  // The highest step that 80% of the delivered rate carries, below the current one.
+  // The highest step that 80% of the link's capacity carries, below the current
+  // one. What was delivered is the capacity only while a queue stood (since):
+  // otherwise it is what the encoder made, a few hundred kbps on a still
+  // desktop, and trusting it sent a single fall to the floor for good. Without
+  // a standing queue a fresh keyframe burst measures it, or it is one step.
   const fitting = (below = step, since = null) => {
-    const rate = deliveredKbps(since);
+    const fresh = sample && now() - sample.at <= SAMPLE_FRESH_MS ? sample.kbps : null;
+    const rate = since !== null ? deliveredKbps(since) : fresh;
     const fit = rate === null ? below - 1 : WAN_STEPS.findLastIndex(s => s.kbps <= 0.8 * rate);
     return Math.max(0, Math.min(below - 1, fit));
   };
@@ -237,7 +243,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
         const piling = frame.at >= judgeFrom && !keyframeExcuse(t, 100) && queued(queue, t);
         if ((farSince === null || t - farSince < 5000) && !piling) return null;
         mode = 'wan';
-        return change('wan', Math.min(INITIAL_STEP, fitting(WAN_STEPS.length)));
+        return change('wan', Math.min(INITIAL_STEP, fitting(WAN_STEPS.length, piling ? badSince.at : null)));
       }
       if (shedding) return queue < QUEUE_BAD_MS || !inFlight.length ? change('key', 0) : null;
       if (frame.at < judgeFrom) { lastUncalmAt = t; return null; }
@@ -271,7 +277,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
         const far = recent.length >= 4 && recent.every(s => s.value > LAN_RTT_MS);
         if (!far && badStreak < 2) return null;
         mode = 'wan';
-        return change('wan', Math.min(INITIAL_STEP, fitting(WAN_STEPS.length)));
+        return change('wan', Math.min(INITIAL_STEP, fitting(WAN_STEPS.length, badStreak >= 2 ? t : null)));
       }
       // A page that cannot ask for a keyframe drops deltas and says so in its stats.
       if (!caps.key && Number(report.drops) > 0 && (t - lastRestartAt > IMPLICIT_KEY_GRACE_MS || keyLanded(t))) return keyRequest();
@@ -285,7 +291,8 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
         if (shedding && rttQueue !== null && rttQueue < QUEUE_BAD_MS) return change('key', 0);
         return null;
       }
-      if (emergency || badStreak >= 2) return change('down', fitting());
+      // Two reports with a queue: what the page received meanwhile was the link's capacity.
+      if (emergency || badStreak >= 2) return change('down', fitting(step, t));
       return null;
     },
     // Called about once a second.
@@ -307,10 +314,18 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       return change('up', target);
     },
     key: keyRequest,
+    // The page's stage changed size: a new width limit is a new run.
+    view(next) {
+      const before = widthLimit();
+      stage = next;
+      if (mode !== 'wan' || widthLimit() === before) return null;
+      return change('view', step);
+    },
     // The session dropped a delta because its own buffer is over the ceiling.
     drop() {
       if (mode !== 'wan' || now() - lastRestartAt < KEY_COALESCE_MS) return null;
-      return step > 0 ? change('down', fitting()) : change('key', 0);
+      // Over a second buffered here: the link is busy, what it delivers is its capacity.
+      return step > 0 ? change('down', fitting(step, now())) : change('key', 0);
     },
   };
 }

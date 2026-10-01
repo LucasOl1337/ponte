@@ -254,6 +254,73 @@ public final class ProxyTest {
         for (String[] route : denied) check(raw(proxy, request(proxy, route[0], route[1], "")).startsWith("HTTP/1.1 404"), "unlisted power method/path denied: " + route[0] + " " + route[1]);
         check(remote.hits.get() == before, "denied power requests never reach upstream");
     }
+
+    /** An upstream that answers the WebSocket upgrade with 101 and echoes what follows. */
+    static final class EchoUpstream implements AutoCloseable {
+        final SSLServerSocket server;
+        final AtomicReference<String> head = new AtomicReference<>();
+        EchoUpstream(Path store) throws Exception {
+            KeyStore keys = KeyStore.getInstance("PKCS12");
+            try (InputStream input = Files.newInputStream(store)) { keys.load(input, "test-only".toCharArray()); }
+            KeyManagerFactory km = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()); km.init(keys, "test-only".toCharArray());
+            SSLContext tls = SSLContext.getInstance("TLS"); tls.init(km.getKeyManagers(), null, null);
+            server = (SSLServerSocket) tls.getServerSocketFactory().createServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
+            Thread thread = new Thread(() -> {
+                try (Socket socket = server.accept()) {
+                    InputStream input = socket.getInputStream(); OutputStream output = socket.getOutputStream();
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                    while (!bytes.toString("ISO-8859-1").endsWith("\r\n\r\n")) { int value = input.read(); if (value < 0) return; bytes.write(value); }
+                    head.set(bytes.toString("ISO-8859-1"));
+                    output.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: test\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+                    output.write(new byte[]{(byte) 0x82, 3, 1, 2, 3}); output.flush();
+                    byte[] buffer = new byte[4096]; int count;
+                    while ((count = input.read(buffer)) != -1) { output.write(buffer, 0, count); output.flush(); }
+                } catch (IOException closed) { }
+            });
+            thread.setDaemon(true); thread.start();
+        }
+        URI uri() { return URI.create("https://127.0.0.1:" + server.getLocalPort()); }
+        public void close() throws IOException { server.close(); }
+    }
+    static final String UPGRADE = "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+    /** The remote desktop video: a pinned TLS tunnel that copies the WebSocket bytes both ways. */
+    static void rdTunnel(Path fixtures) throws Exception {
+        try (EchoUpstream upstream = new EchoUpstream(fixtures.resolve("good.p12"));
+             InputStream cert = Files.newInputStream(fixtures.resolve("good.crt"));
+             LoopbackProxy proxy = new LoopbackProxy(upstream.uri(), cert, 0);
+             Socket socket = new Socket("127.0.0.1", URI.create(proxy.origin()).getPort())) {
+            socket.setSoTimeout(5000);
+            socket.getOutputStream().write(request(proxy, "GET", "/api/rd?monitor=DP-3", UPGRADE + "Origin: " + proxy.origin() + "\r\n").getBytes(StandardCharsets.ISO_8859_1));
+            socket.getOutputStream().flush();
+            InputStream input = socket.getInputStream();
+            ByteArrayOutputStream head = new ByteArrayOutputStream();
+            while (!head.toString("ISO-8859-1").endsWith("\r\n\r\n")) { int value = input.read(); check(value >= 0, "the 101 arrives"); head.write(value); }
+            check(head.toString("ISO-8859-1").startsWith("HTTP/1.1 101"), "the server's 101 reaches the WebView");
+            String sent = upstream.head.get();
+            check(sent.startsWith("GET /api/rd?monitor=DP-3 HTTP/1.1\r\n") && sent.contains("\r\nHost: " + upstream.uri().getAuthority() + "\r\n"), "upgrade goes to the PC with its own Host");
+            check(sent.contains("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") && !sent.toLowerCase(Locale.ROOT).contains("origin:"), "the key is kept, the local Origin is not");
+            byte[] frame = new byte[5];
+            for (int read = 0; read < 5; ) read += input.read(frame, read, 5 - read);
+            check(frame[0] == (byte) 0x82 && frame[4] == 3, "the first binary frame comes through untouched");
+            socket.getOutputStream().write(new byte[]{9, 8, 7}); socket.getOutputStream().flush();
+            byte[] echo = new byte[3];
+            for (int read = 0; read < 3; ) read += input.read(echo, read, 3 - read);
+            check(echo[0] == 9 && echo[2] == 7, "and the page's messages go up");
+        }
+        try (EchoUpstream upstream = new EchoUpstream(fixtures.resolve("wrong.p12"));
+             InputStream cert = Files.newInputStream(fixtures.resolve("good.crt"));
+             LoopbackProxy proxy = new LoopbackProxy(upstream.uri(), cert, 0)) {
+            check(raw(proxy, request(proxy, "GET", "/api/rd", UPGRADE)).startsWith("HTTP/1.1 502 proxy_certificate"), "the tunnel keeps the pin");
+            check(upstream.head.get() == null, "nothing is sent to a PC outside the pin");
+        }
+        try (Remote remote = new Remote(fixtures.resolve("good.p12")); LoopbackProxy proxy = proxy(remote, fixtures.resolve("good.crt"), "127.0.0.1")) {
+            check(raw(proxy, request(proxy, "GET", "/api/rd", "")).startsWith("HTTP/1.1 400"), "/api/rd only as a WebSocket");
+            check(raw(proxy, request(proxy, "GET", "/api/state", UPGRADE)).startsWith("HTTP/1.1 400"), "no WebSocket anywhere else");
+            check(raw(proxy, request(proxy, "GET", "/api/rd", "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: bad\r\n")).startsWith("HTTP/1.1 400"), "a malformed key is refused");
+            check(remote.hits.get() == 0, "refused upgrades never reach the PC");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         Path fixtures = Paths.get(args[0]);
         try (Remote remote = new Remote(fixtures.resolve("good.p12"))) {
@@ -387,6 +454,7 @@ public final class ProxyTest {
             catch (BindException expected) { rejected = true; }
             check(rejected, "occupied local port must fail without fallback");
         }
+        rdTunnel(fixtures);
         System.out.println("Native proxy: " + checks + " checks passed.");
     }
 }

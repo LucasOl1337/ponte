@@ -104,6 +104,7 @@ public final class LoopbackProxy implements Closeable {
             Request request = Request.read(input, host, origin);
             language = request.headers.getOrDefault("accept-language", "en");
             exchange.requireActive();
+            if (request.upgrade) { tunnel(exchange, request, input, output); return; }
             remote = (HttpsURLConnection) new URL(upstream.toString().replaceAll("/$", "") + request.target).openConnection();
             remote.setSSLSocketFactory(new TrackedTlsFactory(exchange));
             // Keep the platform's hostname verifier. The dedicated trust store
@@ -190,6 +191,70 @@ public final class LoopbackProxy implements Closeable {
             exchange.closeTransports();
             if (remote != null) remote.disconnect();
             exchanges.remove(exchange); closeQuietly(socket);
+        }
+    }
+
+    /**
+     * The remote desktop video (/api/rd) is a WebSocket: after the pinned TLS
+     * handshake and the server's 101, bytes are copied both ways untouched.
+     * Pausing the app cancels the exchange and closes both ends, as for a stream.
+     */
+    private void tunnel(Exchange exchange, Request request, InputStream localIn, OutputStream localOut) throws IOException {
+        int port = upstream.getPort() > 0 ? upstream.getPort() : 443;
+        SSLSocket remote = (SSLSocket) new TrackedTlsFactory(exchange).createSocket();
+        SSLParameters parameters = remote.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm("HTTPS");
+        remote.setSSLParameters(parameters);
+        remote.connect(new InetSocketAddress(upstream.getHost(), port), 8000);
+        remote.setSoTimeout(15000);
+        remote.setTcpNoDelay(true);
+        remote.startHandshake();
+        exchange.requireActive();
+        pinned.requirePinnedPeer(remote);
+        StringBuilder head = new StringBuilder("GET ").append(request.target).append(" HTTP/1.1\r\nHost: ").append(upstream.getRawAuthority())
+            .append("\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ")
+            .append(request.headers.get("sec-websocket-key")).append("\r\n");
+        String language = request.headers.get("accept-language");
+        if (language != null) head.append("Accept-Language: ").append(language).append("\r\n");
+        head.append("\r\n");
+        OutputStream remoteOut = remote.getOutputStream();
+        InputStream remoteIn = remote.getInputStream();
+        remoteOut.write(head.toString().getBytes(StandardCharsets.ISO_8859_1));
+        remoteOut.flush();
+        // The answer's head, byte by byte so nothing of the first frame is read ahead.
+        ByteArrayOutputStream answer = new ByteArrayOutputStream();
+        int sequence = 0;
+        while (sequence != 4) {
+            int value = remoteIn.read();
+            if (value < 0) throw new ProxyError(502, "proxy_unavailable");
+            if (answer.size() >= MAX_HEADERS) throw new ProxyError(502, "proxy_unavailable");
+            answer.write(value);
+            sequence = value == (sequence % 2 == 0 ? 13 : 10) ? sequence + 1 : value == 13 ? 1 : 0;
+        }
+        exchange.requireActive();
+        localOut.write(answer.toByteArray());
+        localOut.flush();
+        if (!answer.toString("ISO-8859-1").startsWith("HTTP/1.1 101")) return;
+        exchange.local.setSoTimeout(0);
+        remote.setSoTimeout(0);
+        Thread down = new Thread(() -> {
+            try { pump(remoteIn, localOut, exchange); }
+            catch (IOException ended) { /* either side closed */ }
+            finally { exchange.cancel(); }
+        }, "ponte-proxy-rd");
+        down.setDaemon(true);
+        down.start();
+        try { pump(localIn, remoteOut, exchange); }
+        catch (IOException ended) { /* either side closed */ }
+        finally { exchange.cancel(); }
+    }
+    private static void pump(InputStream from, OutputStream to, Exchange exchange) throws IOException {
+        byte[] buffer = new byte[65536];
+        int count;
+        while (exchange.active() && (count = from.read(buffer)) != -1) {
+            if (count == 0) continue;
+            to.write(buffer, 0, count);
+            to.flush();
         }
     }
 
@@ -287,8 +352,9 @@ public final class LoopbackProxy implements Closeable {
         final String target;
         final Map<String, String> headers;
         final long length;
-        Request(String method, String target, Map<String, String> headers, long length) {
-            this.method = method; this.target = target; this.headers = headers; this.length = length;
+        final boolean upgrade;
+        Request(String method, String target, Map<String, String> headers, long length, boolean upgrade) {
+            this.method = method; this.target = target; this.headers = headers; this.length = length; this.upgrade = upgrade;
         }
         static Request read(InputStream input, String host, String origin) throws IOException {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -316,7 +382,8 @@ public final class LoopbackProxy implements Closeable {
             boolean apiGet = method.equals("GET") && (path.equals("/api/power") || path.matches("/api/(health|state|screenshot|stream|audio|terminals|textinput|pair|images)") || path.matches("/api/audio/[A-Za-z0-9_-]{1,100}") || terminalItem || imageItem || path.equals("/api/agents") || path.matches(agentItem + "/transcript"));
             boolean apiPost = method.equals("POST") && (path.equals("/api/power") || path.matches("/api/(action|audio|terminals|dictate|images)") || path.equals("/api/audio/stop") || path.matches("/api/audio/[A-Za-z0-9_-]{1,100}/play") || path.matches("/api/terminals/[a-f0-9]{24}/(input|resize|dictate|open)") || path.matches("/api/images/[0-9]{8}-[0-9]{6}-[a-f0-9]{8}/(copy|paste)") || path.matches(agentItem + "/reply"));
             boolean apiDelete = method.equals("DELETE") && (terminalItem || imageItem);
-            if (!(staticGet || apiGet || apiPost || apiDelete)) throw new ProxyError(404, "proxy_path_denied");
+            boolean rdSocket = method.equals("GET") && path.equals("/api/rd");
+            if (!(staticGet || apiGet || apiPost || apiDelete || rdSocket)) throw new ProxyError(404, "proxy_path_denied");
             Map<String, String> headers = new LinkedHashMap<>();
             for (int index = 1; index < lines.length; index++) {
                 if (lines[index].isEmpty()) continue;
@@ -340,7 +407,10 @@ public final class LoopbackProxy implements Closeable {
                 if (length > MAX_BODY) throw new ProxyError(413, "proxy_limit");
             }
             if (!method.equals("POST") && length != 0) throw new ProxyError(400, "proxy_body");
-            return new Request(method, target, headers, length);
+            boolean upgrade = "websocket".equalsIgnoreCase(headers.get("upgrade"));
+            if (rdSocket != upgrade) throw new ProxyError(400, "proxy_upgrade");
+            if (upgrade && !(headers.getOrDefault("sec-websocket-key", "").matches("[A-Za-z0-9+/]{22}==") && "13".equals(headers.get("sec-websocket-version")))) throw new ProxyError(400, "proxy_upgrade");
+            return new Request(method, target, headers, length, upgrade);
         }
     }
 }

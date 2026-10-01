@@ -383,7 +383,8 @@ test('outside the LAN a new run\'s keyframe goes out over an old queue, and a ke
   await s.ready();
   const session = s.rd.sessions[0];
   const wan = { monitor: 'LAB-1', fps: 15, kbps: 1000 };
-  const kinds = () => s.sent.slice(1).map(m => m.header.keyframe ? 'K' : 'D');
+  assert.deepEqual(s.sent[0], { t: 'link', mode: 'wan' }, 'the page is told: a longer decoder queue is fine here');
+  const kinds = () => s.sent.filter(m => m.header).map(m => m.header.keyframe ? 'K' : 'D');
   // 160 KB still queued from the run before: more than a second of W1 (125 KB/s).
   s.ws.bufferedAmount = 160 * 1024;
   s.unit(true, wan, 40000);

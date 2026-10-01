@@ -93,7 +93,7 @@ function createFeeds(capture) {
   function join(key, source, fps) {
     let feed = feeds.get(key);
     if (!feed) {
-      feed = { source, controller: new AbortController(), members: 0, latest: null, pending: null, seq: 0 };
+      feed = { source, controller: new AbortController(), members: 0, latest: null, pending: null, seq: 0, captureMs: null };
       feeds.set(key, feed);
     }
     feed.members++;
@@ -106,7 +106,7 @@ function createFeeds(capture) {
         if (!feed.pending) {
           const at = performance.now();
           const pending = capture(feed.source.capture, feed.controller.signal)
-            .then(bytes => (feed.latest = { bytes, at, seq: ++feed.seq }))
+            .then(bytes => { feed.captureMs = performance.now() - at; return (feed.latest = { bytes, at, seq: ++feed.seq }); })
             .finally(() => { if (feed.pending === pending) feed.pending = null; });
           pending.catch(() => {});
           feed.pending = pending;
@@ -115,6 +115,9 @@ function createFeeds(capture) {
         seen = frame.seq;
         return frame.bytes;
       },
+      // How long the last capture took: grim scaling on the CPU can be slower
+      // than the frame interval, and the phone must not read that as a slow link.
+      get captureMs() { return feed.captureMs; },
       leave() {
         if (left) return;
         left = true;
@@ -131,10 +134,11 @@ function validateFrame(bytes) {
   if (!Buffer.isBuffer(bytes) || bytes.length < 4 || bytes.length > MAX_LIVE_FRAME_BYTES || bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new ApiError(503, 'INVALID_JPEG_FRAME');
 }
 
-export async function writeLiveFrame(res, bytes, signal, { timeout = 5000, now = Date.now } = {}) {
+export async function writeLiveFrame(res, bytes, signal, { timeout = 5000, now = Date.now, captureMs = null } = {}) {
   if (signal.aborted || res.destroyed) throw aborted();
   validateFrame(bytes);
-  const header = Buffer.from(`--${LIVE_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${bytes.length}\r\nX-Frame-Timestamp: ${now()}\r\n\r\n`);
+  const capture = Number.isFinite(captureMs) && captureMs >= 0 ? `X-Capture-Ms: ${Math.round(captureMs)}\r\n` : '';
+  const header = Buffer.from(`--${LIVE_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${bytes.length}\r\nX-Frame-Timestamp: ${now()}\r\n${capture}\r\n`);
   const packet = Buffer.concat([header, bytes, Buffer.from('\r\n')]);
   if (res.write(packet)) return;
   // Never accumulate frames behind a slow receiver. Only resume after its
@@ -202,7 +206,7 @@ export function createLiveStreaming(desktop, { maxStreams = 4, maxPerPeer = 2, m
       });
       res.flushHeaders();
       while (!signal.aborted) {
-        await writeLiveFrame(res, frame, signal, { timeout: slowClientTimeout });
+        await writeLiveFrame(res, frame, signal, { timeout: slowClientTimeout, captureMs: feed.captureMs });
         frame = null;
         await wait(Math.max(0, 1000 / options.fps - (performance.now() - started)), signal);
         started = performance.now();

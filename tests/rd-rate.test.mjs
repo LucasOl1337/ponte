@@ -377,3 +377,31 @@ test('an older page that drops frames right after the first keyframe landed gets
   clock += 400;
   assert.equal(c.stats({ fps: 0, kbps: 1500, rtt: 30, drops: 20 })?.reason, 'key');
 });
+
+test('a still desktop delivers little: a stall with no queue standing steps down one, not to what the encoder happened to make', () => {
+  const t = control({ caps: { ack: true, key: true } });
+  t.c.open(40);
+  assert.equal(t.c.step, INITIAL_STEP);
+  // Five seconds of small deltas (2 KB at 15 fps, ~240 kbps), each acked 45 ms later.
+  let seq = 0;
+  for (let i = 0; i < 75; i++) { t.c.sent(2000, false, ++seq); t.pass(45); t.c.ack(seq); t.pass(22); }
+  // The link stalls for over a second with nothing big queued.
+  let decision = null;
+  for (let i = 0; i < 20 && !decision; i++) { t.pass(67); decision = t.c.sent(2000, false, ++seq); }
+  assert.equal(decision?.reason, 'down');
+  assert.equal(t.c.step, INITIAL_STEP - 1, '240 kbps delivered is the desktop, not the link: W2, not W0');
+});
+
+test('a stage that grows lifts the width limit with one restart; the same limit restarts nothing', () => {
+  const t = control({ caps: { ack: true, key: true }, view: { width: 1100, height: 700 } });
+  assert.equal(t.c.open(40).maxWidth, 1100);
+  const grown = t.c.view({ width: 1800, height: 1000 });
+  assert.equal(grown.reason, 'view');
+  assert.equal(grown.params.maxWidth, 1800);
+  assert.equal(t.c.step, INITIAL_STEP);
+  assert.equal(t.c.view({ width: 2400, height: 1300 })?.params.maxWidth, 1920, 'the step caps it at 1920');
+  assert.equal(t.c.view({ width: 2600, height: 1400 }), null, 'still 1920: nothing to restart');
+  const lan = control({ view: { width: 1100, height: 700 } });
+  lan.c.open(4);
+  assert.equal(lan.c.view({ width: 1800, height: 1000 }), null, 'the LAN is never scaled');
+});

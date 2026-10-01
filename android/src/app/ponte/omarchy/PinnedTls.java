@@ -67,6 +67,14 @@ final class PinnedTls {
         catch (CertificateException mismatch) { throw new SSLPeerUnverifiedException(mismatch.getMessage()); }
     }
 
+    /** The same check on a raw TLS socket (the remote desktop WebSocket tunnel). */
+    void requirePinnedPeer(SSLSocket socket) throws SSLPeerUnverifiedException {
+        java.security.cert.Certificate peer = socket.getSession().getPeerCertificates()[0];
+        if (!(peer instanceof X509Certificate)) throw new SSLPeerUnverifiedException("The PC did not present an X.509 certificate.");
+        try { requirePinnedIssuer((X509Certificate) peer); }
+        catch (CertificateException mismatch) { throw new SSLPeerUnverifiedException(mismatch.getMessage()); }
+    }
+
     /** A handshake that failed on trust, not on reachability: the app and the PC disagree on the certificate. */
     static boolean certificateFailure(Throwable error) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {

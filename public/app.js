@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.32';
+const UI_VERSION = '0.1.0-alpha.33';
 let token = '';
 let state = null;
 let connected = false;
@@ -740,6 +740,14 @@ let screenBaseW = 0, screenBaseH = 0;
 let screenStyledSize = '', screenImageMonitor = '';
 let screenMaxScale = 6;
 let screenSourceSize = '';
+// What shows the monitor: the JPEG frames' <img>, or the canvas the H.264
+// video draws on. Zoom, pan and touch mapping read whichever is on screen.
+let screenCanvasOn = false;
+const screenSurface = () => screenCanvasOn ? $('#screen-video') : $('#screen-image');
+function screenNaturalSize() {
+  const surface = screenSurface();
+  return screenCanvasOn ? { w: surface.width, h: surface.height } : { w: surface.naturalWidth, h: surface.naturalHeight };
+}
 let liveRegionTimer = 0;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const LONG_PRESS_MS = 500;
@@ -760,6 +768,7 @@ class MjpegParser {
     this.frame = null;
     this.frameOffset = 0;
     this.timestamp = null;
+    this.captureMs = null;
   }
   push(chunk) {
     if (!(chunk instanceof Uint8Array)) throw new Error(t("Resposta de vídeo inválida."));
@@ -773,7 +782,7 @@ class MjpegParser {
           const frame = this.frame;
           this.frame = null; this.frameOffset = 0;
           if (frame[0] !== 255 || frame[1] !== 216 || frame[frame.length-2] !== 255 || frame[frame.length-1] !== 217) throw new Error(t("Quadro JPEG inválido."));
-          this.onFrame(frame,this.timestamp);
+          this.onFrame(frame,this.timestamp,this.captureMs);
         }
         continue;
       }
@@ -788,6 +797,8 @@ class MjpegParser {
       if (!Number.isSafeInteger(length) || length < 4 || length > MAX_FRAME_BYTES) throw new Error(t("Tamanho do quadro inválido."));
       const timestamp = /^X-Frame-Timestamp:\s*(\d+)\s*$/mi.exec(header);
       this.timestamp = timestamp ? Number(timestamp[1]) : Date.now();
+      const capture = /^X-Capture-Ms:\s*(\d+)\s*$/mi.exec(header);
+      this.captureMs = capture ? Number(capture[1]) : null;
       this.frame = new Uint8Array(length);
       this.frameOffset = 0; this.headerLength = 0;
     }
@@ -837,11 +848,14 @@ function isFullMonitorRegion(region, monitorWidth, monitorHeight) {
 // the link's honest capacity: ~49 Mbit/s for Sharp, ~7 for Balanced, ~2 for
 // Light on a 1440p monitor. Auto starts light, climbs while frames arrive on
 // time and steps down as soon as they lag, holding longer after each fall so
-// the picture does not flap on a mobile link.
+// the picture does not flap on a mobile link. "On time" is against what the PC
+// can capture: grim scales on the CPU, so on a 3440×1440 monitor Balanced
+// takes ~140 ms a frame and can never reach its 10 fps even on a LAN. That is
+// not the link, and it must not keep Auto away from Sharp (18 ms a frame).
 const LIVE_LADDER = ['light','balanced','sharp'];
 function createLiveAdapter({start = 'light', windowMs = 3000, climbAfter = 2, holdMs = 20000, maxHoldMs = 120000, now = Date.now} = {}) {
   let rung = Math.max(0, LIVE_LADDER.indexOf(start));
-  let frames = 0, windowStart = now(), healthy = 0, holdUntil = 0, hold = holdMs;
+  let frames = 0, captureTotal = 0, captured = 0, windowStart = now(), healthy = 0, holdUntil = 0, hold = holdMs;
   function drop(at) {
     healthy = 0;
     if (rung === 0) return null;
@@ -852,7 +866,8 @@ function createLiveAdapter({start = 'light', windowMs = 3000, climbAfter = 2, ho
   }
   return {
     get profile() { return LIVE_LADDER[rung]; },
-    frame() { frames += 1; },
+    // captureMs: what the PC said this frame took to capture (older PCs say nothing).
+    frame(captureMs) { frames += 1; if (Number.isFinite(captureMs) && captureMs > 0) { captureTotal += captureMs; captured += 1; } },
     // A stream that broke or stalled is treated as one lagging window.
     stall() { return drop(now()); },
     // Called about once a second; answers the new profile key on a change.
@@ -860,8 +875,9 @@ function createLiveAdapter({start = 'light', windowMs = 3000, climbAfter = 2, ho
       const at = now();
       const elapsed = at - windowStart;
       if (elapsed < windowMs) return null;
-      const ratio = frames * 1000 / elapsed / requestedFps;
-      frames = 0; windowStart = at;
+      const captureFps = captured ? 1000 * captured / captureTotal : Infinity;
+      const ratio = frames * 1000 / elapsed / Math.min(requestedFps, captureFps);
+      frames = 0; captureTotal = 0; captured = 0; windowStart = at;
       // A window far longer than planned means the page was throttled or
       // paused, not that the link was slow: measure again from here.
       if (elapsed > windowMs * 2) return null;
@@ -955,7 +971,8 @@ function selectedMonitor() {
 }
 function previewLayout() {
   const preview = $('#screen-preview');
-  const image = $('#screen-image');
+  const image = screenSurface();
+  const natural = screenNaturalSize();
   // The image carries a CSS transform, so its on-screen box (getBoundingClientRect)
   // already includes zoom and pan; touch mapping uses those real dimensions.
   const rect = image.getBoundingClientRect?.() || { width: 0, height: 0 };
@@ -964,8 +981,8 @@ function previewLayout() {
     previewHeight: preview.clientHeight || 300,
     scrollLeft: 0,
     scrollTop: 0,
-    imageWidth: rect.width || screenBaseW * screenScale || image.naturalWidth || 0,
-    imageHeight: rect.height || screenBaseH * screenScale || image.naturalHeight || 0,
+    imageWidth: rect.width || screenBaseW * screenScale || natural.w || 0,
+    imageHeight: rect.height || screenBaseH * screenScale || natural.h || 0,
   };
 }
 function mappingLayout() {
@@ -984,9 +1001,9 @@ function screenPreviewSize() {
   return { w: preview.clientWidth || 390, h: preview.clientHeight || 220 };
 }
 function computeScreenBase() {
-  const image = $('#screen-image');
+  const natural = screenNaturalSize();
   const { w: pw, h: ph } = screenPreviewSize();
-  const nw = image.naturalWidth || 16, nh = image.naturalHeight || 9;
+  const nw = natural.w || 16, nh = natural.h || 9;
   const ratio = nw / nh;
   let w = pw, h = pw / ratio;
   if (h > ph) { h = ph; w = ph * ratio; }
@@ -1008,7 +1025,7 @@ function clampScreenPan() {
   screenPanY = sh <= ph ? (ph - sh) / 2 : Math.min(0, Math.max(ph - sh, screenPanY));
 }
 function applyScreenTransform() {
-  const image = $('#screen-image');
+  const image = screenSurface();
   if (!screenBaseW) computeScreenBase();
   // Size styles trigger layout; only rewrite them when the fitted size changed.
   // The transform alone is handled by the compositor.
@@ -1053,8 +1070,7 @@ function sourceAspect(size) {
   return w > 0 && h > 0 ? w / h : 0;
 }
 function nativeScreenScale() {
-  const image = $('#screen-image');
-  return (image.naturalWidth || screenBaseW) / (screenBaseW || 1);
+  return (screenNaturalSize().w || screenBaseW) / (screenBaseW || 1);
 }
 function sendMonitorClick(pixel, button) {
   const monitor = selectedMonitor();
@@ -1109,6 +1125,7 @@ function showScreenImage(url,timestamp,monitor) {
 }
 function clearScreenImage() {
   if (screenshotURL) URL.revokeObjectURL(screenshotURL);
+  showVideoCanvas(false); $('#screen-video').hidden = true;
   screenshotURL = null; lastScreenTimestamp = null; screenZoomed = false; screenScale = 1; screenPanX = screenPanY = 0; screenBaseW = screenBaseH = 0; screenImageMonitor = '';
   // Also forget the tracked source/styled sizes: otherwise switching to a
   // different monitor of the SAME resolution string skips the load-handler
@@ -1194,9 +1211,9 @@ async function runLiveSession(session) {
       const boundary = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
       if (!boundary || !response.body) throw new Error(t("Resposta de transmissão incompleta."));
       session.receiving = true;
-      const parser = new MjpegParser((bytes,timestamp) => {
+      const parser = new MjpegParser((bytes,timestamp,captureMs) => {
         if (!sessionIsCurrent(session) || session.attempt !== attempt) return;
-        session.adapter?.frame();
+        session.adapter?.frame(captureMs);
         session.lastReceived = Date.now(); session.pendingFrame = {bytes,timestamp};
         renderLiveFrames(session,attempt);
       },boundary[1] || boundary[2]);
@@ -1228,12 +1245,208 @@ async function runLiveSession(session) {
     } finally { clearInterval(session.watchdog); }
   }
 }
+// ---- native video: H.264 over /api/rd -------------------------------------
+// The PC encodes the monitor at its own resolution, up to 60 fps, on the GPU
+// (the same stream the computers get); the phone decodes it in hardware with
+// WebCodecs and draws it on a canvas that zooms and pans like the JPEG frames.
+// Touches still go through the desktop actions. JPEG stays the fallback: no
+// WebCodecs, a PC without the video, or another device holding it.
+const VIDEO_HEADER_BYTES = 16;
+const VIDEO_ACK_MS = 50, VIDEO_KEYFRAME_ASK_MS = 3000, VIDEO_FIRST_FRAME_MS = 9000, VIDEO_RETRIES = 3;
+let videoBlockedUntil = 0;
+const videoSupported = () => typeof VideoDecoder === 'function' && typeof EncodedVideoChunk === 'function' && typeof WebSocket === 'function';
+function videoSocketUrl() {
+  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${apiUrl('/rd')}`;
+}
+function parseVideoUnit(buffer, littleEndian) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength <= VIDEO_HEADER_BYTES) return null;
+  const view = new DataView(buffer);
+  if (view.getUint8(0) !== 1) return null;
+  return { key: (view.getUint8(1) & 1) === 1, seq: view.getUint32(4, littleEndian), data: new Uint8Array(buffer, VIDEO_HEADER_BYTES) };
+}
+// The header's byte order is not fixed: a send time that is only a plausible epoch in little endian says so.
+function videoLittleEndian(buffer) {
+  const view = new DataView(buffer), now = Date.now();
+  const plausible = ms => Number.isFinite(ms) && Math.abs(ms - now) < 864e5;
+  return !plausible(view.getFloat64(8, false)) && plausible(view.getFloat64(8, true));
+}
+function showVideoCanvas(on) {
+  if (screenCanvasOn === on) return;
+  screenCanvasOn = on;
+  $('#screen-video').hidden = !on;
+  $('#screen-image').hidden = on || !$('#screen-image').getAttribute('src');
+  if (on) $('#screen-empty').hidden = true;
+  screenSourceSize = ''; screenStyledSize = '';
+}
+function startVideoLive(session) {
+  session.kind = 'video';
+  session.controller = new AbortController();
+  const video = { socket: null, decoder: null, config: null, littleEndian: null, waitingKey: true, link: 'lan', fps: 60,
+    ackSeq: 0, ackSent: 0, ackTimer: 0, lastAckAt: -Infinity, keyAskedAt: -Infinity, drawn: 0, bytes: 0, drops: 0, rtt: null, statsAt: performance.now(), retries: 0 };
+  session.video = video;
+  const current = () => sessionIsCurrent(session) && session.video === video;
+  const send = message => { if (video.socket?.readyState === 1) video.socket.send(JSON.stringify(message)); };
+  const fallBack = (reason, blockMs = 0) => {
+    if (!current()) return;
+    if (blockMs) videoBlockedUntil = Date.now() + blockMs;
+    teardown();
+    session.video = null;
+    if (reason) toast(reason);
+    startJpegLive(session);
+  };
+  function teardown() {
+    clearTimeout(video.ackTimer); clearInterval(session.watchdog); clearTimeout(session.retryTimer);
+    const socket = video.socket; video.socket = null;
+    if (socket) { try { socket.close(1000); } catch {} }
+    if (video.decoder && video.decoder.state !== 'closed') { try { video.decoder.close(); } catch {} }
+    video.decoder = null;
+  }
+  session.controller.signal.addEventListener('abort', teardown, { once: true });
+  function sendAck() {
+    video.ackTimer = 0;
+    if (video.ackSeq === video.ackSent) return;
+    video.lastAckAt = performance.now(); video.ackSent = video.ackSeq;
+    send({ t: 'ack', seq: video.ackSeq });
+  }
+  function acknowledge(seq) {
+    if (!(seq > video.ackSeq)) return;
+    video.ackSeq = seq;
+    if (video.ackTimer) return;
+    const wait = video.lastAckAt + VIDEO_ACK_MS - performance.now();
+    if (wait <= 0) sendAck(); else video.ackTimer = setTimeout(sendAck, wait);
+  }
+  function askKeyframe() {
+    const now = performance.now();
+    if (now - video.keyAskedAt < VIDEO_KEYFRAME_ASK_MS) return;
+    video.keyAskedAt = now;
+    send({ t: 'keyframe' });
+  }
+  async function configure(codec) {
+    const base = { codec, optimizeForLatency: true };
+    let config = { ...base, hardwareAcceleration: 'prefer-hardware' };
+    try { if (!(await VideoDecoder.isConfigSupported(config)).supported) config = { ...base, hardwareAcceleration: 'no-preference' }; }
+    catch { config = { ...base, hardwareAcceleration: 'no-preference' }; }
+    try { if (!(await VideoDecoder.isConfigSupported(config)).supported) { fallBack(t('Este aparelho não decodifica o vídeo do PC. Usando imagens.'), 10 * 60000); return; } }
+    catch { fallBack(t('Este aparelho não decodifica o vídeo do PC. Usando imagens.'), 10 * 60000); return; }
+    if (!current()) return;
+    if (video.decoder && video.decoder.state !== 'closed') { try { video.decoder.close(); } catch {} }
+    const decoder = new VideoDecoder({
+      output: frame => { if (current() && video.decoder === decoder) draw(frame); else frame.close(); },
+      error: () => { if (video.decoder !== decoder) return; video.decoder = null; video.waitingKey = true; askKeyframe(); if (current() && video.config) configure(video.config.codec); },
+    });
+    decoder.configure(config);
+    video.decoder = decoder; video.config = config; video.waitingKey = true;
+  }
+  function draw(frame) {
+    const canvas = $('#screen-video');
+    const width = frame.displayWidth, height = frame.displayHeight;
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; video.context = null; }
+    if (!video.context) video.context = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    video.context.drawImage(frame, 0, 0, width, height);
+    frame.close();
+    video.drawn++;
+    const first = !screenCanvasOn;
+    showVideoCanvas(true);
+    if (first || screenSourceSize !== `${width}x${height}`) screenSourceResized(`${width}x${height}`);
+    lastScreenTimestamp = Date.now();
+    session.lastReceived = Date.now(); session.hasFrame = true; session.failures = 0; video.retries = 0;
+    if (screenImageMonitor !== session.monitor) { screenImageMonitor = session.monitor; $('#viewer-monitor-name').textContent = session.monitor; }
+    if (screenMode !== 'live') setScreenStatus('live');
+  }
+  function unit(buffer) {
+    if (video.littleEndian === null && buffer.byteLength > VIDEO_HEADER_BYTES) video.littleEndian = videoLittleEndian(buffer);
+    const chunk = parseVideoUnit(buffer, video.littleEndian);
+    if (!chunk) return;
+    video.bytes += buffer.byteLength;
+    acknowledge(chunk.seq);
+    const decoder = video.decoder;
+    if (!decoder || decoder.state !== 'configured') { video.waitingKey = true; if (!chunk.key) { video.drops++; askKeyframe(); } return; }
+    // A late frame is dropped until the next keyframe; outside the LAN frames arrive in bursts, so only a second of them is late.
+    const limit = video.link === 'wan' ? Math.max(2, Math.round(video.fps)) : 2;
+    const late = decoder.decodeQueueSize > limit;
+    if (!chunk.key) {
+      if (video.waitingKey || late) { video.waitingKey = true; video.drops++; askKeyframe(); return; }
+    } else if (late) {
+      video.drops += decoder.decodeQueueSize;
+      decoder.reset(); decoder.configure(video.config);
+    }
+    video.waitingKey = false;
+    decoder.decode(new EncodedVideoChunk({ type: chunk.key ? 'key' : 'delta', timestamp: chunk.seq, data: chunk.data }));
+  }
+  function message(text) {
+    let m;
+    try { m = JSON.parse(text); } catch { return; }
+    if (m.t === 'ready') {
+      video.fps = Number(m.fps) || video.fps;
+      const resized = video.readyWidth !== m.width || video.readyHeight !== m.height;
+      video.readyWidth = m.width; video.readyHeight = m.height;
+      if (!video.decoder || !video.config || video.config.codec !== m.codec || resized) configure(m.codec || 'avc1.640034');
+      else video.waitingKey = true;
+    } else if (m.t === 'link') video.link = m.mode === 'wan' ? 'wan' : 'lan';
+    else if (m.t === 'pong' && typeof m.c === 'number') video.rtt = Date.now() - m.c;
+    // Another device took the video (the notebook's remote desktop): leave it there.
+    else if (m.t === 'taken') fallBack(t('Outro aparelho está com o vídeo deste PC. Usando imagens.'), 60000);
+    else if (m.t === 'error') fallBack('', 5 * 60000);
+  }
+  function connect() {
+    const socket = new WebSocket(videoSocketUrl());
+    socket.binaryType = 'arraybuffer';
+    video.socket = socket;
+    video.littleEndian = null; video.ackSeq = 0; video.ackSent = 0; video.waitingKey = true;
+    socket.addEventListener('open', () => {
+      if (video.socket !== socket) return;
+      send({ t: 'hello', v: 1, token, maxFps: 60, caps: { ack: true, key: true }, monitor: session.monitor, input: false });
+      send({ t: 'ping', c: Date.now() });
+    });
+    socket.addEventListener('message', event => { if (video.socket !== socket || !current()) return; if (typeof event.data === 'string') message(event.data); else unit(event.data); });
+    socket.addEventListener('close', () => {
+      if (video.socket !== socket || !current()) return;
+      video.socket = null;
+      // Never drew: this PC or this link does not carry the video; the JPEG frames do.
+      if (!video.drawn) { fallBack('', 5 * 60000); return; }
+      if (++video.retries > VIDEO_RETRIES) { fallBack(''); return; }
+      const delay = 1000 * video.retries;
+      session.retryDelay = delay;
+      setScreenStatus('reconnecting', t('{message} Tentando novamente em {seconds}s.', { message: t('Conexão interrompida.'), seconds: delay / 1000 }));
+      session.retryTimer = setTimeout(() => { if (current()) connect(); }, delay);
+    });
+  }
+  session.lastReceived = Date.now();
+  const startedAt = Date.now();
+  setScreenStatus('connecting');
+  session.watchdog = setInterval(() => {
+    if (!current()) return;
+    const now = performance.now(), elapsed = (now - video.statsAt) / 1000;
+    video.statsAt = now;
+    send({ t: 'ping', c: Date.now() });
+    send({ t: 'stats', fps: Math.round(video.drawn / elapsed), kbps: Math.round(video.bytes * 8 / 1000 / elapsed), rtt: video.rtt, queue: video.decoder?.decodeQueueSize || 0, drops: video.drops });
+    video.drawn = 0; video.bytes = 0; video.drops = 0;
+    if (!session.hasFrame && Date.now() - startedAt > VIDEO_FIRST_FRAME_MS) { fallBack('', 5 * 60000); return; }
+    if (session.hasFrame && Date.now() - session.lastReceived > 6000 && screenMode === 'live') setScreenStatus('reconnecting', t("Aguardando novos quadros do monitor…"));
+  }, 1000);
+  connect();
+}
+function startJpegLive(session) {
+  session.kind = 'jpeg';
+  showVideoCanvas(false);
+  const choice = LIVE_PROFILES[$('#live-quality').value] ? $('#live-quality').value : 'auto';
+  if (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) { session.adapter = createLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
+  else applyLiveProfile(session, choice);
+  runLiveSession(session);
+}
 function startLive() {
   if (!screenIsVisible() || !connected || !state?.capabilities?.live) { toast(t("Transmissão indisponível. Confira a conexão com o PC."),true); return; }
   const monitor = $('#monitor-select').value;
   if (!monitor) return;
   stopLive(); cancelSnapshot();
   const choice = LIVE_PROFILES[$('#live-quality').value] ? $('#live-quality').value : 'auto';
+  const wantsVideo = (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) && videoSupported() && Date.now() >= videoBlockedUntil;
+  if (wantsVideo) {
+    const session = {monitor,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false,adapter:null,profileLabel:'Nativo · vídeo até 60 quadros/s'};
+    liveSession = session;
+    startVideoLive(session);
+    return;
+  }
   const session = {monitor,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false,adapter:null};
   if (LIVE_PROFILES[choice].auto) { session.adapter = createLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
   else applyLiveProfile(session, choice);
@@ -1254,6 +1467,7 @@ $('#monitor-select').addEventListener('change',() => {
 // q40 is ~10% smaller than q50 on a desktop with the same look (PSNR -1 dB).
 const LIVE_PROFILES = {
   auto:{auto:true,label:'Automático'},
+  native:{video:true,label:'Nativo · vídeo até 60 quadros/s'},
   sharp:{fps:15,scale:1,quality:40,label:'Nítido · até 15 quadros/s'},
   balanced:{fps:10,scale:0.5,quality:65,label:'Equilibrado · até 10 quadros/s'},
   light:{fps:8,scale:0.35,quality:55,label:'Leve · até 8 quadros/s'},
@@ -1262,7 +1476,9 @@ $('#live-quality').value = LIVE_PROFILES[savedPreference('ponte-quality','auto')
 $('#live-quality').addEventListener('change',() => { savePreference('ponte-quality',$('#live-quality').value); if (liveSession) startLive(); });
 $('#screen-image').addEventListener('load',() => {
   const image = $('#screen-image');
-  const size = `${image.naturalWidth}x${image.naturalHeight}`;
+  if (!screenCanvasOn) screenSourceResized(`${image.naturalWidth}x${image.naturalHeight}`);
+});
+function screenSourceResized(size) {
   // A new monitor/source resets zoom; live frames keep the current zoom & pan.
   // Measuring layout on every frame is what made the phone stutter, so the
   // base size is only recomputed when the source changed (viewport changes
@@ -1279,7 +1495,7 @@ $('#screen-image').addEventListener('load',() => {
     applyScreenTransform();
   }
   else if (!screenBaseW) applyScreenZoom();
-});
+}
 window.addEventListener('resize',applyScreenZoom);
 if (window.ResizeObserver) new window.ResizeObserver(applyScreenZoom).observe($('#screen-preview'));
 const screenPointers = new Map();
@@ -1290,7 +1506,7 @@ let scrollAt = null;
 let screenGesture = { pinch: false, panned: false, twoFinger: false, moved: false, anchor: null };
 const pointerDistance = () => { const [a,b] = [...screenPointers.values()]; return a && b ? Math.hypot(a.x-b.x,a.y-b.y) : 0; };
 function imageLocalPoint(clientX, clientY) {
-  const rect = $('#screen-image').getBoundingClientRect?.() || { left: 0, top: 0 };
+  const rect = screenSurface().getBoundingClientRect?.() || { left: 0, top: 0 };
   return { x: clientX - rect.left, y: clientY - rect.top };
 }
 function monitorPixelAt(clientX, clientY) {

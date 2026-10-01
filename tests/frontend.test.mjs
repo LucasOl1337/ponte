@@ -857,6 +857,19 @@ test('auto quality steps down as soon as frames lag and holds before climbing ag
   assert.equal(adapter.stall(), null, 'light is the floor');
 });
 
+test('auto quality judges the link against what the PC can capture, not the requested rate', () => {
+  const { adapter, clock } = adapterHarness();
+  // Balanced on a 3440×1440 monitor: grim scales for ~140 ms, so 10 fps is ~7 on any link.
+  const window = (fps, requested, captureMs) => { for (let i = 0; i < fps * 3; i++) adapter.frame(captureMs); clock.at += 3000; return adapter.evaluate(requested); };
+  assert.equal(window(7, 8, 134), null);
+  assert.equal(window(7, 8, 134), 'balanced');
+  assert.equal(window(7, 10, 141), null, 'capture-bound, not lagging');
+  assert.equal(window(7, 10, 141), 'sharp', 'reaches Sharp, the cheapest capture');
+  assert.equal(window(6, 15, 18), 'balanced', 'a fast capture that still arrives late is the link');
+  const old = adapterHarness({ start: 'balanced' });
+  assert.equal(old.window(7, 10), null, 'without the header the requested rate is still the yardstick');
+});
+
 test('auto quality ignores partial windows', () => {
   const { adapter, clock } = adapterHarness();
   for (let i = 0; i < 20; i++) adapter.frame();

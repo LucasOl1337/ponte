@@ -291,11 +291,13 @@ body[data-keyboard-open=true] .screen-toolbar > .icon-button { height: 32px; }
 .screen-stage.region-zoom .screen-preview img,
 .viewer-page .screen-stage .screen-preview img,
 .viewer-page .screen-stage:not(.zoomed):not(.region-zoom) .screen-preview img,
-.viewer-page .screen-stage.zoomed .screen-preview img{
+.viewer-page .screen-stage.zoomed .screen-preview img,
+.screen-preview #screen-video{
   display:block;object-fit:fill;margin:0;max-width:none;max-height:none;
   transform-origin:0 0;
   image-rendering:auto;-webkit-user-drag:none;user-select:none;-webkit-user-select:none;
 }
+.screen-preview #screen-video[hidden]{display:none}
 /* Single-mode screen: only the monitor, a tiny status HUD while not live, a
    floating mic, and a hidden input that carries the phone keyboard's keys. */
 .screen-hud{position:absolute;left:10px;top:10px;z-index:4;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:12px;background:#0f140dd9;border:1px solid #3a4534;pointer-events:none}

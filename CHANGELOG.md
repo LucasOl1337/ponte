@@ -2,6 +2,36 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.33 (2026-09-30)
+
+Picture quality on the phone and on the notebook. Three causes, each measured or seen in the
+logs, none of them the link itself. Only the server and the pages change; the APK does not
+(still versionCode 21).
+
+- **Fix: the phone's Auto never reached Sharp on a big monitor.** grim scales on the CPU:
+  on the 3440×1440 monitor Light takes 134 ms a frame and Balanced 141 ms (Sharp, unscaled,
+  18 ms). Balanced asks 10 fps and could only ever make ~7, so Auto read a capture-bound
+  stream as a slow link and stayed there, blurry, even on the home Wi-Fi. Each frame now
+  carries `X-Capture-Ms` and Auto judges arrivals against what the PC can capture.
+- **Fix: keyframe storms on the internet link.** The remote desktop page dropped a delta as
+  soon as the decoder had more than two frames waiting. Over the internet frames arrive in
+  bursts, so each burst asked for a keyframe, each keyframe was a new encoder run (~450 ms
+  without a picture), and three a minute stepped the quality down: a real session on
+  2026-09-30 spent 1 h 45 min on the lowest step (1280 px, 15 fps) with 35 key restarts. The
+  server now tells the page `{t:'link', mode:'wan'}`, and there a delta is late only with a
+  second of frames waiting. On the LAN nothing changes.
+- **Fix: one stall sent a still desktop to the floor.** A step down went to what the link
+  had delivered, but without a standing queue that is what the encoder made: a few hundred
+  kbps on a still desktop, below every step. Without a queue it is now a fresh keyframe
+  measurement or one step.
+- **The stage can grow.** The width limit came from the page's size at connect, so a
+  window opened small and then maximized stayed at the small picture for the whole session.
+  The page sends `{t:'view'}` on resize, and the server restarts only if the limit changes.
+- Verified: new regression tests for each (each fails on alpha.32); `tools/lab/rd-link.sh
+  --plan 0:2500kbit --client new --seconds 45`: p95 115 ms, no freeze, one restart, as in
+  alpha.31. `npm test`: the two failures (`fleet` Claude handoff, `phone wake`) were already
+  failing on alpha.32.
+
 ## 0.1.0-alpha.32 (2026-09-30)
 
 Ponte becomes a hub for the machines you reach over Tailscale and SSH: it lists them, checks
