@@ -2,9 +2,33 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
-## Unreleased: readable screen at once (rodada nitidez)
+## 0.1.0-alpha.34 (2026-10-01)
 
-Only the page changes; no new APK is needed for it.
+A readable screen at once, and one device model under every surface (ADR 0002, slices 1-3).
+Only the server and the pages change. The installed APK keeps working; the alpha.33 shell
+code (WebSocket tunnel for `/api/rd`, versionCode 22) is in the tree but not shipped yet.
+
+- **Devices: one model served by the home node.** `backend/devices.mjs` composes the mesh,
+  the fleet and `adb devices` into one list of devices (kind, status as the union of routes,
+  `routes` over Ponte/Tailscale/SSH/ADB, `can` with `via` or `why`). Same body through
+  `POST /api/action {type:'devices.list'}` (the only door old APKs allow), `GET /api/devices`
+  and `./ponte devices` / `ponte ctl devices`; owner only, home node only. A paired node that
+  is online over Ponte with SSH down is now online, not "no connection" (lab, two nodes).
+  Optional `kind` in the mesh hello. `/api/mesh`, `/api/fleet` and `/api/state` keep their
+  shapes. See docs/devices.md and docs/adr/0002-one-device-model.md.
+- **One resolver.** `?node=` (every route and `/api/rd`), `ponte ctl --node`, `./ponte rd
+  DEVICE` and the fleet (`--from/--to`, probe, check) take a device name or any of its ids;
+  unknown is 404, a name two devices share is 409, 16-hex ids and `self`/`ssh:ALIAS` pass as
+  before. New codes `MESH_PEER_NOT_PAIRED` and `DEVICE_NOT_PONTE`.
+- **Words.** `public/i18n.js` gains the device vocabulary (kind, state, route, action, every
+  why) in both languages, with `PonteI18n.deviceWord`; no layout change yet.
+- **Fix: the fleet hid real Claude sessions.** The probe dropped every session whose folder
+  contained "/tmp/" anywhere, so a project with a `tmp` folder (and every session of a home in
+  a temp directory) never showed up to continue. A session is scratch now only when it ran
+  under /tmp, /var/tmp or $TMPDIR by path and outside the home. This was the one test that
+  failed since alpha.32.
+- Tests: mesh tests no longer read the real tailnet or SSH config, and a race on `mesh.json`
+  right after pairing (2 in 10 runs on the base) is fixed.
 
 - **Fix: every screen opened blurry for ~12 s.** Auto started each session at Light (0.35,
   1204 px wide on a 3440 monitor) and climbed one rung per two 3 s windows, so Sharp came
