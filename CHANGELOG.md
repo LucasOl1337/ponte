@@ -2,6 +2,37 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.45 (2026-10-01)
+
+The Ponte Remoto keyboard works again after switching devices, and Ctrl+X switches the control.
+Server, pages and the Hyprland module (reinstall it with `tools/hypr/ponte-rd-hypr.sh install`);
+the APK does not change.
+
+- **Keys died after choosing a device in the picker.** A click on the picture kept the focus on
+  the bar's `<select>` (`preventDefault` on mousedown), taking control did not move it, and every
+  key whose target was a `SELECT` was dropped. The mouse reached the other computer and the
+  keyboard did not; with the window titled "⌨" the Hyprland module also held the PC's own
+  shortcuts, so nothing worked anywhere. Reproduced with the bench's real keyboard (notebook →
+  this PC → notebook, click, `zzz`, Super+Enter: 0 keys injected). Now taking control focuses the
+  picture, the pickers drop their focus after a choice, and while controlling no bar focus keeps
+  the keys: 3× KEY_Z and KEY_LEFTMETA injected.
+- **Ctrl+X switches, both ways**, in the window and in full screen, and replaces Ctrl+Alt+Shift.
+  Only Ctrl+X: Ctrl+Shift+X and Ctrl+C/V still go to the other computer, and no stray Ctrl or X
+  reaches it. Holding Esc for 2 s still leaves full screen. The window losing focus or being
+  hidden gives the control back.
+- **A video-only viewer no longer takes the control.** The phone watching the same computer
+  used to become the input holder and drop the session that was typing.
+- **The Hyprland submap never sticks:** it leaves when the window loses focus, closes, drops
+  the "⌨" mark or on Super+Ctrl+Alt+Esc (which then waits for the page to clear the mark), and
+  it never takes over another module's submap.
+- **Key counters on both sides.** `[rd] session closed` now says how many keys were received,
+  queued, injected (helper acknowledged) and discarded by reason, on the target and on the relay.
+  Settings → Technical details shows the last 12 keys and whether each one went out. No key
+  codes, text or tokens are logged.
+- Verified: `npm test` 560 pass, 1 skipped (one lab TUI flake on the first run, known on the
+  base); two-node lab with the bench's real keyboard: 18 seen, 14 sent, 14 received, 14 injected,
+  0 pending. One-minute check in `docs/rd-control.md`.
+
 ## 0.1.0-alpha.44 (2026-10-01)
 
 An agent's conversation in Terminals → Agents follows along live. Server and page; the installed
