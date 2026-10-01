@@ -2,6 +2,23 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.46 (2026-10-01)
+
+DailyWork shows up inside Ponte: today's context, a passive log and a review step before anything is sent.
+Server and pages; the APK does not change.
+
+- **DailyWork card.** The owner's `/api/state` now carries a `dailywork` block read from the local
+  DailyWork (`hoje:resumo` over loopback, descriptor `~/.config/DailyWork/api-ponte.json` or
+  `PONTE_DAILYWORK_DESCRIPTOR`). Without DailyWork it reports `indisponivel` and the actions answer
+  `DAILYWORK_UNAVAILABLE`; nothing else in Ponte depends on it.
+- **Review before sending.** Requests that DailyWork prepares for third parties can be approved or
+  sent back from Ponte; every decision is logged passively on the DailyWork side.
+- **Old WebViews keep working.** The new code used `crypto.randomUUID`, missing on Chrome 83 (our
+  minimum); it now builds the v4 key with `getRandomValues`.
+- The lab gets a fake DailyWork and fake devices, so `tools/lab` never touches the real phone over adb.
+- Verified: `npm test` 560 pass, 0 fail, 1 skipped; lab with a missing descriptor returns
+  `dailywork.estado: indisponivel` and `DAILYWORK_UNAVAILABLE`.
+
 ## 0.1.0-alpha.45 (2026-10-01)
 
 The Ponte Remoto keyboard works again after switching devices, and Ctrl+X switches the control.
