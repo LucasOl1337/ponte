@@ -495,7 +495,7 @@ test('monitor and device selectors: monitors from ready, nodes from /api/mesh, a
   h.el('#rd-monitor').dispatchEvent({ type: 'change', target: h.el('#rd-monitor') });
   assert.deepEqual(h.sent('monitor'), [{ t: 'monitor', name: 'LAB-2' }]);
   const options = h.el('#rd-node').querySelectorAll('option');
-  assert.deepEqual(options.map(option => [option.getAttribute('value'), option.textContent, 'disabled' in option.attrs]), [['', 'pc-teste (this one)', false], ['feedfacecafebeef', 'notebook-teste', false], ['bbbbbbbbbbbbbbbb', 'pc-windows (offline)', true]]);
+  assert.deepEqual(options.map(option => [option.getAttribute('value'), option.textContent, 'disabled' in option.attrs]), [['', 'pc-teste (this device)', false], ['feedfacecafebeef', 'notebook-teste', false], ['bbbbbbbbbbbbbbbb', 'pc-windows (offline)', true]]);
   const first = h.socket;
   h.el('#rd-node').value = '';
   h.el('#rd-node').dispatchEvent({ type: 'change', target: h.el('#rd-node') });
@@ -572,9 +572,158 @@ test('every rd string has an English translation and the page has no inline scri
   for (const match of client.matchAll(/\bt\((['"])(.*?)\1/g)) assert.ok(Object.hasOwn(messages, match[2]), match[2]);
   for (const match of html.matchAll(/data-i18n(?:-[a-z-]+)?="([^"]*)"/g)) assert.ok(Object.hasOwn(messages, match[1]), match[1]);
   assert.doesNotMatch(html, /<script>(?!<)/);
-  assert.equal(h.el('#rd-hint').textContent, 'Release: Ctrl+Alt+Shift or hold Esc');
+  // Nothing connected: the indicator says the keys are here and offers no hint yet.
+  assert.equal(h.el('#rd-control-target').textContent, 'Keyboard and mouse → this device');
+  assert.equal(h.el('#rd-hint').textContent, '');
   h.window.PonteI18n.setLanguage('pt');
-  assert.equal(h.el('#rd-hint').textContent, 'Soltar: Ctrl+Alt+Shift ou segure Esc');
+  assert.equal(h.el('#rd-control-target').textContent, 'Teclado e mouse → este aparelho');
+  assert.equal(h.el('#rd-mode-abs').textContent, 'Direto');
+  assert.equal(h.el('#rd-mode-rel').textContent, 'Travado (jogos e 3D)');
+  for (const old of ['>Abs<', '>Rel<', 'rd-stats" aria-live="off"></span>']) assert.ok(!html.includes(old), old);
+});
+
+test('Ctrl+Alt+Shift switches both ways without full screen; the indicator, the frame and the window title follow', async () => {
+  const h = await harness().connect();
+  assert.equal(h.el('#rd-control').getAttribute('aria-pressed'), 'false');
+  assert.match(h.el('#rd-hint').textContent, /Ctrl\+Alt\+Shift or click the screen to control notebook-teste/);
+  assert.equal(h.document.title, 'Ponte — remote desktop');
+  // Plain keys on this device stay here and nothing goes out.
+  assert.equal(h.key('keydown', 'ControlLeft').defaultPrevented, false);
+  h.key('keyup', 'ControlLeft');
+  // The chord takes the keys to the device on the screen: no full screen, no modifier sent.
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft');
+  const chord = h.key('keydown', 'ShiftLeft');
+  assert.equal(chord.defaultPrevented, true);
+  assert.equal(h.run('engaged'), true);
+  assert.equal(h.document.fullscreenElement, null);
+  assert.equal(h.sent('key').length, 0, 'the chord itself never reaches the device');
+  assert.equal(h.document.body.classList.contains('controlling'), true);
+  assert.equal(h.el('#rd-control').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.el('#rd-control-target').textContent, 'Keyboard and mouse → notebook-teste');
+  assert.match(h.el('#rd-hint').textContent, /Ctrl\+Alt\+Shift comes back.*Super and Ctrl\+T stay here/);
+  assert.equal(h.el('#rd-switch').hidden, false);
+  assert.equal(h.el('#rd-switch').textContent, 'Keyboard and mouse → notebook-teste');
+  assert.equal(h.document.title, '⌨ notebook-teste · Ponte — remote desktop');
+  // Releasing the chord sends nothing (those keys were never sent down).
+  for (const code of ['ShiftLeft', 'AltLeft', 'ControlLeft']) h.key('keyup', code);
+  assert.equal(h.sent('key').length, 0);
+  h.key('keydown', 'KeyA'); h.key('keyup', 'KeyA');
+  assert.deepEqual(h.sent('key').map(message => message.code), ['KeyA', 'KeyA']);
+  // The same chord comes back.
+  h.key('keydown', 'ControlRight'); h.key('keydown', 'ShiftRight'); h.key('keydown', 'AltRight');
+  assert.equal(h.run('engaged'), false);
+  assert.equal(h.sent('release').length, 1);
+  assert.equal(h.el('#rd-control-target').textContent, 'Keyboard and mouse → this device');
+  assert.equal(h.el('#rd-switch').textContent, 'Keyboard and mouse → this device');
+  assert.equal(h.document.title, 'Ponte — remote desktop');
+  for (const code of ['ControlRight', 'ShiftRight', 'AltRight']) h.key('keyup', code);
+  // A chord with another key held is just a shortcut on this device.
+  h.key('keydown', 'KeyT'); h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftLeft');
+  assert.equal(h.run('engaged'), false);
+  for (const code of ['ShiftLeft', 'AltLeft', 'ControlLeft', 'KeyT']) h.key('keyup', code);
+  // The indicator is a switch too.
+  h.el('#rd-control').dispatchEvent({ type: 'click' });
+  assert.equal(h.run('engaged'), true);
+  h.el('#rd-control').dispatchEvent({ type: 'click' });
+  assert.equal(h.run('engaged'), false);
+  // With no session there is nothing to switch to.
+  const idle = harness();
+  idle.key('keydown', 'ControlLeft'); idle.key('keydown', 'AltLeft'); idle.key('keydown', 'ShiftLeft');
+  assert.equal(idle.run('engaged'), false);
+});
+
+test('the chord can enter full screen instead, from the settings, and it is remembered', async () => {
+  const h = await harness().connect();
+  h.el('#rd-chord-action').value = 'fullscreen';
+  h.el('#rd-chord-action').dispatchEvent({ type: 'change', target: h.el('#rd-chord-action') });
+  assert.equal(h.saved.get('ponte-rd-chord'), 'fullscreen');
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftLeft');
+  await flush();
+  assert.equal(h.run('engaged'), true);
+  assert.ok(h.document.fullscreenElement);
+  assert.deepEqual(h.keyboard.locks, [[]]);
+  assert.match(h.el('#rd-hint').textContent, /Everything goes to the device, Super included/);
+  const again = await harness({ stored: { 'ponte-rd-chord': 'fullscreen' } }).connect();
+  assert.equal(again.el('#rd-chord-action').value, 'fullscreen');
+});
+
+test('the settings: pointer mode, frame limit (reconnects with maxFps), clipboard off, details with the numbers', async () => {
+  const h = await harness({ clipboard: 'copied' }).connect();
+  h.run('engage()');
+  h.el('#rd-settings-open').dispatchEvent({ type: 'click' });
+  assert.equal(h.el('#rd-settings').open, true);
+  assert.equal(h.run('engaged'), false, 'opening the settings gives the keys back');
+  // Inside the settings the chord does nothing (the dialog has the keyboard).
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'AltLeft'); h.key('keydown', 'ShiftLeft');
+  assert.equal(h.run('engaged'), false);
+  for (const code of ['ShiftLeft', 'AltLeft', 'ControlLeft']) h.key('keyup', code);
+  h.el('#rd-mode-rel').dispatchEvent({ type: 'click' });
+  assert.equal(h.saved.get('ponte-rd-mode'), 'rel');
+  assert.equal(h.el('#rd-mode-rel').getAttribute('aria-pressed'), 'true');
+  const first = h.socket;
+  h.el('#rd-fps').value = '30';
+  h.el('#rd-fps').dispatchEvent({ type: 'change', target: h.el('#rd-fps') });
+  assert.equal(h.saved.get('ponte-rd-fps'), '30');
+  assert.equal(first.readyState, 3);
+  h.socket.open();
+  assert.equal(h.sent('hello')[0].maxFps, 30);
+  h.socket.message(readyMessage({ fps: 30 })); await flush();
+  h.el('#rd-clipboard').checked = false;
+  h.el('#rd-clipboard').dispatchEvent({ type: 'change', target: h.el('#rd-clipboard') });
+  assert.equal(h.saved.get('ponte-rd-clipboard'), 'off');
+  const clipsBefore = h.sent('clip').length;
+  h.clip.text = 'copied again';
+  h.el('#rd-settings-close').dispatchEvent({ type: 'click' });
+  assert.equal(h.el('#rd-settings').open, false);
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); await flush();
+  assert.equal(h.sent('clip').length, clipsBefore, 'clipboard off: nothing goes out');
+  h.socket.message({ t: 'clip', text: 'from the target' }); await flush();
+  assert.deepEqual(h.clip.writes, [], 'and nothing comes in');
+  // Stored choices come back on the next page.
+  const again = await harness({ stored: { 'ponte-rd-fps': '15', 'ponte-rd-clipboard': 'off' } }).connect();
+  assert.equal(again.sent('hello')[0].maxFps, 15);
+  assert.equal(again.el('#rd-fps').value, '15');
+  assert.equal(again.el('#rd-clipboard').checked, false);
+  // A stored value that is not a choice falls back to 60.
+  assert.equal(harness({ stored: { 'ponte-rd-fps': '999' } }).run('fpsLimit'), 60);
+});
+
+test('the bar shows the connection in words (good, unstable, bad and why); the numbers stay in the details', async () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(harness().run(`linkQuality({ fps: 60, expectedFps: 60, rtt: 4, p95: 9, drops: 0 })`))), { level: 'good', reasons: [] });
+  const h = await harness().connect();
+  const level = source => h.run(`linkQuality(${source}).level`);
+  assert.equal(level('{ fps: 47, expectedFps: 60, rtt: 39, p95: 106 }'), 'unstable');
+  assert.equal(level('{ fps: 60, expectedFps: 60, rtt: 200, p95: 10 }'), 'bad');
+  assert.equal(level('{ fps: 20, expectedFps: 60, rtt: 5, p95: 10 }'), 'bad');
+  assert.equal(level('{ fps: 29, expectedFps: 30, rtt: 5, p95: 10 }'), 'good', 'over the internet 30 fps is the target');
+  assert.equal(level('{ fps: 60, expectedFps: 60, rtt: 5, p95: 10, drops: 2 }'), 'good', 'a couple of drops is not instability');
+  const tick = h.timers.find(timer => timer.interval && timer.ms === 1000);
+  // The print of 2026-10-01: 47 fps, RTT 39 ms, frame p95 106 ms.
+  h.run('rtt = 39');
+  for (let i = 0; i < 20; i++) h.run(`frameLatency.push({ at: nowEpoch(), value: ${i < 18 ? 9 : 106} })`);
+  h.run('framesDrawn = 47');
+  tick.callback();
+  assert.equal(h.el('#rd-link').hidden, false);
+  assert.equal(h.el('#rd-link').getAttribute('data-level'), 'unstable');
+  assert.equal(h.el('#rd-link-text').textContent, 'Unstable connection · picture arriving late (up to 106 ms)');
+  assert.match(h.el('#rd-link-reason').textContent, /picture arriving late \(up to 106 ms\) · only 47 frames per second/);
+  // The raw numbers live in the settings' details, not on the bar.
+  assert.match(h.el('#rd-stats').textContent, /RTT 39 ms/);
+  assert.equal(h.el('#rd-stats').closest('.rd-bar'), null);
+  assert.ok(h.el('#rd-stats').closest('#rd-settings'));
+  // Calm again: the worst of the last 3 s holds, then it turns good.
+  h.run('frameLatency.length = 0; rtt = 4');
+  for (let i = 0; i < 3; i++) { h.run('framesDrawn = 60'); tick.callback(); }
+  assert.equal(h.el('#rd-link').getAttribute('data-level'), 'good');
+  assert.equal(h.el('#rd-link-text').textContent, 'Good connection');
+  h.window.PonteI18n.setLanguage('pt');
+  assert.equal(h.el('#rd-link-text').textContent, 'Conexão boa');
+  // A click on it opens the details.
+  h.el('#rd-link').dispatchEvent({ type: 'click' });
+  assert.equal(h.el('#rd-settings').open, true);
+  // Disconnected: no verdict.
+  h.socket.close(1006);
+  assert.equal(h.el('#rd-link').hidden, true);
 });
 
 // ---- against the fake server, over a real WebSocket, with ffmpeg's H.264 ----
