@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.32';
+const UI_VERSION = '0.1.0-alpha.33';
 let token = '';
 let state = null;
 let connected = false;
@@ -83,7 +83,7 @@ async function api(path, options = {}) {
         try { localStorage.removeItem(storageKey); } catch {}
         showPairing(); connectOverTailscale();
       }
-      throw Object.assign(new Error(message),{errorCode:details?.errorCode,errorParameters:details?.errorParameters});
+      throw Object.assign(new Error(message),{errorCode:details?.errorCode,errorParameters:details?.errorParameters,dailywork:details?.dailywork,confirmed:details?.confirmed===true});
     }
     return response;
   } catch (error) {
@@ -102,6 +102,102 @@ async function action(type, payload = {}, feedback = '') {
     return true;
   } catch (error) { toast(error, true); return false; }
 }
+
+// DailyWork keeps the state and approvals. This UI retains only an unfinished
+// transport attempt, so a timeout never silently repeats a decision.
+let dailyworkAttempt = null, dailyworkBusy = false, dailyworkReview = null;
+try { dailyworkAttempt = JSON.parse(sessionStorage.getItem('ponte-dailywork-attempt') || 'null'); } catch {}
+const storeDailyworkAttempt = () => { try { if (dailyworkAttempt) sessionStorage.setItem('ponte-dailywork-attempt', JSON.stringify(dailyworkAttempt)); else sessionStorage.removeItem('ponte-dailywork-attempt'); } catch {} };
+function renderDailyWork() {
+  const d = targetNode ? null : state?.dailywork, current = d && d.estado !== 'indisponivel' && Number(d.idade_ms || 0) <= 60000;
+  $('#dailywork-status').textContent = !current ? t('DailyWork indisponível') : d.estado === 'parcial' ? t('Leitura parcial') : t('Atualizado agora');
+  const failed = Object.entries({...d?.cobertura, ...d?.derivacoes}).filter(([,v]) => v.estado !== 'disponivel').map(([k]) => k);
+  $('#dailywork-coverage').textContent = targetNode ? t('DailyWork disponível somente no aparelho conectado diretamente.') : !current ? t('Nenhuma ação foi confirmada. Abra o DailyWork no PC.') : failed.length ? t('Fontes sem leitura: {fontes}', {fontes:failed.join(', ')}) : '';
+  $('#dailywork-register').disabled = !current || dailyworkBusy || !!dailyworkAttempt;
+  $('#dailywork-pendencias').innerHTML = (d?.pendencias || []).map(p => `<article class="dailywork-item"><strong>${escaped(p.titulo)}</strong><p>${escaped(p.descricao || '')}</p>${p.ref?.requisicaoId ? `<button type="button" class="button small" data-dailywork-review="${escaped(p.ref.requisicaoId)}" ${!current || d.cobertura?.requisicoes?.estado !== 'disponivel' || dailyworkBusy ? 'disabled' : ''}>${h('Revisar requisição')}</button>` : `<span class="hint">${h('Veja no DailyWork do PC')}</span>`}</article>`).join('') || `<p class="hint">${h(current && d.estado === 'disponivel' ? 'Nada espera você agora.' : 'Sem itens nesta leitura; outras fontes podem estar indisponíveis.')}</p>`;
+  $('#dailywork-agora').innerHTML = (d?.agora || []).map(a => `<p><strong>${escaped(a.titulo)}</strong><br>${escaped(a.detalhe || '')}</p>`).join('') || `<p class="hint">${h(current && d.estado === 'disponivel' ? 'Nada rodando' : 'Sem execução nesta leitura.')}</p>`;
+  $('#dailywork-reconcile').hidden = !dailyworkAttempt;
+  $('#dailywork-reconcile').disabled = dailyworkBusy || dailyworkAttempt?.node !== targetNode;
+  if (dailyworkAttempt && !$('#dailywork-result').textContent) $('#dailywork-result').textContent = t('Resultado incerto. Consulte no DailyWork antes de repetir. Chave: {chave}', {chave:dailyworkAttempt.chave_idempotencia});
+}
+async function dailyworkCall(type, input) {
+  const response = await api('/action', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({type,...input}), timeout:15000 });
+  const value = await response.json();
+  if (!value.ok) throw new Error(t('DailyWork não confirmou a ação.'));
+  return value.data;
+}
+$('#dailywork-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (targetNode || dailyworkBusy || dailyworkAttempt) return;
+  const dia = $('#dailywork-dia').value, titulo = $('#dailywork-title').value.trim(), pedido = $('#dailywork-pedido').value.trim();
+  const now = new Date().toISOString();
+  const type = $('#dailywork-kind').value === 'requisicao' ? 'dailywork.requisicao-criar' : 'dailywork.frente-registrar';
+  const key = crypto.randomUUID();
+  const input = type.endsWith('frente-registrar') ? {dia,titulo,pedido,chave_idempotencia:key,proveniencia:{canal:'ponte',recebidaEm:now,referencia:key}} : {pedido, ...( $('#dailywork-destinatario').value.trim() ? {destinatario:$('#dailywork-destinatario').value.trim()} : {}),chave_idempotencia:key};
+  dailyworkAttempt = {type,node:targetNode,chave_idempotencia:key}; storeDailyworkAttempt();
+  dailyworkBusy = true; renderDailyWork();
+  try {
+    const r = await dailyworkCall(type,input);
+    const record = r.frente || r.requisicao || r.bloco || r;
+    $('#dailywork-result').textContent = t('Registrado no DailyWork: {id}',{id:record.id || r.id || key});
+    dailyworkAttempt = null; storeDailyworkAttempt(); $('#dailywork-pedido').value = '';
+  } catch (e) {
+    if (e.confirmed) { dailyworkAttempt = null; storeDailyworkAttempt(); $('#dailywork-result').textContent = t('DailyWork recusou: {motivo}', { motivo:e.dailywork?.mensagem || e.message }); }
+    else $('#dailywork-result').textContent = t('Resultado incerto. Consulte no DailyWork antes de repetir. Chave: {chave}',{chave:key});
+  }
+  finally { dailyworkBusy = false; renderDailyWork(); void pollState(); }
+});
+$('#dailywork-pendencias').addEventListener('click', async event => {
+  const button = event.target.closest('[data-dailywork-review]');
+  if (!button || targetNode || dailyworkBusy) return;
+  const node = targetNode;
+  dailyworkBusy = true; renderDailyWork();
+  try {
+    const r = await dailyworkCall('dailywork.requisicao-ler',{id:button.dataset.dailyworkReview});
+    if (targetNode !== node) return;
+    const req = r.requisicao || r;
+    dailyworkReview = {id:req.id,node,aprovacao:req.aprovacaoPendente};
+    const a = dailyworkReview.aprovacao;
+    $('#dailywork-review-text').innerHTML = a ? `<p><strong>${escaped([a.destinatario?.nome || a.destinatario, a.destinatario?.endereco].filter(Boolean).join(' · '))}</strong> · ${escaped(a.canalNome || a.canal)}</p><p>${escaped(a.assunto || '')}</p><pre>${escaped(a.texto)}</pre><p>${escaped(a.conta || '')}</p>${a.campos ? `<pre>${escaped(JSON.stringify(a.campos, null, 2))}</pre>` : ''}${a.hostsNovos?.length ? `<p>${h('Novos hosts: {hosts}', {hosts:a.hostsNovos.join(', ')})}</p>` : ''}<p class="hint">${escaped(a.codigo)} · ${escaped(a.revisao)}</p>` : `<p>${escaped(req.perguntasAbertas?.map(p => p.texto).join('\n') || req.pedido || '')}</p><p class="hint">${h('Responda esta pendência no DailyWork do PC.')}</p>`;
+    $('#dailywork-approve').disabled = !a || !!dailyworkAttempt;
+    $('#dailywork-reject').disabled = !a || !!dailyworkAttempt;
+    $('#dailywork-decision').textContent = '';
+    $('#dailywork-review').showModal();
+  } catch { toast(t('DailyWork não confirmou a ação.'),true); }
+  finally { dailyworkBusy = false; renderDailyWork(); }
+});
+async function dailyworkDecide(approve) {
+  if (dailyworkBusy || dailyworkAttempt || !dailyworkReview?.aprovacao || dailyworkReview.node !== targetNode) return;
+  const a = dailyworkReview.aprovacao, key = crypto.randomUUID();
+  dailyworkAttempt = {type:approve ? 'dailywork.aprovar-envio' : 'dailywork.rejeitar-envio',node:targetNode,chave_idempotencia:key}; storeDailyworkAttempt();
+  dailyworkBusy = true; $('#dailywork-approve').disabled = true; $('#dailywork-reject').disabled = true;
+  try {
+    await dailyworkCall(dailyworkAttempt.type,{id:dailyworkReview.id,mensagemId:a.mensagemId,revisao:a.revisao,texto_sha256:a.texto_sha256,codigo:a.codigo,via:'ponte',frase:approve ? 'Aprovar envio' : 'Rejeitar envio',chave_idempotencia:key});
+    $('#dailywork-decision').textContent = t('Decisão registrada no DailyWork.');
+    dailyworkAttempt = null; storeDailyworkAttempt(); dailyworkReview = null;
+  } catch (e) {
+    if (e.confirmed) { dailyworkAttempt = null; storeDailyworkAttempt(); $('#dailywork-decision').textContent = t('DailyWork recusou: {motivo}', { motivo:e.dailywork?.mensagem || e.message }); dailyworkReview = null; }
+    else $('#dailywork-decision').textContent = t('Resultado incerto. Consulte no DailyWork antes de repetir. Chave: {chave}',{chave:key});
+  }
+  finally { dailyworkBusy = false; renderDailyWork(); void pollState(); }
+}
+$('#dailywork-reconcile').addEventListener('click', async () => {
+  if (!dailyworkAttempt || dailyworkBusy || targetNode !== dailyworkAttempt.node) return;
+  dailyworkBusy = true; renderDailyWork();
+  try {
+    const r = await dailyworkCall(dailyworkAttempt.type === 'dailywork.frente-registrar' ? 'dailywork.frente-consultar-registro' : 'dailywork.requisicao-consultar-registro', {chave_idempotencia:dailyworkAttempt.chave_idempotencia});
+    if (r.encontrado && r.estado !== 'reservado') {
+      $('#dailywork-result').textContent = t('Registro confirmado no DailyWork: {id}', {id:r.id || r.requisicao?.id || r.decisao?.requisicaoId});
+      dailyworkAttempt = null; storeDailyworkAttempt(); dailyworkReview = null; $('#dailywork-review').close();
+    } else $('#dailywork-result').textContent = t('Ainda sem recibo confirmado. Consulte novamente; nada foi reenviado.');
+  } catch { $('#dailywork-result').textContent = t('DailyWork não confirmou a consulta. Nada foi reenviado.'); }
+  finally { dailyworkBusy = false; renderDailyWork(); void pollState(); }
+});
+$('#dailywork-approve').addEventListener('click',()=>void dailyworkDecide(true));
+$('#dailywork-reject').addEventListener('click',()=>void dailyworkDecide(false));
+$('#dailywork-close').addEventListener('click',()=>$('#dailywork-review').close());
+$('#dailywork-kind').addEventListener('change',()=> { const req=$('#dailywork-kind').value==='requisicao'; $('#dailywork-dia').required=!req; $('#dailywork-title').required=!req; $('#dailywork-diary-fields').hidden=req; $('#dailywork-destinatario-label').hidden=!req; });
+$('#dailywork-dia').value = new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Sao_Paulo'}).format(new Date());
 
 // Sleep, wake and light changes run one OpenRGB call per device group on the PC
 // (~20 s). The PC answers within ~11 s; a longer job comes back as pending and
@@ -185,6 +281,7 @@ function setTargetNode(id) {
   if (next === targetNode) return;
   const restart = !!liveSession || liveWanted;
   targetNode = next;
+  if (state) delete state.dailywork; dailyworkReview = null; $('#dailywork-review').close(); $('#dailywork-result').textContent = ''; renderDailyWork();
   // Everything on screen belonged to the other device: start clean there.
   stopLive(); cancelSnapshot(); clearScreenImage(); setScreenStatus('idle');
   monitorSignature = ''; windowSignature = ''; workspaceSignature = ''; screenWorkspaceSignature = ''; renderedAllOnce = false;
@@ -554,8 +651,8 @@ function renderVisiblePage() {
   settleLights(state.lights && state.lights.last);
   // The first state (and a language change) fills every page so nothing is
   // empty when navigated to; after that only the visible page is refreshed.
-  if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderScreenWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
-  if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
+  if (!renderedAllOnce) { renderedAllOnce = true; renderDailyWork(); renderWorkspaces(); renderScreenWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
+  if (currentPage === 'inicio') { renderDailyWork(); renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
   else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
   else if (currentPage === 'tela') renderScreenWorkspaces();
   if (currentPage === 'inicio') { loadStartProjects(); renderFleet(); loadFleet(); }
@@ -1145,7 +1242,7 @@ async function screenResponse(path,controller) {
       try { localStorage.removeItem(storageKey); } catch {}
       showPairing(); connectOverTailscale();
     }
-    throw Object.assign(new Error(message),{status:response.status,errorCode:details?.errorCode,errorParameters:details?.errorParameters});
+    throw Object.assign(new Error(message),{status:response.status,errorCode:details?.errorCode,errorParameters:details?.errorParameters,dailywork:details?.dailywork,confirmed:details?.confirmed===true});
   }
   return response;
 }

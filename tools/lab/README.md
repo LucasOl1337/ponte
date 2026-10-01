@@ -34,3 +34,7 @@ node tools/lab/mesh.mjs      # pc-teste on 127.0.0.1:8799, notebook-teste on :87
 ```
 
 Two real servers in one process, each with its own data, CA (`.work/lab-mesh/a|b/tls`), owner token and fake desktop; the synthetic monitor is titled with the node's name (`PONTE_LAB_TITLE`) and notebook-teste's is 1366x768. Their tailnet TLS listeners sit on 127.0.0.1:8798 and :8796, discovery points each at the other and the whois stand-in says "same owner" for 127.0.0.1, so pairing, the pinned CA and the `?node=` relay run the production code. On pc-teste: Home → Devices → Ask for access; approve the code on notebook-teste's own page; then pick notebook-teste in the selector and open the screen. `PONTE_LAB_MESH_DIR` and `PONTE_LAB_PORT_A|B`, `PONTE_LAB_NATIVE_A|B` move it.
+
+## DailyWork integration
+
+`node tools/lab/dailywork.mjs ABSOLUTE_ISOLATED_API_PONTE_JSON ABSOLUTE_PRIVATE_LAB_DIR [PORT]` starts the real Ponte server with synthetic PC adapters and the real DailyWork integration. Default port is 8793; bind is loopback. Every desktop, audio, clipboard, agent, mesh and fleet adapter is synthetic. No settings from the live Ponte are loaded. The pairing token stays in `PRIVATE_LAB_DIR/token` and is not printed. Pair only the bench-owned browser. This lab has no fallback to the live DailyWork descriptor.

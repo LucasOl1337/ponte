@@ -1,4 +1,8 @@
 export const messages = {
+  DAILYWORK_UNAVAILABLE: { en: 'DailyWork is unavailable.', pt: 'DailyWork indisponível.' },
+  DAILYWORK_UNCERTAIN: { en: 'DailyWork did not confirm this action. Consult the receipt before retrying.', pt: 'DailyWork não confirmou a ação. Consulte o recibo antes de repetir.' },
+  DAILYWORK_REJECTED: { en: 'DailyWork refused the action.', pt: 'DailyWork recusou a ação.' },
+  DAILYWORK_ACTION_INVALID: { en: 'This DailyWork action is not allowed.', pt: 'Esta ação do DailyWork não é permitida.' },
   "TERMINAL_IN_COPY_MODE": {
     "en": "This terminal is in copy mode. Exit that mode in the PC terminal before sending input.",
     "pt": "Este terminal está no modo de cópia. Saia desse modo no terminal do PC antes de enviar comandos."
