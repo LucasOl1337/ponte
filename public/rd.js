@@ -575,6 +575,8 @@ function tick() {
   meters = { fps: framesDrawn / elapsed, kbps: bytesReceived * 8 / 1000 / elapsed, drops: framesDropped };
   framesDrawn = 0; bytesReceived = 0; framesDropped = 0;
   if (!session) { renderStats(); return; }
+  // The list follows the network (a node coming online, a pairing approved).
+  if (performance.now() - devicesLoadedAt > DEVICES_REFRESH_MS) loadNodes();
   ping();
   const frame = windowStats(frameLatency, now), glass = windowStats(glassLatency, now);
   const report = { t: 'stats', fps: round(meters.fps), kbps: Math.round(meters.kbps), rtt: rtt === null ? null : round(rtt), queue: decoder?.decodeQueueSize || 0, drops: meters.drops };
@@ -638,7 +640,7 @@ function renderLink(frame = windowStats(frameLatency, nowEpoch())) {
 // The device on the screen, by name: the one the server says it is, else the
 // picker's label, else a plain word.
 function targetName() {
-  return session?.node?.name || nodes.find(node => node.id === nodeId)?.name || t('o aparelho da tela');
+  return session?.node?.name || currentDevice()?.name || t('o aparelho da tela');
 }
 
 const BASE_TITLE = 'Ponte — área de trabalho remota';
@@ -946,39 +948,93 @@ function renderMonitors() {
   select.disabled = monitors.length < 2;
 }
 
-// Other nodes come from the home node (DESENHO §4). Until /api/mesh exists the
-// list is just this node.
-async function loadNodes() {
+// The devices come from the home node's one list (GET /api/devices, docs/devices.md):
+// the server decides what can be controlled (`can.control`) and why not; this page
+// only draws it, in words (PonteI18n.deviceWord). A server without /api/devices
+// answers 404, and then /api/mesh is read into the same shape.
+const DEVICES_REFRESH_MS = 30000;
+let devicesLoadedAt = 0;
+
+const headers = () => ({ Authorization: `Bearer ${token}`, 'Accept-Language': i18n.locale });
+
+function fromDevices(body) {
+  return body.devices.filter(device => device && device.id).map(device => ({
+    id: device.id, ids: Array.isArray(device.ids) ? device.ids : [device.id], name: device.name || device.id,
+    kind: device.kind, status: device.status, self: !!device.self,
+    control: device.can?.control?.ok ? { ok: true } : { ok: false, why: device.can?.control?.why },
+  }));
+}
+
+// The old answer, for a server that predates /api/devices: paired and online is
+// the only way to control, as before.
+function fromMesh(body) {
+  const mesh = body?.mesh || body || {};
+  const list = [];
+  if (mesh.self) list.push({ id: mesh.self.id || '', ids: [mesh.self.id || '', 'self'], name: mesh.self.name, status: 'online', self: true, control: { ok: true } });
+  for (const peer of Array.isArray(mesh.peers) ? mesh.peers : []) {
+    if (!peer?.id) continue;
+    const online = peer.online !== false, paired = peer.paired !== false;
+    list.push({ id: peer.id, ids: [peer.id], name: peer.name || peer.id, status: online ? 'online' : 'offline', self: false,
+      control: paired && online ? { ok: true } : { ok: false, why: paired ? 'OFFLINE' : 'NOT_PAIRED' } });
+  }
+  return list;
+}
+
+async function loadNodes({ discover = false } = {}) {
+  devicesLoadedAt = performance.now();
   try {
-    const response = await fetch('/api/mesh', { headers: { Authorization: `Bearer ${token}`, 'Accept-Language': i18n.locale }, cache: 'no-store' });
-    if (!response.ok) throw new Error(String(response.status));
-    const body = await response.json();
-    const mesh = body?.mesh || body || {};
-    const self = mesh.self ? { id: mesh.self.id || '', name: mesh.self.name, os: mesh.self.os, online: true, self: true } : null;
-    const peers = Array.isArray(mesh.peers) ? mesh.peers.filter(peer => peer && peer.id && peer.paired !== false) : [];
-    nodes = [...(self ? [self] : []), ...peers.map(peer => ({ id: peer.id, name: peer.name || peer.id, os: peer.os, online: peer.online !== false }))];
+    const response = await fetch(`/api/devices${discover ? '?discover=1' : ''}`, { headers: headers(), cache: 'no-store' });
+    const body = response.ok ? await response.json() : null;
+    if (body?.v === 1 && Array.isArray(body.devices)) nodes = fromDevices(body);
+    else if (response.ok || response.status === 404) {
+      const old = await fetch('/api/mesh', { headers: headers(), cache: 'no-store' });
+      if (!old.ok) throw new Error(String(old.status));
+      nodes = fromMesh(await old.json());
+    } else throw new Error(String(response.status));
   } catch { nodes = []; }
   renderNodes();
 }
 
+// The device the page shows: `node=` may be an id, any of the device's ids or its
+// name (the server's resolver takes all of them), and empty means this one.
+function currentDevice() {
+  if (!nodeId || nodeId === 'self') return nodes.find(device => device.self) || null;
+  const wanted = nodeId.toLowerCase();
+  return nodes.find(device => device.ids.includes(nodeId) || device.name.toLowerCase() === wanted)
+    || (session?.node?.id ? nodes.find(device => device.id === session.node.id) : null) || null;
+}
+
+// One line per device: name, kind, state and, when it cannot be controlled, why.
+function deviceLabel(device) {
+  if (device.self) return t('{name} · este aparelho', { name: device.name });
+  const why = device.control.ok ? '' : i18n.deviceWord('why', device.control.why);
+  const parts = [device.name, i18n.deviceWord('kind', device.kind)];
+  if (device.control.ok || device.control.why !== 'OFFLINE') parts.push(i18n.deviceWord('status', device.status));
+  parts.push(why);
+  return parts.filter(Boolean).join(' · ');
+}
+
 function renderNodes() {
   const select = $('#rd-node');
-  const selfNode = nodes.find(node => node.self);
-  const target = session?.node;
-  let entries;
-  if (!selfNode) {
-    // Without the mesh the only entry is the node this page talks to.
-    entries = [option(nodeId, target?.name || t('Este aparelho'), true)];
+  const current = currentDevice();
+  let entries, choices = 1;
+  if (!nodes.some(device => device.self)) {
+    // Without a list the only entry is the device this page talks to.
+    entries = [option(nodeId, session?.node?.name || t('Este aparelho'), true)];
+    select.title = '';
   } else {
-    entries = nodes.map(node => {
-      const label = node.self ? t('{name} (este aparelho)', { name: node.name }) : node.online ? node.name : t('{name} (offline)', { name: node.name });
-      return option(node.self ? '' : node.id, label, node.self ? !nodeId || nodeId === node.id : nodeId === node.id, !node.self && !node.online);
-    });
-    if (nodeId && !nodes.some(node => node.id === nodeId)) entries.push(option(nodeId, target?.name || nodeId, true));
+    const entry = device => option(device.self ? '' : device.id, deviceLabel(device), device === current, !device.control.ok && device !== current);
+    const can = nodes.filter(device => device.control.ok || device === current);
+    const cannot = nodes.filter(device => !can.includes(device));
+    entries = can.map(entry);
+    choices = can.length;
+    if (nodeId && !current) entries.push(option(nodeId, session?.node?.name || nodeId, true));
+    if (cannot.length) entries.push(`<optgroup label="${i18n.escape(t('Sem controle daqui'))}">${cannot.map(entry).join('')}</optgroup>`);
+    select.title = current ? deviceLabel(current) : '';
   }
   select.innerHTML = entries.join('');
-  select.value = selfNode && nodeId === selfNode.id ? '' : nodeId;
-  select.disabled = select.querySelectorAll('option').length < 2;
+  select.value = current ? (current.self ? '' : current.id) : nodeId;
+  select.disabled = choices < 2;
 }
 
 function chooseNode(value) {
@@ -1154,7 +1210,7 @@ function start() {
   layout();
   setInterval(tick, 1000);
   connect();
-  loadNodes();
+  loadNodes({ discover: true });
 }
 
 start();

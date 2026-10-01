@@ -2,6 +2,21 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## Unreleased (rodada UX/UI, hub fatia 5: aparelhos no rd.html)
+
+- **The remote desktop's device picker reads the one device list** (`GET /api/devices`,
+  ADR 0002). Each device says name, kind and state in words ("notebook-teste · Notebook ·
+  online"); only what `can.control` allows is selectable, the rest sits under "Sem controle
+  daqui" with the reason ("Não roda a Ponte.", "Está offline."), never a code. The list is
+  read again every 30 s. A server without `/api/devices` falls back to `/api/mesh`.
+- **"Este aparelho" has one spelling across the phone and the PC:** `{name} · este
+  aparelho`; the rd-only keys `{name} (este aparelho)` and `{name} (offline)` are gone.
+- Verified: `npm test` 450 pass, 1 skipped (new: picker from `/api/devices`, name/any-id
+  `node=`, the device on the screen stays selectable, 500 does not fall back, 30 s refresh);
+  two-node lab in a Chromium bench: the picker switched pc-teste ⇄ notebook-teste (monitor
+  1920×1080 ⇄ 1366×768), `?node=notebook-teste` by name selected the notebook, and an
+  alpha.33 server (no `/api/devices`, 404) still listed and switched through `/api/mesh`.
+
 ## 0.1.0-alpha.35 (2026-10-01)
 
 The remote desktop page (`rd.html`) says in words where the keyboard goes and how the

@@ -39,7 +39,7 @@ class FakeChunk { constructor(init) { Object.assign(this, init); } }
 
 const readyMessage = (extra = {}) => ({ t: 'ready', v: 1, node: { id: '0123456789abcdef', name: 'notebook-teste', os: 'linux' }, monitors: [{ name: 'LAB-1', x: 0, y: 0, width: 1920, height: 1080, scale: 1, focused: true }, { name: 'LAB-2', x: 1920, y: 0, width: 2560, height: 1440, scale: 1, focused: false }], monitor: 'LAB-1', width: 1920, height: 1080, fps: 60, codec: 'avc1.640034', input: { abs: true, rel: true, keys: true, clipboard: true }, ...extra });
 
-function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', stored = {}, mesh = null, clipboard = '', focused = true, permission = 'granted' } = {}) {
+function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', stored = {}, mesh = null, devices = null, clipboard = '', focused = true, permission = 'granted' } = {}) {
   FakeSocket.all = []; FakeDecoder.all = [];
   const document = makeDocument(html), window = makeWindow();
   const saved = new Map(Object.entries(stored));
@@ -71,7 +71,12 @@ function harness({ hash = `#pair=${TOKEN}&node=feedfacecafebeef`, search = '', s
     setTimeout: (callback, ms) => { timers.push({ callback, ms }); return timers.length; }, clearTimeout: id => { if (timers[id - 1]) timers[id - 1].cleared = true; },
     setInterval: (callback, ms) => { timers.push({ callback, ms, interval: true }); return timers.length; }, clearInterval() {},
     requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
-    fetch: async (url, options) => { fetches.push({ url, options }); return mesh ? { ok: true, json: async () => mesh } : { ok: false, status: 404, json: async () => ({}) }; },
+    fetch: async (url, options) => {
+      fetches.push({ url, options });
+      const body = url.startsWith('/api/devices') ? devices : url === '/api/mesh' ? mesh : null;
+      if (body?.status) return { ok: false, status: body.status, json: async () => ({}) };
+      return body ? { ok: true, status: 200, json: async () => body } : { ok: false, status: 404, json: async () => ({}) };
+    },
   });
   vm.runInContext(runtime, context); vm.runInContext(client, context);
   const h = {
@@ -484,18 +489,19 @@ test('ping syncs the clock with the lowest round trip; stats go to the server ev
   assert.equal(h.run('clockOffset'), 250);
 });
 
-test('monitor and device selectors: monitors from ready, nodes from /api/mesh, a change reconnects with node=', async () => {
+test('monitor and device selectors: monitors from ready; on a server without /api/devices the nodes come from /api/mesh; a change reconnects with node=', async () => {
   const mesh = { self: { id: 'aaaaaaaaaaaaaaaa', name: 'pc-teste', os: 'linux' }, peers: [{ id: 'feedfacecafebeef', name: 'notebook-teste', os: 'linux', online: true, paired: true }, { id: 'bbbbbbbbbbbbbbbb', name: 'pc-windows', os: 'windows', online: false, paired: true }, { id: 'cccccccccccccccc', name: 'stranger', online: true, paired: false }] };
   const h = await harness({ mesh }).connect();
   await flush();
-  assert.equal(h.fetches[0].url, '/api/mesh');
-  assert.equal(h.fetches[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.equal(h.fetches[0].url, '/api/devices?discover=1');
+  assert.equal(h.fetches[1].url, '/api/mesh');
+  assert.equal(h.fetches[1].options.headers.Authorization, `Bearer ${TOKEN}`);
   assert.deepEqual(h.el('#rd-monitor').querySelectorAll('option').map(option => option.getAttribute('value')), ['LAB-1', 'LAB-2']);
   h.el('#rd-monitor').value = 'LAB-2';
   h.el('#rd-monitor').dispatchEvent({ type: 'change', target: h.el('#rd-monitor') });
   assert.deepEqual(h.sent('monitor'), [{ t: 'monitor', name: 'LAB-2' }]);
   const options = h.el('#rd-node').querySelectorAll('option');
-  assert.deepEqual(options.map(option => [option.getAttribute('value'), option.textContent, 'disabled' in option.attrs]), [['', 'pc-teste (this device)', false], ['feedfacecafebeef', 'notebook-teste', false], ['bbbbbbbbbbbbbbbb', 'pc-windows (offline)', true]]);
+  assert.deepEqual(options.map(option => [option.getAttribute('value'), option.textContent, 'disabled' in option.attrs]), [['', 'pc-teste · this device', false], ['feedfacecafebeef', 'notebook-teste · online', false], ['bbbbbbbbbbbbbbbb', 'pc-windows · It is offline.', true], ['cccccccccccccccc', 'stranger · online · Not paired yet.', true]]);
   const first = h.socket;
   h.el('#rd-node').value = '';
   h.el('#rd-node').dispatchEvent({ type: 'change', target: h.el('#rd-node') });
@@ -507,6 +513,102 @@ test('monitor and device selectors: monitors from ready, nodes from /api/mesh, a
   await flush();
   assert.deepEqual(alone.el('#rd-node').querySelectorAll('option').map(option => option.textContent), ['notebook-teste']);
   assert.equal(alone.el('#rd-node').disabled, true);
+});
+
+// The shape GET /api/devices answers (docs/devices.md), as the two-node lab serves it.
+const can = (control, extra = {}) => ({ screen: control, control, terminal: { ok: false, why: 'NO_ROUTE' }, info: { ok: true, via: 'ponte' }, ...extra });
+const devicesAnswer = () => ({
+  v: 1, home: { id: 'aaaaaaaaaaaaaaaa', name: 'pc-teste' }, requests: [], tailnet: { state: 'Running' }, checkedAt: 1,
+  devices: [
+    { id: 'aaaaaaaaaaaaaaaa', ids: ['aaaaaaaaaaaaaaaa', 'self'], name: 'pc-teste', kind: 'pc', self: true, status: 'online', can: can({ ok: true, via: 'ponte' }) },
+    { id: 'feedfacecafebeef', ids: ['feedfacecafebeef', 'ssh:notebook-teste', 'tail:notebook-teste'], name: 'notebook-teste', kind: 'notebook', self: false, status: 'online', can: can({ ok: true, via: 'ponte' }) },
+    { id: 'ssh:servidor-teste', ids: ['ssh:servidor-teste'], name: 'servidor-teste', kind: 'server', self: false, status: 'online', can: can({ ok: false, why: 'NO_PONTE' }) },
+    { id: 'dddddddddddddddd', ids: ['dddddddddddddddd'], name: 'pc-sala', kind: 'pc', self: false, status: 'online', can: can({ ok: false, why: 'NOT_PAIRED' }) },
+    { id: 'bbbbbbbbbbbbbbbb', ids: ['bbbbbbbbbbbbbbbb'], name: 'pc-windows', kind: 'pc', self: false, status: 'offline', can: can({ ok: false, why: 'OFFLINE' }) },
+    { id: 'tail:tablet-teste', ids: ['tail:tablet-teste'], name: 'tablet-teste', kind: 'phone', self: false, status: 'unknown', can: can({ ok: false, why: 'SOMETHING_NEW' }) },
+  ],
+});
+
+test('the device picker draws the one device list: kind, state and why in words, control only where can.control is ok', async () => {
+  const h = await harness({ devices: devicesAnswer(), mesh: { self: { id: 'x', name: 'never read' } } }).connect();
+  await flush();
+  assert.deepEqual(h.fetches.map(item => item.url), ['/api/devices?discover=1'], '/api/mesh is not read when /api/devices answers');
+  assert.equal(h.fetches[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+  const select = h.el('#rd-node');
+  const rows = () => select.querySelectorAll('option').map(option => [option.getAttribute('value'), option.textContent, 'disabled' in option.attrs, option.parentElement.tagName]);
+  assert.deepEqual(rows(), [
+    ['', 'pc-teste · this device', false, 'SELECT'],
+    ['feedfacecafebeef', 'notebook-teste · Notebook · online', false, 'SELECT'],
+    ['ssh:servidor-teste', 'servidor-teste · Server · online · Does not run Ponte.', true, 'OPTGROUP'],
+    ['dddddddddddddddd', 'pc-sala · PC · online · Not paired yet.', true, 'OPTGROUP'],
+    ['bbbbbbbbbbbbbbbb', 'pc-windows · PC · It is offline.', true, 'OPTGROUP'],
+    ['tail:tablet-teste', 'tablet-teste · Phone · not checked', true, 'OPTGROUP'],
+  ]);
+  assert.equal(select.querySelector('optgroup').getAttribute('label'), 'Cannot be controlled from here');
+  assert.equal(select.value, 'feedfacecafebeef');
+  assert.equal(select.disabled, false);
+  assert.equal(select.title, 'notebook-teste · Notebook · online');
+  // No code ever reaches the page, in either language.
+  const codes = /NO_PONTE|NOT_PAIRED|OFFLINE|SOMETHING_NEW|\bnotebook\b(?!-)|\bserver\b/;
+  assert.doesNotMatch(select.textContent, codes);
+  h.window.PonteI18n.setLanguage('pt');
+  assert.deepEqual(rows().map(row => row[1]), [
+    'pc-teste · este aparelho', 'notebook-teste · Notebook · online', 'servidor-teste · Servidor · online · Não roda a Ponte.',
+    'pc-sala · PC · online · Ainda não está pareado.', 'pc-windows · PC · Está offline.', 'tablet-teste · Celular · sem conferir',
+  ]);
+  assert.equal(select.querySelector('optgroup').getAttribute('label'), 'Sem controle daqui');
+  // The indicator names the device by the same name.
+  assert.equal(h.el('#rd-control-target').textContent, 'Teclado e mouse → este aparelho');
+  h.run('engage()');
+  assert.equal(h.el('#rd-control-target').textContent, 'Teclado e mouse → notebook-teste');
+  h.run('disengage()');
+  // Choosing this device reconnects without node=; choosing the notebook again with its id.
+  h.el('#rd-node').value = '';
+  h.el('#rd-node').dispatchEvent({ type: 'change', target: h.el('#rd-node') });
+  assert.equal(h.socket.url, 'ws://127.0.0.1:8787/api/rd');
+  h.el('#rd-node').value = 'feedfacecafebeef';
+  h.el('#rd-node').dispatchEvent({ type: 'change', target: h.el('#rd-node') });
+  assert.equal(h.socket.url, 'ws://127.0.0.1:8787/api/rd?node=feedfacecafebeef');
+});
+
+test('node= by name or any id picks the same device (the resolver does the rest); a list that cannot be read leaves the page as it was', async () => {
+  for (const node of ['notebook-teste', 'NOTEBOOK-teste', 'ssh:notebook-teste', 'tail:notebook-teste']) {
+    const h = await harness({ hash: `#pair=${TOKEN}&node=${encodeURIComponent(node)}`, devices: devicesAnswer() }).connect();
+    await flush();
+    assert.equal(h.socket.url, `ws://127.0.0.1:8787/api/rd?node=${encodeURIComponent(node)}`, 'the page passes what it got; the server resolves it');
+    const selected = h.el('#rd-node').querySelectorAll('option').filter(option => 'selected' in option.attrs).map(option => option.textContent);
+    assert.deepEqual(selected, ['notebook-teste · Notebook · online'], node);
+    assert.equal(h.el('#rd-node').querySelectorAll('option').length, 6, 'no extra entry for a name');
+  }
+  // node=self is this device.
+  const self = await harness({ hash: `#pair=${TOKEN}&node=self`, devices: devicesAnswer() }).connect();
+  await flush();
+  assert.deepEqual(self.el('#rd-node').querySelectorAll('option').filter(option => 'selected' in option.attrs).map(option => option.textContent), ['pc-teste · this device']);
+  // The device on the screen stays selectable even when the list says it cannot be controlled (it went offline).
+  const gone = devicesAnswer();
+  gone.devices[1] = { ...gone.devices[1], status: 'offline', can: can({ ok: false, why: 'OFFLINE' }) };
+  const h = await harness({ devices: gone }).connect();
+  await flush();
+  const notebook = h.el('#rd-node').querySelectorAll('option').find(option => option.getAttribute('value') === 'feedfacecafebeef');
+  assert.equal('disabled' in notebook.attrs, false);
+  assert.equal(notebook.textContent, 'notebook-teste · Notebook · It is offline.');
+  // A server error (not a missing route) does not fall back to /api/mesh nor invent a list.
+  const broken = harness({ devices: { status: 500 }, mesh: { self: { id: 'x', name: 'never read' } } });
+  await flush();
+  assert.deepEqual(broken.fetches.map(item => item.url), ['/api/devices?discover=1']);
+  assert.deepEqual(broken.el('#rd-node').querySelectorAll('option').map(option => option.textContent), ['This device']);
+});
+
+test('the list follows the network: read again every 30 s while a session runs', async () => {
+  const h = await harness({ devices: devicesAnswer() }).connect();
+  await flush();
+  const tick = h.timers.find(timer => timer.interval && timer.ms === 1000);
+  tick.callback();
+  assert.equal(h.fetches.length, 1, 'not before 30 s');
+  h.advance(30001);
+  tick.callback();
+  await flush();
+  assert.deepEqual(h.fetches.map(item => item.url), ['/api/devices?discover=1', '/api/devices']);
 });
 
 test('reconnects with backoff after a drop, but not after `taken` or a refused key', async () => {
