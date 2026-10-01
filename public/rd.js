@@ -39,7 +39,6 @@ const PROBE_ROUNDS = 10;
 // 1) as 16×16 cells from the top-left corner; y is the middle row of the cells.
 const LAB_STRIPE = { x: 0, y: 8, cell: 16, bits: 44 };
 const STRIPE_TRUST_MS = 60000;
-const MODIFIER_KIND = { ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', ShiftLeft: 'shift', ShiftRight: 'shift' };
 
 // ---- pure helpers (unit-tested) -------------------------------------------
 
@@ -73,15 +72,14 @@ function wheelUnits(event) {
   return { dx: (event.deltaX || 0) * scale, dy: (event.deltaY || 0) * scale };
 }
 
-// Ctrl+Alt+Shift together and nothing else switches the control (both ways).
-function isReleaseChord(pressed) {
-  const kinds = new Set();
-  for (const code of pressed) {
-    const kind = MODIFIER_KIND[code];
-    if (!kind) return false;
-    kinds.add(kind);
-  }
-  return kinds.size === 3;
+// Ctrl+X is reserved in either direction, but Ctrl+Shift/Alt/Super+X is not.
+function isControlSwitch(event, held) {
+  const has = (...codes) => codes.some(code => held.has(code));
+  return event.type === 'keydown' && event.code === 'KeyX'
+    && (event.ctrlKey || has('ControlLeft', 'ControlRight'))
+    && !(event.shiftKey || has('ShiftLeft', 'ShiftRight'))
+    && !(event.altKey || has('AltLeft', 'AltRight'))
+    && !(event.metaKey || has('MetaLeft', 'MetaRight'));
 }
 
 // How the link feels, in words: good, unstable or bad and the main reason.
@@ -177,7 +175,7 @@ if (location.hash.length > 1) {
 
 let mode = 'abs';
 try { if (localStorage.getItem(MODE_KEY) === 'rel') mode = 'rel'; } catch {}
-let chordAction = 'window';     // 'window' | 'fullscreen': what Ctrl+Alt+Shift does when it takes control
+let chordAction = 'window';     // 'window' | 'fullscreen': what Ctrl+X does when it takes control
 try { if (localStorage.getItem(CHORD_KEY) === 'fullscreen') chordAction = 'fullscreen'; } catch {}
 let fpsLimit = 60;
 try { const stored = Number(localStorage.getItem(FPS_KEY)); if (FPS_CHOICES.includes(stored)) fpsLimit = stored; } catch {}
@@ -664,11 +662,11 @@ function renderControl() {
   if (engaged && session) {
     $('#rd-control-target').textContent = t('Teclado e mouse → {name}', { name: targetName() });
     $('#rd-hint').textContent = full
-      ? t('Tudo vai pro aparelho, até Super. Ctrl+Alt+Shift ou segure Esc pra voltar.')
-      : t('Ctrl+Alt+Shift volta pra este aparelho. Super e Ctrl+T ficam aqui (a tela cheia leva tudo).');
+      ? t('Tudo vai pro aparelho, até Super. Ctrl+X ou segure Esc pra voltar.')
+      : t('Ctrl+X volta pra este aparelho. Super e Ctrl+T ficam aqui (a tela cheia leva tudo).');
   } else {
     $('#rd-control-target').textContent = t('Teclado e mouse → este aparelho');
-    $('#rd-hint').textContent = session ? t('Ctrl+Alt+Shift ou clique na tela pra controlar {name}.', { name: targetName() }) : '';
+    $('#rd-hint').textContent = session ? t('Ctrl+X ou clique na tela pra controlar {name}.', { name: targetName() }) : '';
   }
   renderTitle();
 }
@@ -707,6 +705,7 @@ function dropInput() {
   clearTimeout(escTimer);
   const held = pressed.size || buttonsDown.size;
   pressed.clear(); buttonsDown.clear();
+  pendingControl.clear();
   pendingMove = null; pendingRel.dx = pendingRel.dy = 0; pendingWheel.dx = pendingWheel.dy = 0;
   return held;
 }
@@ -722,7 +721,7 @@ function disengage(tell = true) {
   if (was) showSwitch();
 }
 
-// Ctrl+Alt+Shift (or the indicator) while this device has the keys: take them
+// Ctrl+X (or the indicator) while this device has the keys: take them
 // to the device on the screen, in the window or, if chosen, in full screen
 // (the only place the browser hands over Super and its own shortcuts).
 function takeControl() {
@@ -779,45 +778,56 @@ async function enterFullscreen() {
 
 // ---- keyboard ---------------------------------------------------------------------------
 
-// Keys held on this device while it has the keyboard: only to see the switch
-// chord. Nothing of it is ever sent.
+// Physical keys are separate from the keys actually sent to the other device.
+// Ctrl waits for the next key so the reserved Ctrl+X never leaks a remote Ctrl.
 const localPressed = new Set();
+const pendingControl = new Set();
+const switchKeys = new Set();
+
+function flushControl() {
+  for (const code of pendingControl) {
+    if (send({ t: 'key', code, down: true })) pressed.add(code);
+  }
+  pendingControl.clear();
+}
 
 function keyEvent(event) {
-  if (!engaged) { localKey(event); return; }
+  const code = event.code;
+  if (event.type === 'keydown') localPressed.add(code);
+  if (switchKeys.has(code)) {
+    event.preventDefault(); event.stopPropagation?.();
+    if (event.type === 'keyup') { switchKeys.delete(code); localPressed.delete(code); }
+    return;
+  }
+  if (session && !$('#rd-settings').open && isControlSwitch(event, localPressed)) {
+    event.preventDefault(); event.stopPropagation?.();
+    if (event.repeat) return;
+    switchKeys.add('KeyX');
+    for (const held of localPressed) if (held === 'ControlLeft' || held === 'ControlRight') switchKeys.add(held);
+    if (engaged) releaseControl(); else takeControl();
+    return;
+  }
+  if (event.type === 'keyup') localPressed.delete(code);
+  if (!engaged) return;
   if (!session || !inputAllows('keys')) return;
   // While controlling, even a stale bar focus must not eat the remote keys.
   event.preventDefault();
   event.stopPropagation?.();
-  const code = event.code;
   if (!code || code === 'Unidentified') return;
   if (event.type === 'keydown') {
     // The target repeats a held key by itself; the client's auto-repeat stays home.
     if (event.repeat) return;
+    if (code === 'ControlLeft' || code === 'ControlRight') { pendingControl.add(code); return; }
+    flushControl();
     pressed.add(code);
     send({ t: 'key', code, down: true });
-    if (isReleaseChord(pressed)) { releaseControl(); return; }
     if (code === 'Escape') { clearTimeout(escTimer); escTimer = setTimeout(() => releaseControl(), ESC_HOLD_MS); }
   } else {
     if (code === 'Escape') clearTimeout(escTimer);
+    if (pendingControl.has(code)) flushControl();
     if (!pressed.delete(code)) return;
     send({ t: 'key', code, down: false });
   }
-}
-
-// This device has the keyboard: keys stay here, except Ctrl+Alt+Shift alone,
-// which hands keyboard and mouse to the device on the screen. The modifiers it
-// took are never sent down, so the far side sees no stray Ctrl.
-function localKey(event) {
-  const code = event.code;
-  if (!code) return;
-  if (event.type === 'keyup') { localPressed.delete(code); return; }
-  if (event.repeat) return;
-  localPressed.add(code);
-  if (!session || !inputAllows('keys') || $('#rd-settings').open || !isReleaseChord(localPressed)) return;
-  event.preventDefault();
-  localPressed.clear();
-  takeControl();
 }
 
 // ---- mouse ---------------------------------------------------------------------------------
@@ -865,6 +875,7 @@ function mouseDown(event) {
   if (!session || event.target?.closest?.('.rd-bar')) return;
   event.preventDefault();
   if (!engaged) engage(!document.fullscreenElement);
+  flushControl();
   if (mode === 'rel' && inputAllows('rel') && !document.pointerLockElement) { lockPointer(); return; }
   if (event.button < 0 || event.button > 4) return;
   if (mode === 'abs') {
@@ -890,6 +901,7 @@ function mouseUp(event) {
 function wheel(event) {
   if (!session || !engaged || event.target?.closest?.('.rd-bar')) return;
   event.preventDefault();
+  flushControl();
   const units = wheelUnits(event);
   pendingWheel.dx += units.dx; pendingWheel.dy += units.dy;
   scheduleInput();
@@ -1175,8 +1187,8 @@ function start() {
   for (const name of ['contextmenu', 'auxclick']) window.addEventListener(name, event => { if (!event.target?.closest?.('.rd-bar')) event.preventDefault(); });
   window.addEventListener('keydown', keyEvent, true);
   window.addEventListener('keyup', keyEvent, true);
-  window.addEventListener('blur', () => { localPressed.clear(); if (session) releaseRemote(); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden && session) releaseRemote(); });
+  window.addEventListener('blur', () => { localPressed.clear(); switchKeys.clear(); if (session) releaseControl(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && session) { localPressed.clear(); switchKeys.clear(); releaseControl(); } });
   window.addEventListener('focus', () => { if (engaged) clipboardOut(); });
   window.addEventListener('resize', layout);
   document.addEventListener('fullscreenchange', () => {

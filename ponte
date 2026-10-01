@@ -1370,7 +1370,7 @@ def rd_open(args):
     # The profile keeps no passwords: basic store, so no keyring prompt appears.
     command = [browser, f'--app={url}', f'--user-data-dir={profile}', '--class=ponte-rd', '--no-first-run', '--no-default-browser-check', '--password-store=basic']
     subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    print(f"Remote desktop opening for {label} (profile {profile}). Ctrl+Alt+Shift switches the keyboard and mouse between this PC and {label}; settings under the gear.")
+    print(f"Remote desktop opening for {label} (profile {profile}). Ctrl+X switches the keyboard and mouse between this PC and {label} (reserved here, no cut); settings under the gear.")
 
 
 def ctl_main(argv):
