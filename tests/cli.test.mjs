@@ -537,6 +537,35 @@ test('rd --install adds "Ponte Remoto" to the user menu, idempotent, and leaves 
   assert.equal(await readFile(launcher, 'utf8'), '[Desktop Entry]\nName=Mine\nExec=mine\n', 'an entry of the owner is never replaced');
 });
 
+test('devices prints the home node\'s device list from /api/devices, and --check asks for a deep, fresh one', async t => {
+  const f = await fixture(t);
+  const http = await import('node:http');
+  const listing = {
+    v: 1, home: { id: 'aaaaaaaaaaaaaaaa', name: 'pc-teste' }, checkedAt: 1,
+    requests: [{ code: '123456', from: 'cccccccccccccccc', name: 'outro-pc', expiresAt: 9 }],
+    devices: [
+      { id: 'aaaaaaaaaaaaaaaa', name: 'pc-teste', kind: 'pc', self: true, status: 'online', routes: [{ via: 'ponte', state: 'self', online: true }],
+        can: { screen: { ok: true, via: 'ponte' }, info: { ok: true, via: 'ponte' }, pair: { ok: false, why: 'SELF' } } },
+      { id: 'feedfacecafebeef', name: 'notebook-teste', kind: 'notebook', self: false, status: 'online',
+        routes: [{ via: 'ponte', state: 'paired', online: true }, { via: 'tailscale', online: true, link: 'direct' }, { via: 'ssh', alias: 'notebook', check: { ok: false, code: 'DNS' } }],
+        can: { control: { ok: true, via: 'ponte' }, sessions: { ok: false, why: 'SSH_UNREACHABLE' } } },
+    ],
+  };
+  const urls = [];
+  const server = http.createServer((req, res) => { urls.push(req.url); res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(listing)); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  await f.cli(['setup', '--local-only', '--http-port', String(server.address().port)]);
+  const plain = (await f.cli(['devices'])).stdout;
+  assert.match(plain, /^This device: pc-teste \(aaaaaaaaaaaaaaaa\)/);
+  assert.match(plain, /pc-teste \*\s+pc\s+online\s+ponte\s+screen\n/);
+  assert.match(plain, /notebook-teste\s+notebook\s+online\s+ponte:paired tailscale:direct ssh:notebook:DNS\s+control\n\s+feedfacecafebeef/);
+  assert.match(plain, /Request: outro-pc asks to control this device, code 123456/);
+  assert.deepEqual(JSON.parse((await f.cli(['devices', '--json'])).stdout), listing);
+  await f.cli(['devices', '--check']);
+  assert.deepEqual(urls, ['/api/devices', '/api/devices', '/api/devices?deep=1&fresh=1']);
+});
+
 test('doctor names the tailnet owner the way the server resolves it: a real user, never a tagged node', async () => {
   const check = String.raw`
 import importlib.machinery, importlib.util, json, subprocess, sys

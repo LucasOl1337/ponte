@@ -164,6 +164,12 @@ export const COMMANDS = [
     // The transport must serialize enter as ?enter=0 or ?enter=1, not false/true.
     params: { id: { ...terminalId }, ...uploadParams(), enter: boolean({ default: false }) },
   },
+  // Every device this node reaches, one model for every surface (ADR 0002):
+  // kind, status, routes (ponte, tailscale, ssh, adb) and can.* with a reason.
+  {
+    name: 'devices', description: 'List every device this node reaches: kind, status, routes and what can be done with each (can.*). --deep checks SSH routes and probes machines now.', method: 'GET', path: '/api/devices',
+    params: { fresh: boolean(), deep: boolean() }, timeoutMs: 45000,
+  },
   // The fleet: every machine on the tailnet, SSH config and mesh, the health
   // of each route, and agent sessions (Claude Code, Codex, Jcode) anywhere.
   {
