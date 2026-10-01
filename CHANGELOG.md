@@ -2,6 +2,36 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## Unreleased
+
+- **Remote video recovers after a link dip without reconnecting.** Isolated
+  ack phase/jitter spikes no longer reset the entire 30-second calm window.
+  After a fall, a same-step keyframe probe refreshes capacity before a measured
+  climb (2× headroom, sample valid for 120 s). Recovery restarts share a 60 s
+  budget. A probe that measures no room waits 2, 4, 8, then at most 10 minutes
+  before another probe. Any climb or fall clears that wait. A landed key below
+  the 20 KB sampling threshold allows only the ADR's one-step trial, with
+  failed-step backoff, not a jump. Old pages, LAN, the phone's Auto/JPEG and the
+  emergency/down/shed signals are unchanged.
+- Verified with the desktop lab, 3440×1440, 14 px text: 2.5 → 30 Mbps from
+  second 30 became readable from 132 s instead of 171 s in a 180 s run.
+  20 → 2 → 20 Mbps became readable from 138 s instead of staying reduced.
+  Capture-to-arrival p95: 62 → 68 ms and 58 → 55 ms respectively. Home link:
+  47 → 32 ms, no probe. LAN: no probe or restart. With 1% loss the recovered
+  link did not trigger a climb followed by a fall in either final 180 s run.
+- **Probe cost is visible, not zero.** gpu-screen-recorder has no live IDR
+  command in its signal/IPC API, so a probe restarts the encoder. Measured
+  arrival gaps: 394–585 ms on clean/restricted links, 499–1367 ms in two lossy
+  runs. One lossy run had a 1.42 s late-frame stretch during the external dip,
+  before recovery. These are TCP/restart limits, not a zero-freeze guarantee.
+  The lab report now lists each restart's arrival gap separately.
+- Tests on the alpha.41 base: 508 total, 507 passed, one skipped, zero failures.
+  Unit coverage includes calm jitter, sustained queue, fresh recovery samples,
+  shared restart budget, tiny-key trials/backoff and no probes on stable LAN or
+  roomy WAN. Twenty simulated minutes on an unchanged tight link: ten probes
+  became four. A useful probe after a 2 → 20 Mbps recovery kept every climb
+  time unchanged.
+
 ## 0.1.0-alpha.41 (2026-10-01)
 
 One shortcut row for Dev, Terminals and the Screen. Page and server key lists; the installed
@@ -101,31 +131,6 @@ Pages and server messages; the installed APK keeps working.
   was found." (server and page), which also reads right when pairing.
 - Verified: `npm test` 0 fail; an end-to-end acceptance on the two-node lab in a Chromium
   bench (rd-ux and the device picker) passed 26 of 26 twice.
-
-## Unreleased
-
-- **Remote video recovers after a link dip without reconnecting.** Isolated
-  ack phase/jitter spikes no longer reset the entire 30-second calm window.
-  After a fall, a same-step keyframe probe refreshes capacity before a measured
-  climb (2× headroom, sample valid for 120 s). Recovery restarts share a 60 s
-  budget. A landed key below the 20 KB sampling threshold allows only the
-  ADR's one-step trial, with failed-step backoff, not a jump. Old pages, LAN,
-  the phone's Auto/JPEG and the emergency/down/shed signals are unchanged.
-- Verified with the desktop lab, 3440×1440, 14 px text: 2.5 → 30 Mbps from
-  second 30 became readable from 132 s instead of 171 s in a 180 s run.
-  20 → 2 → 20 Mbps became readable from 138 s instead of staying reduced.
-  Capture-to-arrival p95: 62 → 68 ms and 58 → 55 ms respectively. Home link:
-  47 → 32 ms, no probe. LAN: no probe or restart. With 1% loss the recovered
-  link did not trigger a climb followed by a fall in either final 180 s run.
-- **Probe cost is visible, not zero.** gpu-screen-recorder has no live IDR
-  command in its signal/IPC API, so a probe restarts the encoder. Measured
-  arrival gaps: 394–585 ms on clean/restricted links, 499–1367 ms in two lossy
-  runs. One lossy run had a 1.42 s late-frame stretch during the external dip,
-  before recovery. These are TCP/restart limits, not a zero-freeze guarantee.
-  The lab report now lists each restart's arrival gap separately.
-- Tests: 458 total, 457 passed, one skipped, zero failures. Unit coverage
-  includes calm jitter, sustained queue, fresh recovery samples, shared restart
-  budget, tiny-key trials/backoff and no probes on stable LAN or roomy WAN.
 
 ## 0.1.0-alpha.36 (2026-10-01)
 

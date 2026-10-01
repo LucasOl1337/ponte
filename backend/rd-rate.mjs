@@ -53,6 +53,7 @@ const OPEN_WINDOW_MS = 20000, OPEN_CALM_MS = 2000, OPEN_HEADROOM = 2;
 // cannot tell whether the link recovered. Refresh it within the same restart
 // budget before climbing, and require the same headroom as the fast opening.
 const RECOVERY_SAMPLE_MS = SAMPLE_FRESH_MS;
+const PROBE_BACKOFF_MAX_MS = 10 * 60000;
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
@@ -75,6 +76,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   let lastRestartAt = -Infinity, lastDownAt = -Infinity, lastUpAt = -Infinity, upTo = null, atStepSince = now();
   let lastUncalmAt = now(), uncalmSince = null, lastReportAt = -Infinity, badStreak = 0;
   let lastKey = null, opening = false;
+  let probeAt = null, probeFailures = 0, probeRetryAt = -Infinity;
   let stage = view;
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
@@ -132,6 +134,8 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
 
   function change(reason, next) {
     const t = now();
+    if (reason === 'up' || reason === 'down') { probeAt = null; probeFailures = 0; probeRetryAt = -Infinity; }
+    if (reason === 'probe') probeAt = t;
     if (reason === 'down' && upTo !== null && step === upTo && t - lastUpAt <= FAILED_UP_MS) fail(upTo, t);
     if (reason === 'down' || reason === 'wan') lastDownAt = t;
     if (reason === 'down') opening = false;
@@ -249,6 +253,17 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       const burst = arrived.find(item => item.keyframe && item.bytes >= SAMPLE_MIN_BYTES);
       if (burst) {
         sample = { at: t, sentAt: burst.at, kbps: burst.bytes * 8 / Math.max(SAMPLE_MIN_MS, t - burst.at - before) };
+        // No extra pauses every two minutes on a link that has not improved.
+        // Count each probe only once, when its measured keyframe lands. A
+        // useful sample keeps the existing recovery timing untouched.
+        if (probeAt !== null && burst.at >= probeAt) {
+          const next = WAN_STEPS[step + 1];
+          if (next && sample.kbps < OPEN_HEADROOM * next.kbps) {
+            probeFailures++;
+            probeRetryAt = t + Math.min(PROBE_BACKOFF_MAX_MS, RECOVERY_SAMPLE_MS * 2 ** (probeFailures - 1));
+          }
+          probeAt = null;
+        }
         for (const [target] of backoff) if (sample.kbps >= SAMPLE_CLEARS_BACKOFF * WAN_STEPS[target].kbps) backoff.delete(target);
       }
       drained(t);
@@ -348,6 +363,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
         // One same-step keyframe, never more than once a minute. Unlike a
         // blind climb it measures room without increasing the delta rate.
         if (!sample || sample.sentAt < lastDownAt + DOWN_QUIET_MS || t - sample.at > RECOVERY_SAMPLE_MS) {
+          if (t < probeRetryAt) return null;
           return change('probe', step);
         }
         let target = WAN_STEPS.findLastIndex(s => s.kbps <= sample.kbps / OPEN_HEADROOM);

@@ -358,6 +358,33 @@ test('acks: recovery on an unchanged tight link probes at most once a minute and
   for (let i = 1; i < probes.length; i++) assert.ok(probes[i].at - probes[i - 1].at >= 60000);
 });
 
+test('acks: probes with no room back off 2, 4, 8 minutes, capped at 10, not a pause every two minutes', () => {
+  const { events } = simulate({ seconds: 3600, capacity: () => 1200 });
+  const probes = events.filter(e => e.reason === 'probe');
+  assert.ok(probes.filter(e => e.at < 1200000).length <= 4, JSON.stringify(probes));
+  assert.equal(events.filter(e => e.reason === 'up').length, 0);
+  const waits = probes.slice(1).map((e, i) => e.at - probes[i].at);
+  for (let i = 0; i < waits.length; i++) {
+    const expected = Math.min(600000, 120000 * 2 ** i);
+    assert.ok(waits[i] >= expected && waits[i] < expected + 2000, JSON.stringify(waits));
+  }
+});
+
+test('acks: useful recovery probe keeps the previous 2 to 20 Mbps climb times', () => {
+  const { events } = simulate({ seconds: 300, capacity: t => t < 15000 ? 20000 : t < 45000 ? 2000 : 20000 });
+  assert.deepEqual(events.filter(e => e.reason === 'up').map(e => [e.at, e.step]),
+    [[3000, 5], [139000, 2], [199000, 4], [259000, 5]]);
+});
+
+test('acks: up and down clear probe backoff for the new step', () => {
+  const { events } = simulate({ seconds: 900, capacity: t => t < 400000 ? 1200 : t < 650000 ? 30000 : 1200 });
+  const up = events.find(e => e.reason === 'up');
+  assert.ok(up, JSON.stringify(events));
+  const down = events.filter(e => e.reason === 'down' && e.at >= 650000).at(-1);
+  const probe = events.find(e => e.reason === 'probe' && e.at > down.at);
+  assert.ok(probe.at - down.at >= 60000 && probe.at - down.at < 80000, JSON.stringify(events));
+});
+
 test('acks: no recovery probe on stable LAN, roomy WAN or the highest step', () => {
   for (const open of [4, 30]) {
     const { events, c } = simulate({ seconds: 180, capacity: () => 100000, oneWay: open === 4 ? 1 : 12, open });
