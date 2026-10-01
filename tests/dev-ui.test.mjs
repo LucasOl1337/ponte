@@ -85,14 +85,18 @@ test('Dev lists agent sessions first, renders the ansi read, and every bar key s
   assert.equal(h.el('#dev-output').innerHTML.includes('hello'), true);
   assert.equal(h.el('#dev-size').textContent, '51×41');
   assert.equal(h.el('.nav-item[data-nav="dev"]').getAttribute('aria-label'), 'Development');
-  for (const button of h.el('#dev-keys').querySelectorAll('button')) { button.click(); await flush(); }
+  // The bar is the shared key bar: Enter, Esc and Ctrl+C first and fixed, then
+  // the agent's own keys (a Claude session).
+  const bar = h.el('#dev-keys');
+  assert.equal(bar.getAttribute('data-key-context'), 'agent');
+  assert.deepEqual(bar.querySelector('.key-head').querySelectorAll('button').map(button => button.dataset.shortcut), ['enter', 'esc', 'ctrl-c']);
+  assert.deepEqual(bar.querySelector('.key-tail').querySelectorAll('button').map(button => button.dataset.shortcut).slice(0, 4), ['shift-tab', 'up', 'down', 'newline']);
+  for (const button of bar.querySelector('.key-row').querySelectorAll('[data-shortcut]')) { button.click(); await flush(); }
   const sent = h.writes().filter(call => call.path === `/api/terminals/${claude.id}/input`).map(call => JSON.parse(call.body));
-  assert.deepEqual(sent, [
-    // The 1/2/3 menu answers come right after Esc (owner's choice).
-    { key: 'Escape' }, { text: '1' }, { text: '2' }, { text: '3' }, { key: 'ShiftTab' }, { key: 'Tab' }, { key: 'ArrowUp' }, { key: 'ArrowDown' }, { key: 'ArrowLeft' }, { key: 'ArrowRight' }, { key: 'Enter' }, { key: 'Interrupt' },
-    { text: '/' }, { text: '@' }, { text: '!' },
-    { key: 'PageUp' }, { key: 'PageDown' }, { key: 'Ctrl+O' }, { key: 'Ctrl+R' }, { key: 'Ctrl+D' }, { key: 'Ctrl+L' },
-  ]);
+  assert.deepEqual(sent.slice(0, 7), [{ key: 'Enter' }, { key: 'Escape' }, { key: 'Interrupt' }, { key: 'ShiftTab' }, { key: 'ArrowUp' }, { key: 'ArrowDown' }, { key: 'Ctrl+J' }]);
+  for (const body of [{ text: '1' }, { text: '2' }, { text: '3' }, { text: '/' }, { text: '@' }, { key: 'PageUp' }, { key: 'PageDown' }, { key: 'Ctrl+O' }, { key: 'Ctrl+R' }, { key: 'Ctrl+D' }, { key: 'Ctrl+L' }]) {
+    assert.ok(sent.some(item => JSON.stringify(item) === JSON.stringify(body)), JSON.stringify(body));
+  }
   // The next read asks only for changes since what is on screen, soon after input.
   h.run('devRead(devGeneration)'); await flush();
   assert.ok(h.calls.some(call => call.path === `/api/terminals/${claude.id}?format=ansi&since=h1`));

@@ -12,7 +12,15 @@ const keyCodes = {
   Copy: [29, 46], Paste: [29, 47], Undo: [29, 44], SelectAll: [29, 30],
   // Window/desktop keys the phone keyboard has no way to express.
   AltTab: [56, 15], Super: [125], CloseWindow: [56, 62],
+  // Chords the phone keyboard cannot send either: an agent's mode and new
+  // line, the PC terminal's own copy/paste, a shell's history and clear, and
+  // the usual app shortcuts. Each is a fixed list of evdev codes.
+  ShiftTab: [42, 15], ShiftEnter: [42, 28],
+  'Ctrl+Shift+C': [29, 42, 46], 'Ctrl+Shift+V': [29, 42, 47], 'Ctrl+Shift+Z': [29, 42, 44],
+  'Ctrl+D': [29, 32], 'Ctrl+F': [29, 33], 'Ctrl+L': [29, 38], 'Ctrl+R': [29, 19],
+  'Ctrl+S': [29, 31], 'Ctrl+T': [29, 20], 'Ctrl+W': [29, 17], 'Ctrl+Tab': [29, 15], F5: [63],
 };
+export const DESKTOP_KEYS = Object.freeze(Object.keys(keyCodes));
 export const LIGHT_PRESETS = Object.freeze(['lava', 'brasa', 'oceano', 'aurora', 'floresta', 'lua']);
 const workspace = (value) => ({ id: Number(value?.id) || 0, name: String(value?.name ?? '').slice(0, 150) });
 const windowInfo = (value) => value?.address ? ({

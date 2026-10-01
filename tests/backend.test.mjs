@@ -332,6 +332,23 @@ test('drag renews its lease and auto-releases; shortcut keys release modifiers',
   assert.equal(f.calls.filter(call => call.args.includes('0x80')).length, 2);
 });
 
+test('the new desktop chords press fixed evdev codes and release them in reverse; unknown names never reach ydotool', async t => {
+  const f = await fixture(t);
+  // evdev: 29 LEFTCTRL, 42 LEFTSHIFT, 15 TAB, 28 ENTER, 46 C, 47 V, 44 Z, 32 D,
+  // 33 F, 38 L, 19 R, 31 S, 20 T, 17 W, 63 F5.
+  const expected = {
+    ShiftTab: [42, 15], ShiftEnter: [42, 28], 'Ctrl+Shift+C': [29, 42, 46], 'Ctrl+Shift+V': [29, 42, 47], 'Ctrl+Shift+Z': [29, 42, 44],
+    'Ctrl+D': [29, 32], 'Ctrl+F': [29, 33], 'Ctrl+L': [29, 38], 'Ctrl+R': [29, 19], 'Ctrl+S': [29, 31], 'Ctrl+T': [29, 20], 'Ctrl+W': [29, 17], 'Ctrl+Tab': [29, 15], F5: [63],
+  };
+  for (const [key, codes] of Object.entries(expected)) {
+    await f.desktop.action({ type: 'keyboard.key', key });
+    assert.deepEqual(f.calls.at(-1).args, ['key', '--key-delay', '1', ...codes.map(code => `${code}:1`), ...codes.toReversed().map(code => `${code}:0`)], key);
+  }
+  const before = f.calls.length;
+  for (const key of ['Ctrl+Alt+Delete', 'ctrl+l', 'Ctrl+J', 'F4', 'Shift+Tab', '__proto__', 'toString']) await assert.rejects(f.desktop.action({ type: 'keyboard.key', key }), { code: 'KEY_NOT_ALLOWED' }, key);
+  assert.equal(f.calls.length, before);
+});
+
 test('failed drag release retains held state until a later release succeeds', async () => {
   const calls = [];
   let failures = 1;

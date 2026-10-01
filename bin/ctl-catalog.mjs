@@ -43,13 +43,23 @@ const pointParams = () => ({
 const fleetMachine = (options = {}) => string({ maxLength: 68, pattern: `^(?:self|ssh:[A-Za-z0-9][A-Za-z0-9._-]{0,63})${end}`, ...options });
 const button = string({ ...required, enum: ['left', 'right', 'middle'] });
 const workspaceId = integer(1, 100, required);
+// Same names, same order as backend/desktop.mjs keyCodes and
+// backend/terminals.mjs keys (tests/ctl.test.mjs keeps them equal).
 const desktopKeys = [
   'Enter', 'Escape', 'BackSpace', 'Tab', 'Delete',
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
   'Home', 'End', 'PageUp', 'PageDown',
   'Copy', 'Paste', 'Undo', 'SelectAll', 'AltTab', 'Super', 'CloseWindow',
+  'ShiftTab', 'ShiftEnter', 'Ctrl+Shift+C', 'Ctrl+Shift+V', 'Ctrl+Shift+Z',
+  'Ctrl+D', 'Ctrl+F', 'Ctrl+L', 'Ctrl+R', 'Ctrl+S', 'Ctrl+T', 'Ctrl+W', 'Ctrl+Tab', 'F5',
 ];
-const terminalKeys = ['Enter', 'Tab', 'Escape', 'BackSpace', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Interrupt'];
+const terminalKeys = [
+  'Enter', 'Tab', 'ShiftTab', 'Escape', 'BackSpace', 'Delete',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Home', 'End', 'PageUp', 'PageDown', 'Interrupt',
+  'Ctrl+A', 'Ctrl+D', 'Ctrl+E', 'Ctrl+J', 'Ctrl+L', 'Ctrl+O',
+  'Ctrl+R', 'Ctrl+T', 'Ctrl+U', 'Ctrl+W', 'Ctrl+Z',
+];
 const dpmsParams = () => ({
   enabled: boolean(),
   state: string({ enum: ['on', 'off'] }),
