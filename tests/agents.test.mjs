@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, mkdir, writeFile, symlink, rm, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, appendFile, symlink, rm, utimes, stat } from 'node:fs/promises';
 import { createAgents, parseStat, agentKind, agentServer, modelFromArgv, claudeMessages, codexMessages, lastMessages } from '../backend/agents.mjs';
 import { createApp } from '../server.mjs';
 
@@ -649,6 +649,7 @@ test('agent routes require pairing, validate ids and JSON, and serialize replies
   assert.equal((await fetch(`${base}/api/agents`)).status, 401);
   assert.deepEqual(await (await request('/api/agents')).json(), { items: [{ id: 'p-1-2', kind: 'claude' }], scannedAt: 1, scanMs: 3 });
   assert.equal((await request('/api/agents/p-1-2/transcript')).status, 200);
+  for (const suffix of ['?since=../../etc/passwd','?wait=-1','?wait=1&wait=2','?since='+ 'a'.repeat(32)+'&since='+ 'b'.repeat(32)]) assert.equal((await request('/api/agents/p-1-2/transcript'+suffix)).status,400);
   const missing = await request('/api/agents/p-9-9/transcript', { headers: { 'Accept-Language': 'pt-BR' } });
   assert.equal(missing.status, 404);
   assert.equal((await missing.json()).error, 'Este agente ou terminal não está mais rodando.');
@@ -659,4 +660,192 @@ test('agent routes require pairing, validate ids and JSON, and serialize replies
   assert.deepEqual(calls, [['p-1-2', { text: 'oi' }, 'function', 'function']]);
   assert.equal((await request('/api/agents/p-1-2/reply')).status, 404);
   assert.equal((await request('/api/agents/p-1-2/transcript', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 404);
+});
+
+test('a known live agent without a transcript discovers the session and file created later on the next transcript read', async t => {
+  const w = await world(t);
+  const cwd = path.join(w.home, 'work', 'late-transcript-fixture');
+  await w.add(102, 'claude', 1, { cwd, start: AGENT_START });
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const [item] = (await agents.list()).items;
+  assert.equal(item.id, `p-102-${AGENT_START}`);
+  assert.equal(item.transcript, false);
+  const unavailable = await agents.transcript(item.id);
+  assert.equal(unavailable.available, false);
+  assert.deepEqual(unavailable.messages, []);
+
+  await w.file('.claude/sessions/102.json', line({ pid: 102, sessionId: SESSION, cwd, procStart: String(AGENT_START), status: 'idle' }));
+  const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  await w.file(`.claude/projects/${encoded}/${SESSION}.jsonl`, `${line({ type: 'assistant', timestamp: '2026-09-28T10:00:00Z', message: { content: [{ type: 'text', text: 'Transcrição criada depois.' }] } })}\n`);
+  // Do not refresh list: the next read of this exact id must rediscover it.
+  const available = await agents.transcript(item.id);
+  assert.equal(available.id, item.id);
+  assert.equal(available.available, true);
+  assert.deepEqual(available.messages.map(message => [message.role, message.text]), [['assistant', 'Transcrição criada depois.']]);
+});
+
+test('transcript cursor sends only appended messages, unchanged is small, partial records survive and rotation resets', async t => {
+  const w = await world(t);
+  await w.add(100,'foot',1);
+  await w.add(101,'bash',100);
+  await w.add(102,'claude',101,{start:5});
+  await w.file('.claude/sessions/102.json',line({sessionId:SESSION,procStart:'5',status:'busy'}));
+  const message = (text,at) => line({type:'assistant',timestamp:at,message:{content:[{type:'text',text}]}});
+  const file = await w.file(`.claude/projects/${w.home.replace(/[^a-zA-Z0-9]/g,'-')}/${SESSION}.jsonl`,message('first','2026-09-28T10:00:00Z')+'\n');
+  const agents = createAgents({procRoot:w.proc,home:w.home,runner:hypr([foot(100,'0xc1','sample')]).runner,bootMs:BOOT*1000});
+  const item = (await agents.list()).items[0];
+  const initial = await agents.transcript(item.id);
+  assert.match(initial.cursor,/^[a-f0-9]{32}$/);
+  assert.equal(initial.reset,true);
+  assert.equal(initial.messages.length,1);
+  const idle = await agents.transcript(item.id,{since:initial.cursor});
+  assert.equal(idle.unchanged,true);
+  assert.deepEqual(idle.messages,[]);
+  assert.ok(Buffer.byteLength(JSON.stringify(idle))<400);
+  const second = message('ação nova','2026-09-28T10:00:01Z');
+  const bytes = Buffer.from(second);
+  const split = bytes.indexOf(Buffer.from('ç'))+1;
+  await appendFile(file,bytes.subarray(0,split));
+  const partial = await agents.transcript(item.id,{since:initial.cursor});
+  assert.equal(partial.reset,false);
+  assert.deepEqual(partial.messages,[]);
+  await appendFile(file,Buffer.concat([bytes.subarray(split),Buffer.from('\n')]));
+  const delta = await agents.transcript(item.id,{since:partial.cursor});
+  assert.equal(delta.reset,false);
+  assert.deepEqual(delta.messages.map(m=>m.text),['ação nova']);
+  assert.notEqual(delta.cursor,partial.cursor);
+  assert.ok(!JSON.stringify(delta).includes('.jsonl'));
+  await writeFile(file,message('rotated','2026-09-28T10:00:02Z')+'\n');
+  const rotated = await agents.transcript(item.id,{since:delta.cursor});
+  assert.equal(rotated.reset,true);
+  assert.deepEqual(rotated.messages.map(m=>m.text),['rotated']);
+  const unknown = await agents.transcript(item.id,{since:'f'.repeat(32)});
+  assert.equal(unknown.reset,true);
+  assert.deepEqual(unknown.messages.map(m=>m.text),['rotated']);
+});
+
+test('JCode transcript cursor follows journal appends and resets safely when journal folds into snapshot',async t=>{
+  const w=await world(t);
+  await w.add(200,'jcode',1,{start:5});
+  const sid='session_lab_cursor_0001';
+  await w.file('.jcode/client_sessions/200',sid);
+  const m=(id,text)=>({id,role:'assistant',timestamp:'2026-09-28T10:00:00Z',content:[{type:'text',text}]});
+  const first=m('message_1_1','first');
+  const snapshot=await w.file(`.jcode/sessions/${sid}.json`,line({messages:[first],provider_key:'lab',model:'lab-model'}));
+  const journal=await w.file(`.jcode/sessions/${sid}.journal.jsonl`,line({meta:{model:'lab-model'},append_messages:[m('message_2_2','second')]})+'\n');
+  const agents=createAgents({procRoot:w.proc,home:w.home,runner:hypr([]).runner,bootMs:BOOT*1000});
+  const item=(await agents.list()).items[0];
+  const initial=await agents.transcript(item.id);
+  assert.deepEqual(initial.messages.map(m=>m.text),['first','second']);
+  await appendFile(journal,line({append_messages:[m('message_3_3','third')]})+'\n');
+  const delta=await agents.transcript(item.id,{since:initial.cursor});
+  assert.equal(delta.reset,false);
+  assert.deepEqual(delta.messages.map(m=>m.text),['third']);
+  await writeFile(snapshot,line({messages:[first,m('message_2_2','second'),m('message_3_3','third')],provider_key:'lab',model:'lab-model'}));
+  await writeFile(journal,'');
+  const folded=await agents.transcript(item.id,{since:delta.cursor});
+  assert.deepEqual(folded.messages,[]);
+  const full=await agents.transcript(item.id);
+  assert.deepEqual(full.messages.map(m=>m.text),['first','second','third']);
+});
+
+test('the same live JCode pid discovers a changed client session mapping without a list refresh', async t => {
+  const w = await world(t);
+  await w.add(102, 'jcode', 1, { start: AGENT_START });
+  await jcodeFiles(w, 102, JCODE_A, { messages: [
+    jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'assistant', [{ type: 'text', text: 'Sessão alfa da fixture.' }]),
+  ] });
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const [item] = (await agents.list()).items;
+  const initial = await agents.transcript(item.id);
+  assert.deepEqual(initial.messages.map(message => message.text), ['Sessão alfa da fixture.']);
+  await jcodeFiles(w, 102, JCODE_B, { writtenAt: AGENT_WRITTEN_AT + 1000, messages: [
+    jcodeMessage('00000000-0000-4000-8000-0000000000e2', 'assistant', [{ type: 'text', text: 'Sessão beta da fixture.' }], 1),
+  ] });
+  const changed = await agents.transcript(item.id, { since: initial.cursor });
+  assert.equal(changed.id, item.id);
+  assert.equal(changed.available, true);
+  assert.notEqual(changed.cursor, initial.cursor);
+  assert.equal(changed.reset, true);
+  assert.deepEqual(changed.messages.map(message => message.text), ['Sessão beta da fixture.']);
+  assert.deepEqual((await agents.transcript(item.id)).messages.map(message => message.text), ['Sessão beta da fixture.']);
+});
+
+test('truncate and regrow of the same transcript inode resets rewritten text even when the last 64 cached bytes match', async t => {
+  const w = await world(t);
+  await w.add(102, 'claude', 1, { start: AGENT_START });
+  await w.file('.claude/sessions/102.json', line({ sessionId: SESSION, procStart: String(AGENT_START), status: 'busy' }));
+  const message = text => `${line({ type: 'assistant', timestamp: '2026-09-28T10:00:00Z', message: { content: [{ type: 'text', text }] } })}\n`;
+  const suffix = ' checkpoint fixture '.repeat(8);
+  const before = message(`Texto antigo.${suffix}`), rewritten = message(`Texto refeito${suffix}`);
+  assert.equal(Buffer.byteLength(before), Buffer.byteLength(rewritten), 'rewrite keeps the old record boundary');
+  assert.ok(Buffer.from(before).subarray(-64).equals(Buffer.from(rewritten).subarray(-64)), 'same checkpoint at the old EOF');
+  const file = await w.file(`.claude/projects/${w.home.replace(/[^a-zA-Z0-9]/g, '-')}/${SESSION}.jsonl`, before);
+  await utimes(file, AGENT_WRITTEN_AT / 1000, AGENT_WRITTEN_AT / 1000);
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const [item] = (await agents.list()).items;
+  const initial = await agents.transcript(item.id);
+  assert.deepEqual(initial.messages.map(entry => entry.text), [`Texto antigo.${suffix}`.trim()]);
+  const oldStat = await stat(file);
+  // writeFile truncates in place, then the new record grows past the old EOF.
+  await writeFile(file, rewritten + message('Mensagem nova após rewrite.'));
+  await utimes(file, (AGENT_WRITTEN_AT + 1000) / 1000, (AGENT_WRITTEN_AT + 1000) / 1000);
+  const newStat = await stat(file);
+  assert.equal(newStat.ino, oldStat.ino);
+  assert.equal(newStat.dev, oldStat.dev);
+  assert.ok(newStat.size > oldStat.size);
+  const changed = await agents.transcript(item.id, { since: initial.cursor });
+  assert.equal(changed.reset, true);
+  assert.deepEqual(changed.messages.map(entry => entry.text), [`Texto refeito${suffix}`.trim(), 'Mensagem nova após rewrite.']);
+  assert.deepEqual((await agents.transcript(item.id)).messages.map(entry => entry.text), changed.messages.map(entry => entry.text));
+});
+
+test('a removed transcript stays unavailable when subsequent reads reuse the missing-file cursor', async t => {
+  const w = await world(t);
+  await w.add(102, 'claude', 1, { start: AGENT_START });
+  await w.file('.claude/sessions/102.json', line({ sessionId: SESSION, procStart: String(AGENT_START), status: 'busy' }));
+  const file = await w.file(`.claude/projects/${w.home.replace(/[^a-zA-Z0-9]/g, '-')}/${SESSION}.jsonl`, `${line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Mensagem antes de remover.' }] } })}\n`);
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const [item] = (await agents.list()).items;
+  const initial = await agents.transcript(item.id);
+  assert.equal(initial.available, true);
+  await rm(file);
+  const missing = await agents.transcript(item.id, { since: initial.cursor });
+  assert.equal(missing.available, false);
+  assert.deepEqual(missing.messages, []);
+  assert.match(missing.cursor, /^[a-f0-9]{32}$/);
+  const again = await agents.transcript(item.id, { since: missing.cursor });
+  assert.equal(again.available, false);
+  assert.deepEqual(again.messages, []);
+  assert.equal((await agents.transcript(item.id)).available, false);
+});
+
+test('Claude replaces its newest-file fallback when a valid PID session mapping appears without a list refresh', async t => {
+  const w = await world(t);
+  const cwd = path.join(w.home, 'work', 'claude-fallback-fixture');
+  const sessionB = '00000000-0000-4000-8000-000000000002';
+  const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  const message = text => `${line({ type: 'assistant', timestamp: '2026-09-28T10:00:00Z', message: { content: [{ type: 'text', text }] } })}\n`;
+  await w.add(102, 'claude', 1, { cwd, start: AGENT_START });
+  // No sessions/102.json yet, so the single live Claude uses newestClaudeFile.
+  const fallback = await w.file(`.claude/projects/${encoded}/${SESSION}.jsonl`, message('Transcript alfa por fallback.'));
+  await utimes(fallback, (AGENT_WRITTEN_AT + 2000) / 1000, (AGENT_WRITTEN_AT + 2000) / 1000);
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const [item] = (await agents.list()).items;
+  assert.equal(item.transcript, true);
+  const initial = await agents.transcript(item.id);
+  assert.deepEqual(initial.messages.map(entry => entry.text), ['Transcript alfa por fallback.']);
+
+  const mapped = await w.file(`.claude/projects/${encoded}/${sessionB}.jsonl`, message('Transcript beta mapeado.'));
+  await utimes(mapped, AGENT_WRITTEN_AT / 1000, AGENT_WRITTEN_AT / 1000);
+  await w.file('.claude/sessions/102.json', line({ pid: 102, sessionId: sessionB, cwd, procStart: String(AGENT_START), status: 'idle' }));
+  // Alfa stays newer than beta, proving that the mapping must override fallback.
+  const changed = await agents.transcript(item.id, { since: initial.cursor });
+  assert.equal(changed.id, item.id);
+  assert.equal(changed.available, true);
+  assert.notEqual(changed.cursor, initial.cursor);
+  assert.notEqual(changed.unchanged, true);
+  assert.equal(changed.reset, true);
+  assert.deepEqual(changed.messages.map(entry => entry.text), ['Transcript beta mapeado.']);
+  assert.deepEqual((await agents.transcript(item.id)).messages.map(entry => entry.text), ['Transcript beta mapeado.']);
 });

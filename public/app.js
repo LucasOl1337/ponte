@@ -73,12 +73,18 @@ function apiUrl(path, home = false) {
 const monitorKey = () => targetNode ? `ponte-monitor:${targetNode}` : 'ponte-monitor';
 
 async function api(path, options = {}) {
+  const {responseJson,...fetchOptions} = options;
   const controller = new AbortController();
+  const callerAbort = () => controller.abort();
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener('abort',callerAbort,{once:true});
+  }
   const timeout = setTimeout(() => controller.abort(), options.timeout || 15000);
   const requestToken = token;
   const headers = {'Accept-Language':i18n.locale,Authorization: `Bearer ${requestToken}`, ...options.headers};
   try {
-    const response = await fetch(apiUrl(path, options.home), { ...options, headers, signal: controller.signal, cache: 'no-store' });
+    const response = await fetch(apiUrl(path, options.home), { ...fetchOptions, headers, signal: controller.signal, cache: 'no-store' });
     if (!response.ok) {
       let message = t("Não foi possível concluir a ação.");
       let details;
@@ -93,12 +99,14 @@ async function api(path, options = {}) {
       }
       throw Object.assign(new Error(message),{errorCode:details?.errorCode,errorParameters:details?.errorParameters});
     }
-    return response;
+    // Transcript reads keep their cancellation and timeout through the body,
+    // not only until response headers arrive.
+    return responseJson ? await response.json() : response;
   } catch (error) {
     if (error.name === 'AbortError') throw new Error(t("O PC demorou para responder. Tente novamente."));
     if (error instanceof TypeError) throw new Error(t("Sem resposta do PC. Confira o Tailscale e a conexão."));
     throw error;
-  } finally { clearTimeout(timeout); }
+  } finally { clearTimeout(timeout); options.signal?.removeEventListener('abort',callerAbort); }
 }
 
 // The parsed answer of an action, or false when it failed (already toasted).
@@ -2314,6 +2322,11 @@ let agentItems = null;
 let agentTimer;
 let agentOpenId = '';
 let agentTranscriptTimer;
+let agentTranscriptRequest = null;
+let agentTranscriptEpoch = 0;
+let agentTranscriptCursor = '';
+let agentTranscriptMessages = [];
+let agentTranscriptLive = false;
 let agentReplyBusy = false;
 let agentListHtml = '';
 let agentTranscriptHtml = '';
@@ -2551,7 +2564,7 @@ function agentOpenItem() { return (agentItems || []).filter(item => item.id === 
 function renderAgentHeader() {
   const item = agentOpenItem();
   if (!item) { $('#agent-dialog-meta').textContent = t('Este agente não está mais rodando.'); $('#agent-reply-form').hidden = true; return; }
-  $('#agent-dialog-kind').textContent = `${agentKindLabel(item.kind)} · ${agentStateLabel(item)}${item.waitingFor ? ` (${item.waitingFor})` : ''}`;
+  $('#agent-dialog-kind').textContent = `${agentKindLabel(item.kind)} · ${agentStateLabel(item)}${item.waitingFor ? ` (${item.waitingFor})` : ''}${agentTranscriptLive ? ` · ${t('Ao vivo')}` : ''}`;
   $('#agent-dialog-title').textContent = item.title;
   $('#agent-dialog-meta').textContent = [agentSummary(item),agentRole(item),agentModel(item),item.activity && item.activity.text].filter(Boolean).join('\n');
   const where = item.where || {};
@@ -2573,17 +2586,50 @@ function renderAgentTranscript(view) {
 }
 async function readAgentTranscript(id) {
   clearTimeout(agentTranscriptTimer);
-  if (agentOpenId !== id || !$('#agent-dialog').open) return;
+  if (agentOpenId !== id || !agentTranscriptVisible()) return;
+  agentTranscriptRequest?.abort();
+  const controller = new AbortController();
+  agentTranscriptRequest = controller;
+  const epoch = ++agentTranscriptEpoch;
+  let failed = false;
   try {
-    const view = await (await api(`/agents/${encodeURIComponent(id)}/transcript`,{timeout:8000})).json();
-    if (agentOpenId === id) renderAgentTranscript(view);
+    const query = agentTranscriptCursor ? `?since=${encodeURIComponent(agentTranscriptCursor)}&wait=10` : '';
+    const view = await api(`/agents/${encodeURIComponent(id)}/transcript${query}`,{timeout:14000,signal:controller.signal,responseJson:true});
+    if (epoch !== agentTranscriptEpoch || agentOpenId !== id || !agentTranscriptVisible()) return;
+    if (!view.unchanged) {
+      agentTranscriptMessages = view.reset !== false ? (view.messages || []) : agentTranscriptMessages.concat(view.messages || []);
+      // Keep a bounded window on the phone too. A reconnect/rotation resets
+      // from the server; an ordinary append keeps the line being read.
+      agentTranscriptMessages = agentTranscriptMessages.slice(-80);
+      renderAgentTranscript({...view,messages:agentTranscriptMessages});
+    }
+    agentTranscriptCursor = typeof view.cursor === 'string' ? view.cursor : '';
+    agentTranscriptLive = !!view.available;
+    renderAgentHeader();
   } catch (error) {
-    if (agentOpenId === id) i18n.write($('#agent-dialog-meta'),error);
+    if (controller.signal.aborted || epoch !== agentTranscriptEpoch) return;
+    failed = true; agentTranscriptLive = false;
+    if (agentOpenId === id) { renderAgentHeader(); i18n.write($('#agent-dialog-meta'),error); }
+  } finally {
+    if (agentTranscriptRequest === controller) agentTranscriptRequest = null;
   }
-  if (agentOpenId === id && $('#agent-dialog').open && !document.hidden) agentTranscriptTimer = setTimeout(() => readAgentTranscript(id), 3000);
+  if (epoch === agentTranscriptEpoch && agentOpenId === id && agentTranscriptVisible()) agentTranscriptTimer = setTimeout(() => readAgentTranscript(id), failed || !agentTranscriptCursor ? 3000 : 150);
+}
+function agentTranscriptVisible() { return !!agentOpenId && $('#agent-dialog').open && !!token && !document.hidden && !nativePaused; }
+function stopAgentTranscript() {
+  clearTimeout(agentTranscriptTimer);
+  agentTranscriptEpoch++;
+  agentTranscriptRequest?.abort(); agentTranscriptRequest = null;
+  agentTranscriptLive = false;
+}
+function updateAgentTranscript() {
+  stopAgentTranscript();
+  if (agentTranscriptVisible()) readAgentTranscript(agentOpenId);
 }
 function openAgent(id) {
+  stopAgentTranscript();
   agentOpenId = id;
+  agentTranscriptCursor = ''; agentTranscriptMessages = [];
   const box = $('#agent-transcript');
   box.innerHTML = `<p class="hint">${h('Carregando conversa…')}</p>`; agentTranscriptHtml = '';
   $('#agent-reply-text').value = ''; $('#agent-reply-status').textContent = '';
@@ -2593,7 +2639,7 @@ function openAgent(id) {
 }
 function agentShowSession() { const panel = $('#terminal-session'); if (panel.scrollIntoView) panel.scrollIntoView({block:'start',behavior:'smooth'}); }
 function closeAgent() {
-  agentOpenId = ''; clearTimeout(agentTranscriptTimer);
+  stopAgentTranscript(); agentOpenId = '';
   if ($('#agent-dialog').open) $('#agent-dialog').close();
 }
 $('#agent-list').addEventListener('click', event => {
@@ -2603,7 +2649,10 @@ $('#agent-list').addEventListener('click', event => {
   if (session) { selectTerminal(session.dataset.ponteSession); terminalPaused = false; updateTerminalNavigation(); agentShowSession(); }
 });
 $('#agent-dialog-close').addEventListener('click', closeAgent);
-$('#agent-dialog').addEventListener('close', () => { agentOpenId = ''; clearTimeout(agentTranscriptTimer); });
+$('#agent-dialog').addEventListener('close', () => { stopAgentTranscript(); agentOpenId = ''; });
+document.addEventListener('visibilitychange',updateAgentTranscript);
+window.addEventListener('ponte-native-pause',stopAgentTranscript);
+window.addEventListener('ponte-native-resume',() => { nativePaused = false; updateAgentTranscript(); });
 $('#agent-view').addEventListener('click', async () => {
   const item = agentOpenItem();
   if (!item || !item.where.address) return;

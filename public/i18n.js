@@ -4,6 +4,7 @@
   const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
   // Portuguese source messages are stable translation keys. English is the global default.
   const english = {
+  "Ao vivo": "Live",
   "Regente (conexões do canvas)": "Team lead (canvas connections)",
   "Equipe de {name}": "Team of {name}",
   "{count} agentes": "{count} agents",
@@ -808,6 +809,7 @@
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.
   const apiMessages = {
+  "INVALID_AGENT_QUERY": {"en":"Invalid conversation cursor or wait time.","pt":"Cursor de conversa ou tempo de espera inválido."},
   "HOST_NOT_ALLOWED": {
     "en": "This host is not allowed.",
     "pt": "Host não autorizado."

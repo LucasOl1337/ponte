@@ -15,7 +15,7 @@ import { ApiError, runCommand } from './backend/process.mjs';
 import { createLiveStreaming } from './backend/live.mjs';
 import { createTerminals } from './backend/terminals.mjs';
 import { createAgents } from './backend/agents.mjs';
-import { createAgentEvents } from './backend/agent-events.mjs';
+import { createAgentEvents, createTranscriptEvents } from './backend/agent-events.mjs';
 import { createTailscaleIdentity, pairingRejection } from './backend/tailscale.mjs';
 import { createTranscriber, MAX_DICTATION_BYTES } from './backend/stt.mjs';
 import { defaultPaths, loadSettings, isTailscaleIpv4Bind } from './backend/config.mjs';
@@ -214,6 +214,7 @@ export async function createApp(options = {}) {
   const images = options.images || await createImageInbox(initialized.dataDir, { env, terminals, clipboard: options.clipboard });
   const agents = options.agents || createAgents({ env, dataDir: initialized.dataDir });
   const agentEvents = options.agentEvents || createAgentEvents({ list: () => agents.list() });
+  const transcriptEvents = createTranscriptEvents({ read: (id,query) => limits.only('agents',2,() => agents.transcript(id,query)) });
   const transcriber = options.transcriber || createTranscriber(initialized.dataDir, { env });
   const tailnetIdentity = options.tailnetIdentity || createTailscaleIdentity({ env, selfAddress: settings?.nativeTls?.host || env.OMARCHY_REMOTE_NATIVE_BIND });
   // Other nodes pin this CA (or the self-signed leaf when there is no CA).
@@ -579,7 +580,21 @@ export async function createApp(options = {}) {
         return;
       }
       const agentRoute = pathname.match(/^\/api\/agents\/([^/]+)\/(transcript|reply)$/);
-      if (agentRoute?.[2] === 'transcript' && req.method === 'GET') { json(res, 200, await limits.only('agents', 2, () => agents.transcript(agentRoute[1]))); return; }
+      if (agentRoute?.[2] === 'transcript' && req.method === 'GET') {
+        for (const key of ['since','wait']) if (query.getAll(key).length > 1) throw new ApiError(400,'REPEATED_PARAMETER');
+        const since = query.get('since');
+        if (since !== null && !/^[a-f0-9]{32}$/.test(since)) throw new ApiError(400,'INVALID_AGENT_QUERY');
+        if (query.has('wait') && !/^\d{1,2}$/.test(query.get('wait'))) throw new ApiError(400,'INVALID_AGENT_QUERY');
+        const wait = Math.min(10,Number(query.get('wait')) || 0);
+        const gone = new AbortController();
+        const hangUp = () => gone.abort();
+        res.once('close',hangUp);
+        try {
+          const result = await transcriptEvents.wait(agentRoute[1],{since,wait,signal:gone.signal});
+          if (!res.destroyed && !res.writableEnded) await compressedJson(req,res,200,result);
+        } finally { res.off('close',hangUp); }
+        return;
+      }
       if (agentRoute?.[2] === 'reply' && req.method === 'POST') {
         if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
         await limits.only('body', 8, async () => {
@@ -694,6 +709,7 @@ export async function createApp(options = {}) {
     shuttingDown = true;
     limits.stop();
     agentEvents.close?.();
+    transcriptEvents.close();
     live.close();
     const rdClosed = rd.close();
     const terminalsClosed = Promise.resolve(terminals.close?.());
