@@ -82,3 +82,7 @@ Old ids keep their old path: a 16-hex mesh id and `self`/`ssh:ALIAS` for the fle
 ## Words
 
 Surfaces never show a code. `public/i18n.js` maps each one to the vocabulary of [CONTEXT.md](../CONTEXT.md#devices-adr-0002): `PonteI18n.deviceWord(group, code)` with the groups `kind`, `status`, `route`, `ponte` (route states), `adb`, `action` (the `can` keys plus `approve`, `deny`, `continue`) and `why`; an unknown code gives an empty string. `PonteI18n.deviceWords` is the table itself.
+
+## On the remote desktop (`rd.html`)
+
+The device picker reads `GET /api/devices?discover=1` when the page opens and `GET /api/devices` every 30 s while a session runs. Each entry is one line, `name · kind · state`, and this node is `name · este aparelho` (the same key as the phone's selector). What `can.control` allows is on top; everything else sits under **Sem controle daqui**, disabled, with its `why` in words ("Não roda a Ponte.", "Está offline."). The device on the screen stays selectable even if the list later says it cannot be controlled. Choosing reconnects with `?node=<id>`; `node=` in the address may also be a name or any of the `ids`, which the server's resolver takes. A server without `/api/devices` answers 404 and the page reads `/api/mesh` instead (paired and online can be controlled, as before); any other error leaves only the device the page talks to.
