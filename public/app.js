@@ -142,13 +142,13 @@ async function lightsAction(type, payload = {}, feedback = '') {
 // not; this page only draws it. The list comes through POST /api/action
 // {type:'devices.list'} with home:true, the one route every APK's proxy
 // forwards, so it is always the home node's view even while controlling
-// another device. state.mesh (polled every few seconds) still brings the
-// pending requests and the first selector before the list arrives.
+// another device. state.mesh is only a fallback before the list arrives.
 let meshSignature = '';
 let deviceList = null, devicesLoadedAt = 0, devicesBusy = false, devicesError = null, devicesMeshKey = '', devicesShowOffline = false;
+let devicesRefreshQueued = null;
 const devicesOpen = new Set();
 const DEVICES_REFRESH_MS = 30000;
-const meshSelf = () => meshInfo?.self || null;
+const meshSelf = () => deviceList?.home || meshInfo?.self || null;
 const meshPeer = id => (meshInfo?.peers || []).find(peer => peer.id === id) || null;
 const homeId = () => meshSelf()?.id || '';
 const deviceById = id => (deviceList?.devices || []).find(device => device.id === id) || null;
@@ -158,9 +158,13 @@ function targetName() {
   return deviceById(targetNode)?.name || meshPeer(targetNode)?.name || state?.node?.name || targetNode;
 }
 async function loadDevices({ force = false, deep = false } = {}) {
-  // Like the fleet: only on a node whose mesh is on (state.mesh), so an older
-  // server or a lone node is never asked.
-  if (!token || devicesBusy || !meshSelf()) return;
+  // A versioned server can have SSH/tailnet devices with mesh disabled.
+  // Old unversioned servers without mesh keep their original behaviour.
+  if (!token || (!meshSelf() && !state?.version)) return;
+  if (devicesBusy) {
+    if (force) devicesRefreshQueued = { force:true, deep:deep || !!devicesRefreshQueued?.deep };
+    return;
+  }
   if (!force && devicesLoadedAt && Date.now() - devicesLoadedAt < DEVICES_REFRESH_MS) return;
   const requestToken = token;
   devicesBusy = true; renderMesh();
@@ -168,12 +172,17 @@ async function loadDevices({ force = false, deep = false } = {}) {
     const body = deep ? { type:'devices.list', deep:true, fresh:true } : { type:'devices.list' };
     const listing = await (await api('/action', { method:'POST', home:true, timeout: deep ? 40000 : 12000, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })).json();
     if (requestToken !== token) return;
-    // An older server answers the unknown action with {ok:true}: no list, no card.
-    if (listing && Array.isArray(listing.devices)) { deviceList = listing; devicesError = null; }
+    // Only adopt the versioned device contract, never a generic action reply.
+    if (listing?.v === 1 && Array.isArray(listing.devices)) { deviceList = listing; devicesError = null; }
   } catch (error) {
     if (requestToken === token) { devicesError = error; if (deep) toast(error, true); }
   } finally {
-    devicesLoadedAt = Date.now(); devicesBusy = false; renderMesh();
+    if (requestToken === token) devicesLoadedAt = Date.now();
+    devicesBusy = false;
+    const queued = devicesRefreshQueued;
+    devicesRefreshQueued = null;
+    renderMesh();
+    if (queued && requestToken === token) await loadDevices(queued);
   }
 }
 // The selector: this device plus every device the list says can be
@@ -218,9 +227,9 @@ function routeChips(device) {
 function deviceActions(device) {
   const can = device.can || {};
   const list = [];
-  if (device.self || device.id === targetNode) { if (device.self || can.control?.ok) list.push('screen'); }
+  if (device.self || device.id === targetNode) { if (can.screen?.ok) list.push('screen'); }
   else if (can.control?.ok) list.push('control');
-  for (const name of ['terminal', 'agents', 'sessions', 'pair']) if (can[name]?.ok) list.push(name);
+  for (const name of ['terminal', 'pair', 'agents', 'sessions']) if (can[name]?.ok) list.push(name);
   return list;
 }
 // One line of why, only when it says something the row does not: a Ponte
@@ -264,7 +273,7 @@ function deviceRow(device) {
     + '</div>';
 }
 function renderMesh() {
-  const requests = meshInfo?.requests || deviceList?.requests || [];
+  const requests = deviceList?.requests || meshInfo?.requests || [];
   const signature = JSON.stringify([meshInfo, deviceList, targetNode, devicesBusy, !!devicesError, devicesShowOffline, [...devicesOpen], i18n.language]);
   if (signature === meshSignature) return;
   meshSignature = signature;
@@ -333,8 +342,8 @@ async function deviceTerminal(device) {
   setTargetNode('');
   const requestToken = token;
   try {
-    const session = await (await api('/terminals', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ ...devSessionSize(), agent:'ssh', host:terminal.host }) })).json();
-    if (token !== requestToken) return;
+    const session = await (await api('/terminals', { method:'POST', home:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify({ ...devSessionSize(), agent:'ssh', host:terminal.host }) })).json();
+    if (token !== requestToken || targetNode) return;
     toast(t('Abrindo {title}…', { title:session.title }));
     terminalSessions.push(session); selectTerminal(session.id); terminalPaused = false; navigate('terminais');
   } catch (error) { toast(error, true); }
@@ -385,9 +394,11 @@ document.addEventListener('click', async event => {
 // The list follows the mesh: a peer that comes online, pairs or asks is
 // fetched again (from the caches), at most once per change.
 function followMesh() {
-  const key = JSON.stringify([(meshInfo?.peers || []).map(peer => [peer.id, peer.online, peer.paired, peer.pairing?.status]), (meshInfo?.controllers || []).map(item => item.id)]);
-  if (!devicesLoadedAt) { devicesMeshKey = key; loadDevices(); return; }
-  if (key !== devicesMeshKey) { devicesMeshKey = key; loadDevices({ force:true }); }
+  const key = JSON.stringify([(meshInfo?.peers || []).map(peer => [peer.id, peer.online, peer.paired, peer.pairing?.status]), (meshInfo?.controllers || []).map(item => item.id), (meshInfo?.requests || []).map(item => item.code)]);
+  const changed = key !== devicesMeshKey;
+  devicesMeshKey = key;
+  if (!devicesLoadedAt) { loadDevices({ force:devicesBusy && changed }); return; }
+  if (changed) loadDevices({ force:true });
 }
 
 // ------------------------------------------------------------------- fleet
@@ -654,7 +665,8 @@ async function pollState() {
     const nextState = await response.json();
     if (requestToken !== token || requestNode !== targetNode) return;
     state = nextState;
-    if (state.mesh) { meshInfo = state.mesh; followMesh(); }
+    if (state.mesh) meshInfo = state.mesh;
+    followMesh();
     renderMesh();
     if (state.version && state.version !== UI_VERSION && typeof location.reload === 'function') {
       let guard = '';

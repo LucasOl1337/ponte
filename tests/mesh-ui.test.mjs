@@ -164,6 +164,16 @@ test('the header selector is fed by the same list: this device plus every device
   assert.equal(h.el('#node-badge').hidden, true, 'no badge while this device is the target');
 });
 
+test('Ask for access wins the main button over Sessions when control and terminal are unavailable', async () => {
+  const h = harness({ devices: () => {
+    const view = listing();
+    view.devices.find(device => device.id === OTHER).can.sessions = { ok:true, via:'ssh', machine:'ssh:outro-teste' };
+    return view;
+  } });
+  await flush();
+  assert.deepEqual(buttons(h.row('outro-teste')), [['Ask for access', true], ['Sessions', false]]);
+});
+
 test('choosing a device routes every API call through node= while the device list and mesh actions stay on this node', async () => {
   const h = harness();
   await flush();
@@ -285,4 +295,118 @@ test('without mesh data (an older server) the selector and the card stay hidden 
   assert.equal(h.el('#devices-card').hidden, true);
   assert.equal(h.el('#node-badge').hidden, true);
   assert.equal(h.calls.some(call => call.body?.type === 'devices.list'), false);
+});
+
+test('a versioned server with mesh disabled still shows its devices and uses the home identity from the list', async () => {
+  const h = harness({ respond: path => path === '/api/state' ? ok({ ...baseState('pc-teste'), version:'0.1.0-alpha.34' }) : null });
+  await flush();
+  assert.equal(h.el('#devices-card').hidden, false);
+  assert.ok(h.row('servidor-teste'));
+  assert.deepEqual(h.el('#node-select').querySelectorAll('option').map(option => option.getAttribute('value')), ['', NOTEBOOK]);
+  h.run(`setTargetNode('${SELF}')`);
+  assert.equal(h.run('targetNode'), '', 'the canonical home id must not become a remote target');
+  const ask = h.calls.find(call => call.body?.type === 'devices.list');
+  assert.equal(ask.path, '/api/action');
+});
+
+test('a request removed by devices.list is not resurrected by an older state.mesh poll', async () => {
+  const h = harness({ devices: () => ({ ...listing(), requests:[] }) });
+  await flush();
+  assert.equal(h.el('#devices-requests').textContent, '');
+  assert.equal(h.el('[data-mesh-approve]'), null);
+  await h.run('pollState()');
+  await flush();
+  assert.equal(h.el('#devices-requests').textContent, '');
+});
+
+test('a new incoming request alone refreshes the list even if peers and controllers are unchanged', async () => {
+  let next = mesh();
+  const h = harness({ respond: path => path === '/api/state' ? ok({ ...baseState('pc-teste'), mesh:next }) : null });
+  await flush();
+  const before = h.calls.filter(call => call.body?.type === 'devices.list').length;
+  next = { ...next, requests:[] };
+  await h.run('pollState()');
+  await flush();
+  assert.equal(h.calls.filter(call => call.body?.type === 'devices.list').length, before + 1);
+});
+
+test('a forced refresh during a slow devices.list is coalesced and runs after it, never lost', async () => {
+  let release, slow = true;
+  const pending = new Promise(resolve => { release = resolve; });
+  const h = harness({ respond: (path, options, body) => {
+    if (path === '/api/action' && body?.type === 'devices.list' && slow) return pending;
+    return null;
+  } });
+  await flush();
+  assert.equal(h.run('devicesBusy'), true);
+  await h.run('loadDevices({force:true,deep:true})');
+  await h.run('loadDevices({force:true})');
+  assert.equal(h.calls.filter(call => call.body?.type === 'devices.list').length, 1);
+  slow = false;
+  release(ok(listing()));
+  await flush();
+  const asks = h.calls.filter(call => call.body?.type === 'devices.list');
+  assert.equal(asks.length, 2);
+  assert.deepEqual(asks[1].body, { type:'devices.list', deep:true, fresh:true });
+  assert.equal(h.run('devicesBusy'), false);
+  assert.equal(h.el('#devices-refresh').disabled, false);
+});
+
+test('a request arriving during the first list fetch queues a second fetch with the updated requests', async () => {
+  let release, next = mesh(), slow = true;
+  const pending = new Promise(resolve => { release = resolve; });
+  const h = harness({ respond: (path, options, body) => {
+    if (path === '/api/state') return ok({ ...baseState('pc-teste'), mesh:next });
+    if (body?.type === 'devices.list') return slow ? pending : ok({ ...listing(), requests:[] });
+    return null;
+  } });
+  await flush();
+  next = { ...next, requests:[] };
+  await h.run('pollState()');
+  await flush();
+  slow = false;
+  release(ok(listing()));
+  await flush();
+  assert.equal(h.calls.filter(call => call.body?.type === 'devices.list').length, 2);
+  assert.equal(h.el('#devices-requests').textContent, '');
+});
+
+test('a controlled peer that goes offline remains selected, but cannot be offered to start another control', async () => {
+  let online = true;
+  const h = harness({ devices: () => {
+    const view = listing();
+    if (!online) {
+      const peer = view.devices.find(device => device.id === NOTEBOOK);
+      peer.status = 'offline';
+      peer.can.control = { ok:false, why:'OFFLINE' };
+      peer.can.screen = { ok:false, why:'OFFLINE' };
+    }
+    return view;
+  } });
+  await flush();
+  h.run(`setTargetNode('${NOTEBOOK}')`);
+  await flush();
+  online = false;
+  await h.run('loadDevices({force:true})');
+  assert.equal(h.el('#node-select').value, NOTEBOOK);
+  assert.equal(h.el('#node-select').querySelectorAll('option').at(-1).textContent, 'notebook-teste · offline');
+  assert.equal(h.row('notebook-teste').querySelector('[data-device-go="screen"]'), null);
+  h.run("setTargetNode('')");
+  await flush();
+  assert.equal(h.el('#node-select').querySelectorAll('option').length, 1);
+});
+
+test('an SSH terminal reply after switching target never inserts a home session into the remote list', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const h = harness({ respond: (path, options) => path === '/api/terminals' && options.method === 'POST' ? pending : null });
+  await flush();
+  h.row('servidor-teste').querySelector('[data-device-go="terminal"]').click();
+  await flush();
+  h.run(`setTargetNode('${NOTEBOOK}')`);
+  await flush();
+  release(ok({ id:'home-ssh-session', title:'SSH servidor-teste' }));
+  await flush();
+  assert.equal(h.run('targetNode'), NOTEBOOK);
+  assert.equal(h.run("terminalSessions.some(session=>session.id==='home-ssh-session')"), false);
 });
