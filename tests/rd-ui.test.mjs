@@ -402,6 +402,127 @@ test('pending Control reaches the remote before wheel and does not flush on the 
   }
 });
 
+test('keyboard details separate local events from sent keys and update deferred Control after Ctrl+C', async () => {
+  const h = await harness().connect();
+  h.key('keydown', 'KeyA'); h.key('keyup', 'KeyA');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 2 page events, 0 sent.');
+  assert.equal(h.el('#rd-key-trace').textContent, '↓ KeyA: local\n↑ KeyA: local');
+  assert.deepEqual(h.sent('key'), []);
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+  h.key('keydown', 'ControlLeft');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 3 page events, 0 sent.');
+  assert.match(h.el('#rd-key-trace').textContent, /↓ ControlLeft: Ctrl awaiting the next key$/);
+  h.key('keydown', 'KeyC', { ctrlKey: true });
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 4 page events, 2 sent.');
+  assert.match(h.el('#rd-key-trace').textContent, /↓ ControlLeft: sent\n↓ KeyC: sent$/);
+  h.key('keyup', 'KeyC'); h.key('keyup', 'ControlLeft');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 6 page events, 4 sent.');
+  assert.equal(h.run('keyMetrics.sent'), h.sent('key').length);
+  h.key('keydown', 'ControlRight'); h.key('keydown', 'KeyX');
+  h.key('keyup', 'ControlRight'); h.key('keyup', 'KeyX');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 10 page events, 4 sent.');
+  assert.match(h.el('#rd-key-trace').textContent, /↓ KeyX: switched\n↑ ControlRight: reserved shortcut\n↑ KeyX: reserved shortcut$/);
+  assert.equal(h.sent('key').length, 4, 'reserved Ctrl+X is observed, never counted as sent');
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'KeyX');
+  h.key('keyup', 'KeyX'); h.key('keyup', 'ControlLeft');
+  assert.equal(h.run('engaged'), true);
+  assert.equal(h.run('keyMetrics.sent'), 4, 'taking control also keeps the reserved chord local');
+});
+
+test('keyboard trace marks repeats, missing physical codes and IME without keeping event.key text', async () => {
+  const h = await harness().connect();
+  const privateText = 'private composed text never recorded';
+  h.key('keydown', '<unsafe-code>', { key: privateText });
+  assert.equal(h.el('#rd-key-trace').textContent, '↓ Unidentified: local');
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+  h.key('keydown', 'KeyA', { key: privateText });
+  h.key('keydown', 'KeyA', { repeat: true, key: privateText });
+  h.key('keyup', 'KeyA', { key: privateText });
+  h.key('keydown', 'Unidentified', { isComposing: true, key: privateText });
+  h.key('keydown', '', { keyCode: 229, key: privateText });
+  h.key('keydown', undefined, { key: privateText });
+  h.key('keyup', 'KeyZ');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 8 page events, 2 sent.');
+  assert.equal(h.el('#rd-key-trace').textContent, [
+    '↓ Unidentified: local', '↓ KeyA: sent', '↓ KeyA: local repeat', '↑ KeyA: sent',
+    '↓ Unidentified [IME/229]: no physical code', '↓ Unidentified [IME/229]: no physical code',
+    '↓ Unidentified: no physical code', '↑ KeyZ: release without a sent press',
+  ].join('\n'));
+  assert.deepEqual(h.sent('key'), [{ t: 'key', code: 'KeyA', down: true }, { t: 'key', code: 'KeyA', down: false }]);
+  for (const text of [h.run('JSON.stringify(keyMetrics)'), h.el('#rd-key-trace').textContent, JSON.stringify(h.socket.sent), JSON.stringify([...h.saved])]) {
+    assert.ok(!text.includes(privateText), 'typed or composed text stays out of diagnostics, messages and storage');
+    assert.ok(!text.includes('<unsafe-code>'), 'diagnostic codes are sanitized');
+  }
+});
+
+test('keyboard trace keeps only the last 12 events, while counts cover the whole session', async () => {
+  const h = await harness().connect();
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+  for (const code of ['KeyA', 'KeyB', 'KeyC', 'KeyD', 'KeyE', 'KeyF', 'KeyG']) {
+    h.key('keydown', code); h.key('keyup', code);
+  }
+  assert.equal(h.run('keyMetrics.observed'), 14);
+  assert.equal(h.run('keyMetrics.sent'), 14);
+  assert.equal(h.run('keyMetrics.recent.length'), 12);
+  const lines = h.el('#rd-key-trace').textContent.split('\n');
+  assert.equal(lines.length, 12);
+  assert.equal(lines[0], '↓ KeyB: sent');
+  assert.equal(lines.at(-1), '↑ KeyG: sent');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 14 page events, 14 sent.');
+  assert.ok(h.socket.sent.every(message => !('recent' in message) && !('keyMetrics' in message)), 'the trace is not transmitted');
+  assert.ok([...h.saved.keys()].every(key => !/trace|metrics/i.test(key)), 'the trace is not persisted');
+});
+
+test('keyboard details reset page and target counters on a new connection and an automatic reconnect', async () => {
+  const h = await harness().connect();
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+  h.key('keydown', 'KeyA'); h.key('keyup', 'KeyA');
+  h.socket.message({ t: 'input-stats', input: { received: 2, injected: 2, pending: 0 } });
+  const previous = h.socket;
+  h.el('#rd-retry').dispatchEvent({ type: 'click' });
+  assert.notEqual(h.socket, previous);
+  assert.equal(h.run('keyMetrics.observed'), 0);
+  assert.equal(h.run('keyMetrics.sent'), 0);
+  assert.equal(h.run('keyMetrics.recent.length'), 0);
+  assert.equal(h.run('targetInput'), null);
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 0 page events, 0 sent.');
+  assert.equal(h.el('#rd-key-trace').textContent, '');
+  await h.connect();
+  h.key('keydown', 'KeyB'); h.key('keyup', 'KeyB');
+  h.socket.message({ t: 'input-stats', input: { received: 8, injected: 6, pending: 2, dryRun: true } });
+  h.socket.close(1006);
+  h.timer(500).callback();
+  assert.equal(h.run('keyMetrics.observed'), 0);
+  assert.equal(h.run('keyMetrics.sent'), 0);
+  assert.equal(h.run('targetInput'), null);
+  assert.equal(h.el('#rd-key-trace').textContent, '');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 0 page events, 0 sent.');
+  await h.connect();
+  h.key('keydown', 'KeyC'); h.key('keyup', 'KeyC');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 2 page events, 2 sent.');
+});
+
+test('target keyboard counts, dry-run and trace labels update in English and Portuguese', async () => {
+  const h = await harness().connect();
+  h.key('keydown', 'KeyA'); h.key('keyup', 'KeyA');
+  h.socket.message({ t: 'input-stats', input: { received: 7, injected: 5, pending: 2, dryRun: true } });
+  assert.equal(h.el('#rd-key-stats').textContent, 'Keyboard: 2 page events, 0 sent. Target: 7 received, 5 injected, 2 pending. (dry-run)');
+  h.window.PonteI18n.setLanguage('pt');
+  assert.equal(h.el('#rd-key-stats').textContent, 'Teclado: 2 eventos na página, 0 enviados. Destino: 7 recebidos, 5 injetados, 2 pendentes. (dry-run)');
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });
+  h.key('keydown', 'ControlLeft'); h.key('keydown', 'KeyC');
+  h.key('keydown', 'KeyC', { repeat: true });
+  assert.match(h.el('#rd-key-trace').textContent, /↓ ControlLeft: enviado\n↓ KeyC: enviado\n↓ KeyC: repetição local$/);
+  h.window.PonteI18n.setLanguage('en');
+  assert.match(h.el('#rd-key-trace').textContent, /↓ ControlLeft: sent\n↓ KeyC: sent\n↓ KeyC: local repeat$/);
+  h.socket.message({ t: 'input-stats', input: { received: -1, injected: '5', pending: 1.5, dryRun: 'true' } });
+  assert.match(h.el('#rd-key-stats').textContent, /Target: \? received, \? injected, \? pending\.$/);
+  assert.doesNotMatch(h.el('#rd-key-stats').textContent, /dry-run/);
+  h.socket.message({ t: 'input-stats', input: null });
+  assert.equal(h.run('targetInput'), null);
+  assert.doesNotMatch(h.el('#rd-key-stats').textContent, /Target:/);
+});
+
 test('holding Esc for 2 s releases; a short Esc is just a key', async () => {
   const h = await harness().connect();
   h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 }); h.mouse('mouseup', h.stage, { clientX: 500, clientY: 294 });

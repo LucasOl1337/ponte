@@ -48,6 +48,7 @@ for (const node of nodes) {
   const dir = path.join(base, node.key);
   const env = {
     ...process.env, PONTE_LAB_DIR: dir, PONTE_LAB_MONITOR: node.monitor, PONTE_LAB_TITLE: node.name, PONTE_LAB_ACCEL: '1',
+    PONTE_RD_INPUT_LOG: path.join(dir, 'events.jsonl'),
     PATH: `${root}/tools/lab/bin:${process.env.PATH}`, WAYLAND_DISPLAY: 'ponte-lab-none', PONTE_SUSSURRO_SOCKET: '', PONTE_STT_URL: '',
     MAGMA_LIGHTS_CONTROLLER: path.join(dir, 'no-magma/controller.py'), YDOTOOL_SOCKET: path.join(dir, 'input.sock'),
     PONTE_TAILSCALE_BIN: path.join(root, 'tools/lab/net/tailscale'), PONTE_SSH_BIN: path.join(root, 'tools/lab/net/ssh'),

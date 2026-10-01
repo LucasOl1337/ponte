@@ -55,3 +55,20 @@ Só o dono opera o teclado real. O agente acompanha os logs sem injetar entrada.
 6. Abra detalhes técnicos e confira a trilha de teclas. Feche a janela e compare os contadores de teclado no journal de origem e destino.
 
 Se prender: **Super+Ctrl+Alt+Esc** devolve os atalhos locais. Feche a janela e guarde os registros `session closed` dos dois aparelhos.
+
+## Diagnóstico que fica disponível
+
+Configurações → Detalhes técnicos mostra as últimas 12 teclas: código físico, pressão/soltura, se saiu ou por que ficou. `IME/229` destaca composição local sem descartar um código físico válido. A trilha fica só na memória da página, sem o texto de `event.key`, clipboard ou gravação no servidor. Reconectar zera os contadores da página.
+
+Ao fechar uma sessão, o journal tem `[rd] session closed` com `sessionId` aleatório e papel `target` ou `relay`:
+
+- `received`: mensagens key que chegaram, antes dos filtros;
+- `queued`: enfileiradas pro helper, não prova de injeção;
+- `injected`: ACK do helper com `applied=true`, depois do evento evdev escrito;
+- `discarded`: quantidade por motivo, como `view_only`, `unknown_code`, `duplicate_down`, `up_without_down`;
+- `unconfirmed` e `pending`: sem prova de aplicação, por saída do helper, pipe quebrado ou final não observado;
+- `dryRun`: a injeção era simulada no lab, nunca abriu uinput.
+
+Na origem, `forwarded` só significa encaminhado. `targetObserved` é a última contagem confirmada pelo destino. `complete:false` e `unobserved` avisam que o fechamento da conexão pode ter perdido os ACKs finais. O journal do destino, após drenar o helper, é a contagem final. Os logs não contêm códigos das teclas, texto digitado nem tokens.
+
+Para separar a falha: página viu 0 eventos é foco/compositor/IME antes dela. Viu eventos sem envio é uma decisão da página. Enviados e relay encaminhados, mas destino não recebeu, aponta transporte. Recebidos sem injected, confira discarded/unconfirmed no alvo. Contagem não substitui olhar o efeito no aplicativo remoto.

@@ -233,6 +233,27 @@ let probe = null;
 let lastProbe = null;
 let keyboardLock = 'off';
 let pointerLock = 'off';
+const keyMetrics = { observed: 0, sent: 0, recent: [] };
+let targetInput = null;
+
+function rememberKey(event, outcome) {
+  const code = /^[A-Za-z0-9_]{1,32}$/.test(event.code || '') ? event.code : 'Unidentified';
+  keyMetrics.observed++;
+  keyMetrics.recent.push({ code, down: event.type === 'keydown', outcome, ime: event.keyCode === 229 || event.isComposing === true });
+  if (keyMetrics.recent.length > 12) keyMetrics.recent.shift();
+  renderKeyDetails();
+}
+
+function renderKeyDetails() {
+  $('#rd-key-stats').textContent = t('Teclado: {seen} eventos na página, {sent} enviados.', { seen: keyMetrics.observed, sent: keyMetrics.sent });
+  if (targetInput) {
+    const count = name => Number.isSafeInteger(targetInput[name]) && targetInput[name] >= 0 ? targetInput[name] : '?';
+    $('#rd-key-stats').textContent += ` ${t('Destino: {received} recebidos, {injected} injetados, {pending} pendentes.', { received: count('received'), injected: count('injected'), pending: count('pending') })}`;
+    if (targetInput.dryRun === true) $('#rd-key-stats').textContent += ' (dry-run)';
+  }
+  const labels = { sent: t('enviado'), local: t('local'), switch: t('alternou'), 'switch-release': t('atalho reservado'), deferred: t('Ctrl aguardando a próxima tecla'), repeat: t('repetição local'), 'missing-code': t('sem código físico'), 'no-session': t('sem sessão'), disabled: t('teclado indisponível'), 'not-held': t('soltura sem pressão enviada') };
+  $('#rd-key-trace').textContent = keyMetrics.recent.map(key => `${key.down ? '↓' : '↑'} ${key.code}${key.ime ? ' [IME/229]' : ''}: ${labels[key.outcome] || key.outcome}`).join('\n');
+}
 
 const nowEpoch = () => performance.timeOrigin + performance.now();
 
@@ -268,6 +289,11 @@ function status(message) { $('#rd-status').textContent = message || ''; }
 function send(message) {
   if (!socket || socket.readyState !== 1) return false;
   socket.send(JSON.stringify(message));
+  if (message.t === 'key') {
+    keyMetrics.sent++;
+    const pending = keyMetrics.recent.slice().reverse().find(key => key.code === message.code && key.down === message.down && key.outcome === 'deferred');
+    if (pending) pending.outcome = 'sent';
+  }
   return true;
 }
 
@@ -285,6 +311,8 @@ function connect() {
   if (!token) { stopped = 'auth'; overlay(t('Abra pelo ./ponte rd ou por um link de pareamento: este navegador ainda não tem a chave.')); return; }
   stopped = ''; stopMessage = '';
   session = null; littleEndian = null; waitingKey = true; inflight.clear(); pingSamples.length = 0; linkMode = 'lan';
+  keyMetrics.observed = keyMetrics.sent = 0; keyMetrics.recent.length = 0; targetInput = null;
+  renderKeyDetails();
   clearTimeout(ackTimer); ackTimer = 0; ackSeq = 0; ackSent = 0; keyframeAskedAt = -Infinity;
   overlay(reconnectAttempt ? t('Reconectando…') : t('Conectando…'));
   const current = new WebSocket(socketAddress());
@@ -372,6 +400,7 @@ function receive(data) {
     case 'pong': pong(message); break;
     case 'link': linkMode = message.mode === 'wan' ? 'wan' : 'lan'; break;
     case 'clip': clipboardIn(message.text); break;
+    case 'input-stats': targetInput = message.input && typeof message.input === 'object' ? message.input : null; renderKeyDetails(); break;
     case 'taken':
       // Another client took this target: no automatic reconnect, or the two
       // would keep taking it from each other.
@@ -792,32 +821,39 @@ function flushControl() {
 }
 
 function keyEvent(event) {
+  const sent = keyMetrics.sent;
+  const outcome = routeKey(event);
+  rememberKey(event, outcome || (keyMetrics.sent > sent ? 'sent' : 'not-held'));
+}
+
+function routeKey(event) {
   const code = event.code;
   if (event.type === 'keydown') localPressed.add(code);
   if (switchKeys.has(code)) {
     event.preventDefault(); event.stopPropagation?.();
     if (event.type === 'keyup') { switchKeys.delete(code); localPressed.delete(code); }
-    return;
+    return 'switch-release';
   }
   if (session && !$('#rd-settings').open && isControlSwitch(event, localPressed)) {
     event.preventDefault(); event.stopPropagation?.();
-    if (event.repeat) return;
+    if (event.repeat) return 'repeat';
     switchKeys.add('KeyX');
     for (const held of localPressed) if (held === 'ControlLeft' || held === 'ControlRight') switchKeys.add(held);
     if (engaged) releaseControl(); else takeControl();
-    return;
+    return 'switch';
   }
   if (event.type === 'keyup') localPressed.delete(code);
-  if (!engaged) return;
-  if (!session || !inputAllows('keys')) return;
+  if (!engaged) return 'local';
+  if (!session) return 'no-session';
+  if (!inputAllows('keys')) return 'disabled';
   // While controlling, even a stale bar focus must not eat the remote keys.
   event.preventDefault();
   event.stopPropagation?.();
-  if (!code || code === 'Unidentified') return;
+  if (!code || code === 'Unidentified') return 'missing-code';
   if (event.type === 'keydown') {
     // The target repeats a held key by itself; the client's auto-repeat stays home.
-    if (event.repeat) return;
-    if (code === 'ControlLeft' || code === 'ControlRight') { pendingControl.add(code); return; }
+    if (event.repeat) return 'repeat';
+    if (code === 'ControlLeft' || code === 'ControlRight') { pendingControl.add(code); return 'deferred'; }
     flushControl();
     pressed.add(code);
     send({ t: 'key', code, down: true });
@@ -825,7 +861,7 @@ function keyEvent(event) {
   } else {
     if (code === 'Escape') clearTimeout(escTimer);
     if (pendingControl.has(code)) flushControl();
-    if (!pressed.delete(code)) return;
+    if (!pressed.delete(code)) return 'not-held';
     send({ t: 'key', code, down: false });
   }
 }
@@ -1152,6 +1188,7 @@ function openSettings(details = false) {
   if (details) $('#rd-details').scrollIntoView?.({ block: 'start' });
 }
 function renderSettings() {
+  renderKeyDetails();
   $('#rd-chord-action').value = chordAction;
   $('#rd-fps').value = String(fpsLimit);
   $('#rd-clipboard').checked = clipboardOn;
@@ -1223,7 +1260,7 @@ function start() {
   $('#rd-retry').addEventListener('click', () => { reconnectAttempt = 0; connect(); });
   $('#rd-probe').hidden = !probeEnabled;
   $('#rd-probe').addEventListener('click', startProbe);
-  document.addEventListener('ponte-language-change', () => { renderStats(); renderControl(); renderNodes(); if (session) renderLink(); });
+  document.addEventListener('ponte-language-change', () => { renderStats(); renderKeyDetails(); renderControl(); renderNodes(); if (session) renderLink(); });
   renderMode();
   renderSettings();
   renderControl();

@@ -77,11 +77,23 @@ const clampInt = (value, limit) => Math.max(-limit, Math.min(limit, Math.round(N
 
 // One helper process per session. Messages are queued in its stdin pipe and
 // each is acknowledged, which gives the time from here to the evdev write.
-export function createRdInput({ python = 'python3', helper = HELPER, dryRun = false, logFile, watchdog, mapping = 'layout', env = process.env, spawn = spawnChild, now = () => performance.now(), log = console } = {}) {
+export function createRdInput({ python = 'python3', helper = HELPER, dryRun = false, logFile, watchdog, mapping = 'layout', env = process.env, spawn = spawnChild, now = () => performance.now(), log = console, onStats = () => {} } = {}) {
   let child = null, seq = 0, ready = false, lastAlive = 0, failures = 0;
   const sentAt = new Map();
   const stats = { sent: 0, acked: 0, timed: 0, lastMs: null, maxMs: 0, totalMs: 0, restarts: 0 };
+  const keys = { queued: 0, injected: 0, discarded: {}, unconfirmed: {} };
+  let stopping = false, stopPromise = null;
   let monitors = [];
+
+  const count = (table, reason) => { table[reason] = (table[reason] || 0) + 1; };
+  function abandon(current, reason) {
+    for (const [s, entry] of sentAt) {
+      if (entry.child !== current) continue;
+      if (entry.key) count(keys.unconfirmed, reason);
+      sentAt.delete(s);
+    }
+    onStats();
+  }
 
   function start() {
     if (child) return child;
@@ -95,38 +107,56 @@ export function createRdInput({ python = 'python3', helper = HELPER, dryRun = fa
       while ((newline = out.indexOf('\n')) >= 0) {
         const line = out.slice(0, newline); out = out.slice(newline + 1);
         let message; try { message = JSON.parse(line); } catch { continue; }
-        if (message.ready) ready = true;
+        if (message.ready && child === current && !stopping) ready = true;
         if (Number.isInteger(message.s) && sentAt.has(message.s)) {
-          const at = sentAt.get(message.s);
+          const entry = sentAt.get(message.s);
+          if (entry.child !== current) continue;
+          const at = entry.at;
           sentAt.delete(message.s);
           stats.acked++;
+          if (entry.key) {
+            if (message.applied === true) keys.injected++;
+            else if (message.applied === false) count(keys.discarded, ['duplicate_down', 'up_without_down', 'unknown_code'].includes(message.reason) ? message.reason : 'helper_noop');
+            else count(keys.unconfirmed, 'legacy_ack');
+          }
           // Messages queued while the helper was still starting would count its start-up.
           if (at !== null) { const ms = now() - at; stats.timed++; stats.lastMs = ms; stats.totalMs += ms; stats.maxMs = Math.max(stats.maxMs, ms); }
+          if (entry.key) onStats();
         }
         if (message.error) log.error?.(`[rd] input helper: ${message.error}`);
       }
     });
     let err = '';
     current.stderr.on('data', chunk => { err = (err + chunk).slice(-2000); });
-    current.stdin.on('error', () => {});
-    current.once('error', () => { if (child === current) child = null; });
+    current.stdin.on('error', () => { abandon(current, 'stdin_error'); });
+    current.once('error', () => { if (child === current) { child = null; ready = false; } abandon(current, 'spawn_error'); });
     current.once('close', code => {
-      if (child === current) child = null;
+      if (child === current) { child = null; ready = false; }
       if (code) failures++; // three failed starts (no evdev, no /dev/uinput) and the helper stays down
-      sentAt.clear();
+      abandon(current, stopping ? 'stop_without_ack' : 'helper_exit');
       if (code && err.trim()) log.error?.(`[rd] input helper exited ${code}: ${err.trim().split('\n').pop()}`);
     });
     return current;
   }
 
   function send(message) {
-    if (!child && failures >= 3) return false;
+    const key = Object.hasOwn(message, 'k');
+    if (stopping || (!child && failures >= 3)) {
+      if (key) count(keys.discarded, stopping ? 'stopped' : 'worker_disabled');
+      return false;
+    }
     const current = child || start();
     const s = ++seq;
-    sentAt.set(s, ready ? now() : null);
-    if (sentAt.size > 4096) sentAt.delete(sentAt.keys().next().value);
+    sentAt.set(s, { at: ready ? now() : null, key, child: current });
+    if (sentAt.size > 4096) {
+      const oldest = sentAt.keys().next().value;
+      if (sentAt.get(oldest).key) count(keys.unconfirmed, 'tracking_overflow');
+      sentAt.delete(oldest);
+    }
     stats.sent++;
-    current.stdin.write(`${JSON.stringify({ s, ...message })}\n`);
+    if (key) keys.queued++;
+    try { current.stdin.write(`${JSON.stringify({ s, ...message })}\n`); }
+    catch { abandon(current, 'stdin_error'); }
     return true;
   }
 
@@ -136,10 +166,14 @@ export function createRdInput({ python = 'python3', helper = HELPER, dryRun = fa
     get running() { return !!child; },
     get pending() { return sentAt.size; },
     stats,
+    keyStats() {
+      return { queued: keys.queued, injected: keys.injected, discarded: { ...keys.discarded }, unconfirmed: { ...keys.unconfirmed }, pending: [...sentAt.values()].filter(entry => entry.key).length, dryRun };
+    },
     setMonitors(list) { monitors = Array.isArray(list) ? list : []; },
     key(code, down) {
       const k = Object.hasOwn(KEY_CODES, code) ? KEY_CODES[code] : null;
-      return k ? send({ k, v: down ? 1 : 0 }) : false;
+      if (!k) { count(keys.discarded, 'unknown_code'); return false; }
+      return send({ k, v: down ? 1 : 0 });
     },
     button(button, down) {
       const b = BUTTON_CODES[button];
@@ -160,13 +194,19 @@ export function createRdInput({ python = 'python3', helper = HELPER, dryRun = fa
       send({});
     },
     stop() {
+      if (stopPromise) return stopPromise;
+      stopping = true;
       const current = child;
       child = null;
-      if (!current) return;
-      try { current.stdin.write(`${JSON.stringify({ x: 1 })}\n`); current.stdin.end(); } catch {}
-      const timer = setTimeout(() => current.kill('SIGKILL'), 1500);
-      timer.unref?.();
-      current.once('close', () => clearTimeout(timer));
+      ready = false;
+      if (!current) return Promise.resolve();
+      stopPromise = new Promise(resolve => {
+        const timer = setTimeout(() => { abandon(current, 'stop_timeout'); current.kill('SIGKILL'); resolve(); }, 1500);
+        timer.unref?.();
+        current.once('close', () => { clearTimeout(timer); resolve(); });
+        try { current.stdin.end(`${JSON.stringify({ x: 1 })}\n`); } catch { abandon(current, 'stdin_error'); }
+      });
+      return stopPromise;
     },
   };
 }
