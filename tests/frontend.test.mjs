@@ -1007,6 +1007,65 @@ test('auto quality opens where the last session settled, or at sharp without rec
   assert.equal(context.start('light', at), 'sharp', 'no time, no memory');
 });
 
+function chooserHarness() {
+  const adapterSource = source.slice(source.indexOf('const LIVE_LADDER ='), source.indexOf('\nfunction applyLiveProfile('));
+  const clock = { at: 0 };
+  const context = vm.createContext({ Math, Number, String });
+  vm.runInContext(`${adapterSource}\nglobalThis.create = createAutoChooser; globalThis.linkKbps = jpegLinkKbps;`, context);
+  const chooser = context.create({ now: () => clock.at });
+  // Video frames for `ms` at 30 fps; answers the first decision.
+  const video = (native, ms) => { for (let t = 0; t < ms; t += 33) { clock.at += 33; const d = chooser.video(native); if (d) return d; } return null; };
+  const jpeg = kbps => { clock.at += 3000; return chooser.jpeg(kbps); };
+  return { chooser, clock, video, jpeg, linkKbps: context.linkKbps };
+}
+
+test('auto reads the JPEG window as link room without the time grim spent capturing', () => {
+  const { linkKbps } = chooserHarness();
+  // Three 450 KB frames in 3 s on a fast link, but each took 800 ms to capture.
+  assert.ok(linkKbps(3 * 450000, 3000, 2400) >= 8000, 'a slow capture is not a slow link');
+  // The same bytes with no capture header read as the plain rate.
+  assert.equal(Math.round(linkKbps(3 * 450000, 3000, null)), 3600);
+  // A 2.5 Mbit/s link stays under the return mark even with a stale capture header.
+  assert.ok(linkKbps(2500 * 3000 / 8, 3000, 3000) < 8000, 'capture is capped at two thirds of the window');
+});
+
+test('auto picks the video only at the native width: a soft video hands over to JPEG Sharp after the opening grace', () => {
+  const { chooser, video } = chooserHarness();
+  assert.equal(chooser.mode, 'video');
+  assert.equal(video(true, 60000), null, 'native video stays');
+  chooser.start();
+  assert.equal(video(false, 7000), null, 'W3 while the WAN opening may still climb');
+  assert.equal(video(true, 1000), null, 'it climbed: native');
+  assert.equal(video(false, 7500), null, 'a new soft stretch counts from its own start');
+  assert.equal(video(false, 1000), 'jpeg', 'over 8 s under the native width');
+  assert.equal(chooser.mode, 'jpeg');
+});
+
+test('auto goes back to the video only after two roomy JPEG windows and the wait, which doubles on each hand-over', () => {
+  const { chooser, clock, video, jpeg } = chooserHarness();
+  chooser.start(); video(false, 9000);
+  assert.equal(chooser.mode, 'jpeg');
+  const handedAt = clock.at;
+  assert.equal(jpeg(2400), null, 'a 2.5 Mbps link');
+  assert.equal(jpeg(9000), null, 'one roomy window is not enough');
+  assert.equal(jpeg(2000), null);
+  while (clock.at + 3000 - handedAt < 20000) assert.equal(jpeg(20000), null, 'not before 20 s');
+  assert.equal(jpeg(20000), 'video');
+  assert.equal(chooser.mode, 'video');
+  // Back on the video it stays soft again: the next wait is 40 s.
+  chooser.start(); assert.equal(video(false, 9000), 'jpeg');
+  const again = clock.at;
+  while (clock.at + 3000 - again < 40000) assert.equal(jpeg(20000), null, 'not before 40 s');
+  assert.equal(jpeg(20000), 'video');
+  // A native picture that holds a minute resets the wait to 20 s.
+  chooser.start(); assert.equal(video(true, 61000), null);
+  assert.equal(video(false, 9000), 'jpeg');
+  const third = clock.at;
+  while (clock.at - third < 20000) jpeg(20000);
+  assert.equal(chooser.mode, 'video', 'back after 20 s, not 80');
+  assert.equal(chooser.jpeg(50000), null, 'JPEG windows mean nothing while on the video');
+});
+
 test('auto quality ignores partial windows', () => {
   const { adapter, clock } = adapterHarness();
   for (let i = 0; i < 20; i++) adapter.frame();

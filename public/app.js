@@ -865,6 +865,53 @@ function liveStartRung(saved, at) {
   const [rung, when] = String(saved || '').split('|');
   return LIVE_LADDER.includes(rung) && at - Number(when) >= 0 && at - Number(when) < LIVE_RUNG_TTL_MS ? rung : 'sharp';
 }
+// Auto with the video: what matters is reading the terminal when zoomed in.
+// Below the monitor's own width the video is never readable (a 3440 monitor
+// sent at 1920 px is as soft as Balanced), while the JPEG Sharp frame is, even
+// at one frame a second. So a video held under the native width for longer
+// than the WAN opening needs to climb hands over to JPEG Sharp; back on the
+// video only after two JPEG windows showing room for a native step (8 Mbit/s,
+// twice W4), and no sooner than a wait that doubles on every hand-over (20 s
+// up to 5 min) and resets once the native picture held a minute.
+// The JPEG window counts only the time spent sending: a PC whose grim takes
+// most of the second would otherwise read as a slow link and never let the
+// video back. The capture time comes from X-Capture-Ms and is capped at two
+// thirds of the window, so a stale header cannot make a slow link look roomy.
+function jpegLinkKbps(bytes, elapsedMs, captureMs) {
+  return bytes * 8 / Math.max(elapsedMs - (captureMs || 0), elapsedMs / 3, 1);
+}
+const AUTO_SOFT_GRACE_MS = 8000, AUTO_RETURN_KBPS = 8000, AUTO_RETURN_WINDOWS = 2;
+const AUTO_RETRY_MS = 20000, AUTO_RETRY_MAX_MS = 5 * 60000, AUTO_NATIVE_HELD_MS = 60000;
+function createAutoChooser({ now = Date.now } = {}) {
+  let mode = 'video', wait = AUTO_RETRY_MS, retryAt = 0, softSince = null, nativeSince = null, good = 0;
+  return {
+    get mode() { return mode; },
+    // A video run starts: its first frames say nothing about the last one.
+    start() { softSince = null; nativeSince = null; },
+    // Each video frame: native when the encoder sends the monitor's full width.
+    video(native) {
+      const t = now();
+      if (native) {
+        softSince = null; if (nativeSince === null) nativeSince = t;
+        if (t - nativeSince >= AUTO_NATIVE_HELD_MS) wait = AUTO_RETRY_MS;
+        return null;
+      }
+      nativeSince = null; if (softSince === null) softSince = t;
+      if (t - softSince < AUTO_SOFT_GRACE_MS) return null;
+      mode = 'jpeg'; softSince = null; good = 0;
+      retryAt = t + wait; wait = Math.min(AUTO_RETRY_MAX_MS, wait * 2);
+      return 'jpeg';
+    },
+    // Each JPEG window (about 3 s): the kbps that arrived.
+    jpeg(kbps) {
+      if (mode !== 'jpeg') return null;
+      good = kbps >= AUTO_RETURN_KBPS ? good + 1 : 0;
+      if (good < AUTO_RETURN_WINDOWS || now() < retryAt) return null;
+      mode = 'video'; good = 0;
+      return 'video';
+    },
+  };
+}
 function createLiveAdapter({start = 'light', windowMs = 3000, climbAfter = 2, holdMs = 20000, maxHoldMs = 120000, now = Date.now} = {}) {
   let rung = Math.max(0, LIVE_LADDER.indexOf(start));
   let frames = 0, captureTotal = 0, captured = 0, windowStart = now(), healthy = 0, holdUntil = 0, hold = holdMs;
@@ -1229,6 +1276,12 @@ async function runLiveSession(session) {
       // and keeps the last frame on screen instead of showing "reconnecting".
       const next = sessionIsCurrent(session) && session.receiving && session.attempt === attempt ? session.adapter?.evaluate(session.fps) : null;
       if (next) { applyLiveProfile(session, next); session.refreshing = true; session.controller.abort(); }
+      // Handed over from the video: back to it once the JPEG frames show the link has room.
+      if (session.legible && sessionIsCurrent(session) && session.receiving && session.attempt === attempt && Date.now() - session.windowAt >= 3000) {
+        const kbps = jpegLinkKbps(session.windowBytes, Date.now() - session.windowAt, session.windowCapture);
+        session.windowAt = Date.now(); session.windowBytes = 0; session.windowCapture = 0;
+        if (autoChooser.jpeg(kbps) === 'video') setTimeout(() => { if (sessionIsCurrent(session)) startLive(); }, 0);
+      }
     },1000);
     try {
       const response = await screenResponse(liveStreamPath(session),session.controller);
@@ -1238,8 +1291,11 @@ async function runLiveSession(session) {
       const boundary = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
       if (!boundary || !response.body) throw new Error(t("Resposta de transmissão incompleta."));
       session.receiving = true;
+      session.windowAt = Date.now(); session.windowBytes = 0; session.windowCapture = 0;
       const parser = new MjpegParser((bytes,timestamp,captureMs) => {
         if (!sessionIsCurrent(session) || session.attempt !== attempt) return;
+        session.windowBytes += bytes.length;
+        if (Number.isFinite(captureMs) && captureMs > 0) session.windowCapture += captureMs;
         session.adapter?.frame(captureMs);
         session.lastReceived = Date.now(); session.pendingFrame = {bytes,timestamp};
         renderLiveFrames(session,attempt);
@@ -1284,6 +1340,7 @@ const VIDEO_HEADER_BYTES = 16;
 // full VIDEO_FIRST_FRAME_MS, which is for an encoder that is starting.
 const VIDEO_ACK_MS = 50, VIDEO_KEYFRAME_ASK_MS = 3000, VIDEO_OPEN_MS = 3000, VIDEO_FIRST_FRAME_MS = 9000, VIDEO_RETRIES = 3;
 let videoBlockedUntil = 0;
+const autoChooser = createAutoChooser();
 const videoSupported = () => typeof VideoDecoder === 'function' && typeof EncodedVideoChunk === 'function' && typeof WebSocket === 'function';
 function videoSocketUrl() {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${apiUrl('/rd')}`;
@@ -1314,6 +1371,9 @@ function startVideoLive(session) {
   const video = { socket: null, opened: false, decoder: null, config: null, littleEndian: null, waitingKey: true, link: 'lan', fps: 60,
     ackSeq: 0, ackSent: 0, ackTimer: 0, lastAckAt: -Infinity, keyAskedAt: -Infinity, drawn: 0, bytes: 0, drops: 0, rtt: null, statsAt: performance.now(), retries: 0 };
   session.video = video;
+  // Only Auto trades the video for a sharper JPEG; Native is the person's choice.
+  const auto = !!LIVE_PROFILES[$('#live-quality').value]?.auto;
+  if (auto) autoChooser.start();
   const current = () => sessionIsCurrent(session) && session.video === video;
   const send = message => { if (video.socket?.readyState === 1) video.socket.send(JSON.stringify(message)); };
   const fallBack = (reason, blockMs = 0) => {
@@ -1323,6 +1383,13 @@ function startVideoLive(session) {
     session.video = null;
     if (reason) toast(reason);
     startJpegLive(session);
+  };
+  // The video stayed under the monitor's width: JPEG Sharp until the link shows room.
+  const handOver = () => {
+    if (!current()) return;
+    teardown();
+    session.video = null;
+    startJpegLive(session, true);
   };
   function teardown() {
     clearTimeout(video.ackTimer); clearInterval(session.watchdog); clearTimeout(session.retryTimer);
@@ -1382,6 +1449,7 @@ function startVideoLive(session) {
     session.lastReceived = Date.now(); session.hasFrame = true; session.failures = 0; video.retries = 0;
     if (screenImageMonitor !== session.monitor) { screenImageMonitor = session.monitor; $('#viewer-monitor-name').textContent = session.monitor; }
     if (screenMode !== 'live') setScreenStatus('live');
+    if (auto && autoChooser.video(video.native) === 'jpeg') setTimeout(handOver, 0);
   }
   function unit(buffer) {
     if (video.littleEndian === null && buffer.byteLength > VIDEO_HEADER_BYTES) video.littleEndian = videoLittleEndian(buffer);
@@ -1410,6 +1478,8 @@ function startVideoLive(session) {
       video.fps = Number(m.fps) || video.fps;
       const resized = video.readyWidth !== m.width || video.readyHeight !== m.height;
       video.readyWidth = m.width; video.readyHeight = m.height;
+      const monitor = Array.isArray(m.monitors) ? m.monitors.find(item => item && item.name === m.monitor) : null;
+      video.native = !(Number(monitor?.width) > Number(m.width));
       if (!video.decoder || !video.config || video.config.codec !== m.codec || resized) configure(m.codec || 'avc1.640034');
       else video.waitingKey = true;
     } else if (m.t === 'link') video.link = m.mode === 'wan' ? 'wan' : 'lan';
@@ -1457,11 +1527,14 @@ function startVideoLive(session) {
   }, 1000);
   connect();
 }
-function startJpegLive(session) {
+// sharp: Auto handed over from a video under the native width (or is still
+// waiting to go back to it): JPEG Sharp at whatever rate the link carries.
+function startJpegLive(session, sharp = false) {
   session.kind = 'jpeg';
   showVideoCanvas(false);
   const choice = LIVE_PROFILES[$('#live-quality').value] ? $('#live-quality').value : 'auto';
-  if (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) { session.adapter = newLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
+  if (sharp) { session.adapter = null; session.legible = true; applyLiveProfile(session, 'sharp'); session.profileLabel = `${t('Automático')} · ${t(LIVE_PROFILES.sharp.label)}`; }
+  else if (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) { session.adapter = newLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
   else applyLiveProfile(session, choice);
   runLiveSession(session);
 }
@@ -1472,6 +1545,12 @@ function startLive() {
   stopLive(); cancelSnapshot();
   const choice = LIVE_PROFILES[$('#live-quality').value] ? $('#live-quality').value : 'auto';
   const wantsVideo = (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) && videoSupported() && Date.now() >= videoBlockedUntil;
+  if (wantsVideo && LIVE_PROFILES[choice].auto && autoChooser.mode === 'jpeg') {
+    const session = {monitor,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false,adapter:null};
+    liveSession = session;
+    startJpegLive(session, true);
+    return;
+  }
   if (wantsVideo) {
     const session = {monitor,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false,adapter:null,profileLabel:'Nativo · vídeo até 60 quadros/s'};
     liveSession = session;

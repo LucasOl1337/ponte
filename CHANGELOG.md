@@ -114,6 +114,20 @@ code (WebSocket tunnel for `/api/rd`, versionCode 22) is in the tree but not shi
 - **Fix: the first keyframe of a session measured the link far too fast.** Its capacity was
   timed against a base round trip that already held the keyframe's own age, so the crossing
   counted as nothing: 110 KB on 2.7 Mbps came out as 17.6 Mbps.
+- **Auto picks the readable picture on a slow link.** On the phone, Auto with the video now
+  hands over to JPEG Sharp when the video stays under the monitor's width for 8 s (under
+  the native width it is never readable: 1920 px on a 3440 monitor is as soft as Balanced),
+  and goes back to the video when two 3 s JPEG windows show room for a native step
+  (8 Mbit/s, counting only the time spent sending, not grim's capture) and a wait has
+  passed: 20 s, doubled on every hand-over up to 5 min, back to 20 s once native held a
+  minute. A workspace opened meanwhile goes straight to JPEG Sharp. Page only; the alpha.24
+  fallback and the "Nativo" choice are unchanged. Lab, 3440×1440 with 14 px text, readable =
+  as sharp as JPEG Sharp: 2.5 Mbps never → from 11 s (83% of a minute); 20 → 2 → 20 Mbps
+  14% → 85% of a minute, 9% → 82% of two; 2.5 → 30 Mbps from second 30: never readable →
+  JPEG from 12 s, back on native video at 42 s and held; home link unchanged (native from
+  6 s, no hand-over). Behind a proxy that refuses `/api/rd` like alpha.24: 0.2-0.4 s to a
+  readable frame, as before.
+- Lab: `tools/lab/auto-measure.mjs`, the phone's Auto over `rd-link.sh` (`RD_LINK_CLIENT`).
 - Lab: `tools/lab/text-backdrop.sh` and `PONTE_RD_LAB_BACKDROP` (small native text under the
   desktop scene), `rd-measure.mjs --legible` (PSNR of still text over time, time to
   readable).
