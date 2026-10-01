@@ -184,6 +184,7 @@ try { const stored = Number(localStorage.getItem(FPS_KEY)); if (FPS_CHOICES.incl
 let clipboardOn = true;
 try { if (localStorage.getItem(CLIPBOARD_KEY) === 'off') clipboardOn = false; } catch {}
 const linkLevels = [];          // the last few seconds' link levels, worst wins
+let firstFrameAt = 0;           // when this stream's first picture was drawn; no verdict before it
 let socket = null;
 let session = null;            // the last `ready`
 let littleEndian = null;       // header byte order, detected per connection
@@ -404,6 +405,7 @@ function ready(message) {
   const first = !session;
   const previous = session;
   session = message;
+  firstFrameAt = 0;
   reconnectAttempt = 0;
   overlay('');
   status('');
@@ -532,6 +534,7 @@ function draw(frame) {
   canvasContext.drawImage(frame, 0, 0, width, height);
   const drawnAt = nowEpoch();
   framesDrawn++;
+  if (!firstFrameAt) firstFrameAt = drawnAt;
   if (info) frameLatency.push({ at: drawnAt, value: drawnAt + clockOffset - info.sendTime });
   // Glass to glass, only where a capture-time stripe exists (the lab): the
   // page reads it with ?probe=1 and trusts it only near the frame's send time.
@@ -621,6 +624,9 @@ let lastLink = null;
 function renderLink(frame = windowStats(frameLatency, nowEpoch())) {
   const chip = $('#rd-link');
   if (!session) { chip.hidden = true; lastLink = null; linkLevels.length = 0; $('#rd-link-reason').textContent = ''; return; }
+  // Before the first picture (and for its first second) there is nothing to judge:
+  // "0 frames per second" there is the stream starting, not a bad link.
+  if (!firstFrameAt || nowEpoch() - firstFrameAt < 1000) { chip.hidden = true; linkLevels.length = 0; return; }
   const expectedFps = Math.min(session.fps || fpsLimit, fpsLimit, linkMode === 'wan' ? 30 : Infinity);
   const now = linkQuality({ fps: meters.fps, expectedFps, rtt, p95: frame ? frame.p95 : null, drops: meters.drops });
   linkLevels.push(now);

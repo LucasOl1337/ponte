@@ -800,6 +800,16 @@ test('the bar shows the connection in words (good, unstable, bad and why); the n
   assert.equal(level('{ fps: 29, expectedFps: 30, rtt: 5, p95: 10 }'), 'good', 'over the internet 30 fps is the target');
   assert.equal(level('{ fps: 60, expectedFps: 60, rtt: 5, p95: 10, drops: 2 }'), 'good', 'a couple of drops is not instability');
   const tick = h.timers.find(timer => timer.interval && timer.ms === 1000);
+  // Connected but no picture yet (seen in the lab: "Bad connection · only 0 frames per
+  // second" right after opening): no verdict until a frame is drawn and a second has passed.
+  h.run('framesDrawn = 0');
+  tick.callback();
+  assert.equal(h.el('#rd-link').hidden, true, 'no verdict before the first picture');
+  h.run('firstFrameAt = nowEpoch()');
+  h.run('framesDrawn = 1');
+  tick.callback();
+  assert.equal(h.el('#rd-link').hidden, true, 'nor in its first second');
+  h.advance(1001);
   // The print of 2026-10-01: 47 fps, RTT 39 ms, frame p95 106 ms.
   h.run('rtt = 39');
   for (let i = 0; i < 20; i++) h.run(`frameLatency.push({ at: nowEpoch(), value: ${i < 18 ? 9 : 106} })`);

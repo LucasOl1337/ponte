@@ -32,6 +32,12 @@ Pages and one server fix; the installed APK keeps working.
   read again every 30 s. A server without `/api/devices` falls back to `/api/mesh`.
 - **"Este aparelho" has one spelling across the phone and the PC:** `{name} · este
   aparelho`; the rd-only keys `{name} (este aparelho)` and `{name} (offline)` are gone.
+- **Fix: "Bad connection · only 0 frames per second" for the first second of every
+  session.** The verdict waited for nothing; it now appears one second after the first
+  picture. Seen in the acceptance run against the two-node lab.
+- **Fix: a device name that matches nothing said "This device is not paired…",** which read
+  as if this PC were the problem. `MESH_PEER_NOT_FOUND` now says "No paired device has that
+  name or id." (server and page).
 - Verified: `npm test` 450 pass, 1 skipped (new: picker from `/api/devices`, name/any-id
   `node=`, the device on the screen stays selectable, 500 does not fall back, 30 s refresh);
   two-node lab in a Chromium bench: the picker switched pc-teste ⇄ notebook-teste (monitor
