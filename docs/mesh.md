@@ -89,7 +89,7 @@ A pins B's CA the first time it asks (trust on first use over the tailnet, where
 `./ponte rd --install` puts **Ponte Remoto** in this user's app menu (no autostart). It opens the first paired device that is online, and the bar's device picker switches to any other. On the command line, `./ponte rd` does the same, `./ponte rd <device>` opens a given device and `./ponte rd self` opens this machine. With nothing paired it opens this machine. The client runs in a Chromium app window with its own profile, and the menu entry reports a failure as a desktop notification. `./ponte rd --uninstall` removes the entry.
 
 - **Full screen** (the button on the bar, or F11) takes every key, Super and Alt+Tab included.
-- **Release control** with Ctrl+Alt+Shift, or hold Esc for 2 seconds.
+- **Switch keyboard and mouse** between the two devices with Ctrl+X, in a window or full screen. Ctrl+X does not cut in this window. In full screen, holding Esc for 2 seconds also gives control back. Details in `docs/rd-control.md`.
 - **Monitors and the pointer.** The bar switches monitors and toggles between absolute and relative pointer. Relative uses Pointer Lock and suits games.
 - **Clipboard.** Text copied on either side goes to the other.
 
