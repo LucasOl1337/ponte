@@ -326,6 +326,33 @@ test('acks: a keyframe burst measures the capacity, and a climb after the calm g
   assert.equal(c.step, 5);
 });
 
+test('acks: opening on a roomy link climbs as soon as its first keyframe crossed, not after 30 s', () => {
+  // A home Tailscale link: 24 ms round trip, 30 Mbps.
+  const roomy = simulate({ seconds: 20, capacity: () => 30000 });
+  const up = roomy.events.find(e => e.reason === 'up');
+  assert.ok(up && up.at <= 4000, JSON.stringify(roomy.events));
+  assert.equal(up.step, WAN_STEPS.length - 1, 'straight to the native width');
+  assert.deepEqual(roomy.events.filter(e => e.reason === 'down'), []);
+  // The first keyframe of 2.5 Mbps on 2.7 Mbps measures ~2.7, not the 17.6 its own age as the base made of it.
+  const tight = simulate({ seconds: 25, capacity: () => 2700 });
+  assert.deepEqual(tight.events, [], 'no climb, no fall');
+  // Far from the LAN but not queued (a phone's Wi-Fi waking up): the same fast opening once on the steps.
+  const far = simulate({ seconds: 15, capacity: () => 100000, oneWay: 12, open: 4 });
+  const reasons = far.events.map(e => `${e.reason}:${e.step}`);
+  assert.equal(reasons[0], `wan:${INITIAL_STEP}`, JSON.stringify(far.events));
+  assert.equal(reasons[1], `up:${WAN_STEPS.length - 1}`, JSON.stringify(far.events));
+  assert.ok(far.events[1].at - far.events[0].at <= 4500, JSON.stringify(far.events));
+});
+
+test('acks: after a fall the opening is over; climbing waits for the long calm again', () => {
+  // 1.3 Mbps for 8 s (W3 falls), then 30 Mbps.
+  const { events } = simulate({ seconds: 40, capacity: t => t < 8000 ? 1300 : 30000 });
+  const down = events.find(e => e.reason === 'down');
+  assert.ok(down, JSON.stringify(events));
+  const up = events.find(e => e.reason === 'up');
+  assert.ok(!up || up.at - down.at >= 60000, JSON.stringify(events));
+});
+
 test('acks: on a steady 2.4 Mbps link a failing step is retried at most once per 8 minutes in the regime', () => {
   const { events } = simulate({ seconds: 40 * 60, capacity: () => 2400 });
   const ups = events.filter(e => e.reason === 'up');

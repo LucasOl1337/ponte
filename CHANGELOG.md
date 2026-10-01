@@ -23,6 +23,24 @@ Only the page changes; no new APK is needed for it.
   once: ~0.2 s.)
 - Lab: the fake `hyprctl` lists one workspace per extra monitor, so a workspace chip
   follows it to another monitor as on a multi-monitor PC.
+- **Fix: the video over a roomy internet link stayed at 1920 px for ~45 s.** A session over
+  15 ms (Tailscale at home) opens on W3, 1920 px wide: on a 3440 monitor the text is as soft
+  as the phone's Balanced JPEG, and the first climb waited 30 s of calm. Now, in the first
+  20 s of a run on the steps and before any fall, a keyframe that crossed with twice the room
+  a higher step needs (and 2 s without a queue) climbs there at once; a move from the LAN
+  that was only far, not queued, opens the same way. After a fall the old rules stand.
+  Server only. Lab, 3440×1440 with 14 px text, legible = as sharp as the JPEG Sharp
+  (27 dB on still text): 30 Mbps at 24 ms readable from 45 s → 5 s; LAN unchanged (1 s);
+  2.5 Mbps never readable before or after (nothing under ~4 Mbps is, at native width
+  either); 20 → 2 → 20 Mbps readable 13-17 s, then steps down with the link. Smoothness of
+  ADR 0001 unchanged: no share over 500 ms, no stretches, the same freezes, p95 within the
+  run-to-run spread.
+- **Fix: the first keyframe of a session measured the link far too fast.** Its capacity was
+  timed against a base round trip that already held the keyframe's own age, so the crossing
+  counted as nothing: 110 KB on 2.7 Mbps came out as 17.6 Mbps.
+- Lab: `tools/lab/text-backdrop.sh` and `PONTE_RD_LAB_BACKDROP` (small native text under the
+  desktop scene), `rd-measure.mjs --legible` (PSNR of still text over time, time to
+  readable).
 
 ## 0.1.0-alpha.33 (2026-09-30)
 
