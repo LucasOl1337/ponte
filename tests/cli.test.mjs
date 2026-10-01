@@ -519,7 +519,7 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
   await assert.rejects(f.cli(['rd'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
   await writeFile(path.join(f.bin, 'chromium'), await readFile(path.join(f.bin, 'tailscale'), 'utf8'), { mode: 0o755 });
   const opened = await f.cli(['rd']);
-  assert.match(opened.stdout, /Ctrl\+Alt\+Shift/);
+  assert.match(opened.stdout, /Ctrl\+X/);
   assert.equal(opened.stdout.includes(token), false, 'the key is not printed');
   let calls = [];
   for (let i = 0; i < 100 && !calls.some(call => call[0] === 'chromium'); i++) {
