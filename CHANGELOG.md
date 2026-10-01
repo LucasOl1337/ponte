@@ -2,7 +2,9 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
-## Unreleased
+## 0.1.0-alpha.42 (2026-10-01)
+
+The remote desktop's video climbs back after a dip, on the PC's Ponte Remoto too. Server only.
 
 - **Remote video recovers after a link dip without reconnecting.** Isolated
   ack phase/jitter spikes no longer reset the entire 30-second calm window.
