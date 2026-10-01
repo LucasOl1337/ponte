@@ -217,7 +217,7 @@ test('on the floor, a queue that keeps growing sheds frames until it drains, the
 // bottleneck of `capacity(t)` kbps with `oneWay` ms each way, and a page that
 // acks the last frame it got at most every 50 ms. Decisions are applied like
 // the session does; the report has what happened.
-function simulate({ seconds, capacity, oneWay = 12, open = 30, caps = { ack: true, key: true }, onDecision } = {}) {
+function simulate({ seconds, capacity, oneWay = 12, open = 30, caps = { ack: true, key: true }, onDecision, keyBytes = null } = {}) {
   let clock = 0, seq = 0, restartAt = 0, nextFrame = 450, linkFree = 0, lastAckSent = -Infinity, pendingAck = null;
   const c = createRateControl({ now: () => clock, caps });
   const arrivals = [], acks = [], events = [], delays = [];
@@ -234,7 +234,7 @@ function simulate({ seconds, capacity, oneWay = 12, open = 30, caps = { ack: tru
     if (clock >= nextFrame) {
       nextFrame += 1000 / params.fps;
       if (!shed) {
-        const bytes = keyNext ? params.kbps * 44 : Math.round(params.kbps * 125 / params.fps);
+        const bytes = keyNext ? keyBytes ?? params.kbps * 44 : Math.round(params.kbps * 125 / params.fps);
         const keyframe = keyNext; keyNext = false;
         seq++;
         const start = Math.max(clock + oneWay, linkFree);
@@ -315,15 +315,99 @@ test('acks: frames in flight for over a second step down without waiting for any
   assert.ok(clock - 4000 <= 1300, `after ${clock - 4000} ms`);
 });
 
-test('acks: a keyframe burst measures the capacity, and a climb after the calm goes straight to what it carries (once a minute)', () => {
+test('acks: recovery measures a fresh keyframe before climbing, never trusting the fall sample', () => {
   // Opens at W3 on a link that fell to 1.2 Mbps, then grows to 30 Mbps at 20 s.
-  const { events, c } = simulate({ seconds: 240, capacity: t => t < 20000 ? 1200 : 30000 });
+  const { events, c } = simulate({ seconds: 300, capacity: t => t < 20000 ? 1200 : 30000 });
   const ups = events.filter(e => e.reason === 'up');
   assert.ok(ups.length >= 1, JSON.stringify(events));
-  // The first climb is one step (the samples so far saw 1.2 Mbps); its keyframe sees 30 Mbps, and the next one goes to the top.
-  assert.equal(ups[1]?.step, 5, JSON.stringify(ups));
+  const probe = events.find(e => e.reason === 'probe');
+  const down = events.find(e => e.reason === 'down');
+  assert.ok(probe && probe.at - down.at >= 60000, JSON.stringify(events));
+  assert.equal(probe.step, down.step, 'measure at the safe delta rate');
+  // The floor's tiny keyframe and the 50 ms ack floor only prove W2.
+  // Larger keyframes of later runs measure more room, never a blind jump.
+  assert.equal(ups[0]?.step, 2, JSON.stringify(events));
+  assert.equal(ups[1]?.step, 4, JSON.stringify(events));
   assert.ok(ups[1].at - ups[0].at >= 60000);
+  assert.ok(ups[0].at - probe.at >= 60000, 'probe and climb share the minute restart budget');
   assert.equal(c.step, 5);
+});
+
+test('acks: isolated coalescing jitter does not starve calm, but a sustained small queue does', () => {
+  function run(queueAt) {
+    const t = control({ caps: { ack: true, key: true } });
+    t.c.open(30);
+    let seq = 0, decision = null;
+    for (let ms = 100; ms <= 35000; ms += 100) {
+      t.at(ms); t.c.sent(1000, false, ++seq);
+      t.pass(30 + queueAt(ms)); t.c.ack(seq);
+      if (ms % 1000 === 0) decision = t.c.tick() || decision;
+    }
+    return decision;
+  }
+  assert.equal(run(ms => ms % 5000 === 0 ? 80 : 0)?.reason, 'up', 'isolated jitter');
+  assert.equal(run(ms => ms % 5000 < 1000 ? 80 : 0), null, 'sustained 80 ms queue');
+  assert.equal(run(ms => ms % 5000 === 0 ? 160 : 0), null, 'large spike still resets calm');
+});
+
+test('acks: recovery on an unchanged tight link probes at most once a minute and never climbs blind', () => {
+  const { events } = simulate({ seconds: 240, capacity: () => 1200 });
+  assert.equal(events.filter(e => e.reason === 'up').length, 0, JSON.stringify(events));
+  const probes = events.filter(e => e.reason === 'probe');
+  assert.ok(probes.length >= 2, JSON.stringify(events));
+  for (let i = 1; i < probes.length; i++) assert.ok(probes[i].at - probes[i - 1].at >= 60000);
+});
+
+test('acks: probes with no room back off 2, 4, 8 minutes, capped at 10, not a pause every two minutes', () => {
+  const { events } = simulate({ seconds: 3600, capacity: () => 1200 });
+  const probes = events.filter(e => e.reason === 'probe');
+  assert.ok(probes.filter(e => e.at < 1200000).length <= 4, JSON.stringify(probes));
+  assert.equal(events.filter(e => e.reason === 'up').length, 0);
+  const waits = probes.slice(1).map((e, i) => e.at - probes[i].at);
+  for (let i = 0; i < waits.length; i++) {
+    const expected = Math.min(600000, 120000 * 2 ** i);
+    assert.ok(waits[i] >= expected && waits[i] < expected + 2000, JSON.stringify(waits));
+  }
+});
+
+test('acks: useful recovery probe keeps the previous 2 to 20 Mbps climb times', () => {
+  const { events } = simulate({ seconds: 300, capacity: t => t < 15000 ? 20000 : t < 45000 ? 2000 : 20000 });
+  assert.deepEqual(events.filter(e => e.reason === 'up').map(e => [e.at, e.step]),
+    [[3000, 5], [139000, 2], [199000, 4], [259000, 5]]);
+});
+
+test('acks: up and down clear probe backoff for the new step', () => {
+  const { events } = simulate({ seconds: 900, capacity: t => t < 400000 ? 1200 : t < 650000 ? 30000 : 1200 });
+  const up = events.find(e => e.reason === 'up');
+  assert.ok(up, JSON.stringify(events));
+  const down = events.filter(e => e.reason === 'down' && e.at >= 650000).at(-1);
+  const probe = events.find(e => e.reason === 'probe' && e.at > down.at);
+  assert.ok(probe.at - down.at >= 60000 && probe.at - down.at < 80000, JSON.stringify(events));
+});
+
+test('acks: no recovery probe on stable LAN, roomy WAN or the highest step', () => {
+  for (const open of [4, 30]) {
+    const { events, c } = simulate({ seconds: 180, capacity: () => 100000, oneWay: open === 4 ? 1 : 12, open });
+    assert.equal(events.filter(e => e.reason === 'probe').length, 0, JSON.stringify(events));
+    if (open === 4) assert.equal(c.mode, 'lan');
+    else assert.equal(c.step, WAN_STEPS.length - 1);
+  }
+});
+
+test('acks: tiny recovery keys allow only one-step trials, with backoff on a tight link', () => {
+  const roomy = simulate({ seconds: 420, keyBytes: 19000, capacity: t => t < 8000 ? 1200 : 30000 });
+  const ups = roomy.events.filter(e => e.reason === 'up');
+  const down = roomy.events.find(e => e.reason === 'down');
+  assert.ok(down && ups.length, JSON.stringify(roomy.events));
+  let previous = down.step;
+  for (const up of ups) { assert.equal(up.step, previous + 1); previous = up.step; }
+  assert.equal(roomy.c.step, WAN_STEPS.length - 1, 'a still terminal is not stuck');
+
+  const tight = simulate({ seconds: 1200, keyBytes: 19000, capacity: () => 1200 });
+  const trials = tight.events.filter(e => e.reason === 'up' && e.step === 2);
+  assert.ok(trials.length >= 2, JSON.stringify(tight.events));
+  for (let i = 1; i < trials.length; i++) assert.ok(trials[i].at - trials[i - 1].at >= 120000);
+  for (const trial of trials) assert.ok(tight.events.some(e => e.reason === 'down' && e.at > trial.at && e.at - trial.at <= 20000));
 });
 
 test('acks: opening on a roomy link climbs as soon as its first keyframe crossed, not after 30 s', () => {
