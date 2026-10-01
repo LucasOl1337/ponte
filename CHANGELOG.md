@@ -2,6 +2,26 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.40 (2026-10-01)
+
+The Agents panel counts what is really open and says who is who. Server and page only;
+the installed APK keeps working.
+
+- **The right number.** JCode, Hermes and other harnesses are now detected; shared servers
+  (`jcode serve`, Codex's app-server, sandboxes) and processes that only inherited a Maestri id
+  no longer count. One item per Maestri terminal, even after the app restarts. The header says
+  "N AGENTS · M BUSY" instead of an active count that read like a total. Shells with no agent
+  are listed apart.
+- **Who is who.** Each agent shows its canvas name, workspace, team (who recruited it, from
+  the canvas ropes), Maestri role, model and effort, branch and the last thing it did. Teams
+  are grouped by workspace with their lead on top, marked "Team lead (canvas connections)".
+- **State from the transcript.** Codex and JCode turns come from what they write
+  (task started or complete, an unanswered tool call), not from CPU.
+- Read-only: transcripts are read from their last 96 KB, again only when they grew; a JCode
+  snapshot over 100 MB is never read whole. On this PC a scan takes 55 ms with 19 agents.
+- Verified: `npm test` 488 pass, 1 skipped; fake lab 8 agents in 2 teams; the real PC
+  matched process by process (14 Maestri agents, nothing missing or extra).
+
 ## 0.1.0-alpha.39 (2026-10-01)
 
 One list of your devices on the phone's Home (ADR 0002, slice 4). Page and one new reason
