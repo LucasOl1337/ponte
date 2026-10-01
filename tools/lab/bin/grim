@@ -34,7 +34,7 @@ for y in range(0, H, 100):
     d.line([(0, y), (W, y)], fill=(60, 64, 56) if y % 500 else (110, 120, 96), width=1)
     if y % 200 == 0: d.text((4, y + 4), str(y), fill=(150, 160, 130), font=font)
 for name, kind_, (x, y, w, h) in _lab.targets():
-    d.rectangle([x, y, x + w, y + h], outline=(213, 248, 136), width=3, fill=(40, 46, 34) if kind_ == 'field' else (70, 90, 50))
+    d.rectangle([x, y, x + w, y + h], outline=(213, 248, 136), width=3, fill=(40, 46, 34) if kind_ == 'field' else (30, 40, 52) if kind_ == 'canvas' else (70, 90, 50))
     d.text((x + 10, y + 18), f'{name} {kind_} {int(x)},{int(y)}', fill=(240, 240, 220), font=font)
 c = s['cursor']
 for i, click in enumerate(s['clicks']):
@@ -60,7 +60,7 @@ if title:
     d.text((W // 2 - 240, 78), title[:22], fill=(213, 248, 136), font=big)
 d.rectangle([20, H - 120, W - 20, H - 20], fill=(30, 34, 28), outline=(110, 120, 96))
 d.text((30, H - 110), 'typed: ' + s['typed'][-90:], fill=(213, 248, 136), font=big)
-d.text((30, H - 60), f"profile {s['profile']} · accel {s['accel']} · text focus {'on' if s.get('textFocus') else 'off'} · wheel {s.get('wheel', 0):+d}", fill=(150, 160, 130), font=font)
+d.text((30, H - 60), f"profile {s['profile']} · accel {s['accel']} · text focus {s.get('textFocus') or 'off'} · wheel {s.get('wheel', 0):+d}", fill=(150, 160, 130), font=font)
 if scale != 1: im = im.resize((max(1, round(W * scale)), max(1, round(H * scale))), Image.BILINEAR)
 out = io.BytesIO()
 if kind == 'jpeg': im.save(out, 'JPEG', quality=quality)

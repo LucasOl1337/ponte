@@ -4,6 +4,7 @@ import { access, stat, readFile } from 'node:fs/promises';
 import { constants, existsSync } from 'node:fs';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 import { message } from './i18n.mjs';
+import { textInputState } from './textinput.mjs';
 
 const keyCodes = {
   Enter: [28], Escape: [1], BackSpace: [14], Tab: [15], Delete: [111],
@@ -264,14 +265,21 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     } catch { return null; }
   }
   // fcitx5 owns the compositor's input-method seat. Its DebugInfo lists every
-  // input context with focus:1 only while an *enabled* text field has focus
-  // (verified: a button-only dialog reports none). That is the cue to raise
-  // the phone keyboard after a tap.
+  // input context; `context` names the focused one (id, program, cap) so the
+  // phone can tell a tap that focused a field from a window that keeps its IC
+  // focused all along (Maestri, terminals). See backend/textinput.mjs.
   async function textInputFocused() {
     try {
       const raw = String(await run('busctl', ['--user', '--timeout=1', 'call', 'org.fcitx.Fcitx5', '/controller', 'org.fcitx.Fcitx.Controller1', 'DebugInfo'], { timeout: 1500 }));
-      return { available: true, focused: /focus:1\b/.test(raw) };
-    } catch { return { available: false, focused: null }; }
+      return textInputState(raw);
+    } catch { return { available: false, focused: null, context: null }; }
+  }
+  // The focused IC right before a tap (null = none, undefined = unknown).
+  async function textInputBaseline() {
+    try { const state = await textInputFocused(); return state.available ? state.context : undefined; } catch { return undefined; }
+  }
+  async function activeWindowAddress() {
+    try { const active = await readHypr('activewindow'); return typeof active?.address === 'string' && active.address ? active.address : null; } catch { return null; }
   }
   const validMonitorName = (name) => typeof name === 'string' && name.length > 0 && name.length <= 150 && !/[\s;&|`$><()"\\]/u.test(name);
   // Hyprland 0.56+ exposes only a dpms TOGGLE through the Lua dispatch bridge,
@@ -396,8 +404,23 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         const buttons = { left: '0xC0', right: '0xC1', middle: '0xC2' };
         if (!Object.hasOwn(buttons, value.button)) throw new ApiError(400, 'INVALID_BUTTON');
         const point = await monitorPoint(value);
+        // Only a left tap can raise the phone keyboard. Its baseline is the IC
+        // focused before the pointer moves: with follow_mouse the move alone
+        // activates the window under it and some apps (Chromium) restore
+        // their last field right then, which a tap into that page must still
+        // count as its own doing.
+        const textBefore = value.button === 'left' && value.textBaseline === true ? await textInputBaseline() : undefined;
+        const windowBefore = textBefore !== undefined ? await activeWindowAddress() : null;
         await placePointer(point);
         await run('ydotool', ['click', buttons[value.button]]);
+        // A tap that also activated another window (follow_mouse on the move,
+        // or the click itself) may only be restoring that window's own input
+        // context: Maestri focuses its hidden textarea on any click. Without
+        // proof the point is a field, the phone does not open the keyboard.
+        if (textBefore !== undefined) {
+          const windowAfter = await activeWindowAddress();
+          return { ok: true, textBefore, windowChanged: !windowBefore || !windowAfter || windowBefore !== windowAfter };
+        }
         break;
       }
       case 'mouse.moveTo': {

@@ -8,6 +8,7 @@ import http from 'node:http';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { createApp } from '../server.mjs';
 import { createDesktop, resolveLiveCapture } from '../backend/desktop.mjs';
+import { parseFcitxDebugInfo, tapFocusedText, textInputState } from '../backend/textinput.mjs';
 import { createAudioStore, MAX_AUDIO_BYTES } from '../backend/audio.mjs';
 import { ApiError, runCommand } from '../backend/process.mjs';
 import { createLiveStreaming, parseLiveOptions, writeLiveFrame } from '../backend/live.mjs';
@@ -968,12 +969,74 @@ test('absolute pointer moves and the text-input probe back the phone screen with
   for (const value of [{ type: 'mouse.moveTo', monitor: 'DP-1', x: 1920, y: 0 }, { type: 'mouse.moveTo', monitor: 'NOPE', x: 0, y: 0 }, { type: 'mouse.moveTo', monitor: 'DP-1', x: 1.5, y: 0 }]) {
     assert.equal((await f.action(value)).status, 400, JSON.stringify(value));
   }
-  assert.deepEqual(await (await f.request('/api/textinput')).json(), { available: true, focused: true });
+  assert.deepEqual(await (await f.request('/api/textinput')).json(), { available: true, focused: true, context: { id: 'b', program: 'chromium', cap: '1', typeable: true } });
   debug = debug.replace('focus:1', 'focus:0');
-  assert.deepEqual(await (await f.request('/api/textinput')).json(), { available: true, focused: false });
+  assert.deepEqual(await (await f.request('/api/textinput')).json(), { available: true, focused: false, context: null });
   const state = await (await f.request('/api/state')).json();
-  assert.deepEqual(state.textInput, { available: true, focused: false });
+  assert.deepEqual(state.textInput, { available: true, focused: false, context: null });
   assert.equal((await fetch(`${f.base}/api/textinput`)).status, 401);
+});
+
+// Shaped like busctl's real answer (one escaped string), with synthetic ids.
+const FCITX_SAMPLE = 's "Group [wayland:] has 4 InputContext(s)\\n  IC [aaaa] program:term frontend:wayland_v2 cap:100000072 focus:0\\n  IC [bbbb] program:browser frontend:wayland_v2 cap:90072 focus:0\\n  IC [cccc] program:canvas-app frontend:wayland_v2 cap:90072 focus:1\\n  IC [dddd] program:launcher frontend:wayland_v2 cap:1e001800072 focus:0\\nGroup [x11::0] has 1 InputContext(s)\\n  IC [eeee] program: frontend:xim cap:4000000000 focus:0\\nInput Context without group\\n"';
+
+test('fcitx DebugInfo parses into input contexts; Disable and NoOnScreenKeyboard ICs are not typeable', () => {
+  const parsed = parseFcitxDebugInfo(FCITX_SAMPLE);
+  assert.equal(parsed.contexts.length, 5);
+  assert.deepEqual(parsed.contexts.map(ic => [ic.id, ic.program, ic.group, ic.focus]), [['aaaa', 'term', 'wayland:', false], ['bbbb', 'browser', 'wayland:', false], ['cccc', 'canvas-app', 'wayland:', true], ['dddd', 'launcher', 'wayland:', false], ['eeee', '', 'x11::0', false]]);
+  assert.deepEqual(textInputState(FCITX_SAMPLE), { available: true, focused: true, context: { id: 'cccc', program: 'canvas-app', cap: '90072', typeable: true } });
+  const launcher = textInputState(FCITX_SAMPLE.replace('cap:90072 focus:1', 'cap:90072 focus:0').replace('cap:1e001800072 focus:0', 'cap:1e001800072 focus:1'));
+  assert.deepEqual(launcher, { available: true, focused: false, context: { id: 'dddd', program: 'launcher', cap: '1e001800072', typeable: false } }, 'the Disable bit (1<<40) is not a field');
+  const noOsk = textInputState(FCITX_SAMPLE.replace('cap:90072 focus:1', `cap:${(0x90072 | (1 << 15)).toString(16)} focus:1`));
+  assert.equal(noOsk.focused, false);
+  assert.deepEqual(textInputState('garbage'), { available: true, focused: false, context: null });
+});
+
+test('only a tap that caused the focus counts: none -> IC, another IC, or another cap; never the same IC', () => {
+  const canvas = { id: 'cccc', cap: '90072', typeable: true };
+  assert.equal(tapFocusedText(canvas, canvas), false, 'canvas app: focused before and after the tap');
+  assert.equal(tapFocusedText(null, canvas), true, 'nothing focused before: the tap focused a field');
+  assert.equal(tapFocusedText({ id: 'aaaa', cap: '100000072' }, canvas), true, 'another IC');
+  assert.equal(tapFocusedText({ id: 'cccc', cap: '1072' }, canvas), true, 'same window, another kind of field');
+  assert.equal(tapFocusedText(undefined, canvas), false, 'no baseline: never guess');
+  assert.equal(tapFocusedText(null, null), false);
+  assert.equal(tapFocusedText(null, { ...canvas, typeable: false }), false);
+});
+
+test('a left tap with textBaseline returns the IC focused before the pointer moved and whether the active window changed', async () => {
+  const calls = [];
+  let focusedIc = 'cccc';
+  let active = '0x1';
+  const runner = async (command, args) => {
+    calls.push([command, ...args].join(' '));
+    if (command === 'busctl') return FCITX_SAMPLE.replace('cap:90072 focus:1', 'cap:90072 focus:0').replace(new RegExp(`(IC \\[${focusedIc}\\] [^\\\\]*)focus:0`), '$1focus:1');
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'DP-1', x: 0, y: 0, width: 1920, height: 1080 }]);
+    if (command === 'hyprctl' && args[1] === 'devices') return JSON.stringify({ mice: [{ name: 'ydotoold-virtual-device-1' }] });
+    if (command === 'hyprctl' && args[1] === 'activewindow') return JSON.stringify({ address: active });
+    if (command === 'hyprctl' && args[0] === 'cursorpos') return '10, 20';
+    if (command === 'ydotool' && args[0] === 'click') { focusedIc = 'bbbb'; }
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  const result = await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true });
+  assert.deepEqual(result, { ok: true, textBefore: { id: 'cccc', program: 'canvas-app', cap: '90072', typeable: true }, windowChanged: false });
+  const firstProbe = calls.findIndex(call => call.startsWith('busctl'));
+  const firstMove = calls.findIndex(call => call.startsWith('ydotool mousemove'));
+  const click = calls.findIndex(call => call.startsWith('ydotool click'));
+  assert.ok(firstProbe >= 0 && firstProbe < firstMove && firstMove < click, 'baseline before the pointer moves (follow_mouse can restore a field on hover)');
+
+  focusedIc = 'cccc'; calls.length = 0;
+  const switching = createDesktop({ runner: async (command, args) => { if (command === 'ydotool' && args[0] === 'click') active = '0x2'; return runner(command, args); }, exists: async () => true });
+  active = '0x1';
+  assert.equal((await switching.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true })).windowChanged, true);
+
+  calls.length = 0;
+  assert.deepEqual(await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'right', textBaseline: true }), { ok: true });
+  assert.deepEqual(await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left' }), { ok: true });
+  assert.equal(calls.filter(call => call.startsWith('busctl')).length, 0, 'right clicks and plain clicks never probe fcitx');
+
+  const noFcitx = createDesktop({ runner: async (command, args) => { if (command === 'busctl') throw new Error('no fcitx'); return runner(command, args); }, exists: async () => true });
+  assert.deepEqual(await noFcitx.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true }), { ok: true }, 'without fcitx there is no baseline, so the phone never guesses');
 });
 
 test('the virtual pointer is set to a flat profile and every placement is verified against the compositor cursor', async () => {

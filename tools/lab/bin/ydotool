@@ -35,7 +35,15 @@ with _lab.locked():
             button = {'0xc0': 'left', '0xc1': 'right', '0xc2': 'middle'}.get(code, code)
             s['clicks'] = (s['clicks'] + [{**s['cursor'], 'button': button}])[-12:]
             name, kind = _lab.target_at(s['cursor']['x'], s['cursor']['y'])
-            if button == 'left': s['textFocus'] = kind == 'field'
+            # textFocus is the focused input context: the field's own IC, the
+            # canvas app's IC (focused on its first click and kept), or none.
+            if button == 'left':
+                if kind == 'field': s['textFocus'] = f'field-{name}'
+                elif kind == 'canvas': s['textFocus'] = 'canvas'
+                elif s.get('textFocus') != 'canvas' or kind is not None: s['textFocus'] = False
+                # The canvas lives in its own app window: a click on it makes
+                # that window active, a click anywhere else gives it back.
+                s['active'] = '0xlabcanvas' if kind == 'canvas' else '0xlab'
             extra['target'] = name
         extra['cursor'] = s['cursor']; extra['held'] = s['held']
     elif args[:1] == ['key']:

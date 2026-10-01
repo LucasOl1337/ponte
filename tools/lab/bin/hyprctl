@@ -10,7 +10,9 @@ try:
     with open(os.path.join(_lab.LAB, 'clients.json')) as f: extra = json.load(f)
 except (OSError, ValueError): extra = []
 clients = [window] + extra
-active = next((c for c in clients if c['address'] == _lab.load().get('active')), window)
+# Target D (see _lab.targets) is the window of a canvas app like Maestri.
+canvas = {**window, 'address': '0xlabcanvas', 'title': 'Lab canvas', 'class': 'lab-canvas'}
+active = next((c for c in clients + [canvas] if c['address'] == _lab.load().get('active')), window)
 if args[:1] == ['-j']:
     kind = args[1]
     if kind == 'monitors': print(json.dumps([m] + _lab.extra_monitors()))
