@@ -2,6 +2,28 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.41 (2026-10-01)
+
+One shortcut row for Dev, Terminals and the Screen. Page and server key lists; the installed
+APK keeps working.
+
+- **Enter, Esc and Ctrl+C never move.** They open every row, in the same place on all three
+  surfaces. On a 412 px phone, Dev's Enter went from x=518 (off screen, behind a scroll) to x=0.
+- **A menu puts its answers first.** When the agent shows a numbered choice (Claude's "Do you
+  want to proceed?"), 1, 2 and 3 come right after Ctrl+C; without a menu the row goes back to
+  Shift+Tab, ↑ and ↓.
+- **Every key in one sheet**, by group (agent, navigation, editing, shell, windows and apps).
+  Pin a key to the row, save commands (`npm test`) that all three rows share, and the keys you
+  use most move forward when you come back, never under your finger.
+- **New keys:** Ctrl+J (new line without sending in Claude Code), Shift+Enter, Esc twice,
+  Ctrl+C twice, repeat the last command, `fg`, Ctrl+R/L/D/Z, and on the Screen Ctrl+Shift+C/V/Z,
+  Ctrl+F/S/T/W/Tab and F5. The server takes only its fixed list, and a test ties the page, the
+  CLI catalog and the server together.
+- Limits: Ctrl+J as a new line is confirmed in Claude Code, not in Codex 0.159. Pins and saved
+  commands live in this browser only.
+- Verified: `npm test` 500 pass, 1 skipped; lab at 412 px with key events logged on the fake
+  agent, terminal and desktop.
+
 ## 0.1.0-alpha.40 (2026-10-01)
 
 The Agents panel counts what is really open and says who is who. Server and page only;
