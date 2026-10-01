@@ -1,0 +1,17 @@
+#!/bin/sh
+# Lab ssh for the fleet: reads the synthetic config and never connects.
+# `-G ALIAS` prints the resolved config; any connection fails at once.
+here=$(dirname "$0")
+case "$1" in
+  -G) exec ssh -F "$here/ssh_config" -G "$2" ;;
+esac
+alias=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o|-O|-F|-p|-l|-i) shift 2 ;;
+    -*) shift ;;
+    *) alias="$1"; break ;;
+  esac
+done
+echo "ssh: connect to host $alias port 22: Connection refused" >&2
+exit 255

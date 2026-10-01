@@ -4,6 +4,11 @@
 // discovery points each node at the other and the tailnet whois answers
 // "same owner" for 127.0.0.1, so pairing and relaying run the production code.
 //
+//
+// The fleet and the device list see a synthetic tailnet, SSH config and adb
+// (tools/lab/net/): made-up names on documentation addresses, never the
+// machine's real ones.
+//
 //   node tools/lab/mesh.mjs      # pc-teste on :8799, notebook-teste on :8797
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,13 +17,16 @@ import { execFile } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createApp } from '../../server.mjs';
 import { createDesktop } from '../../backend/desktop.mjs';
+import { parseAdbDevices } from '../../backend/devices.mjs';
 
 const run = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const base = process.env.PONTE_LAB_MESH_DIR || path.join(root, '.work/lab-mesh');
 const nodes = [
-  { key: 'a', name: 'pc-teste', http: Number(process.env.PONTE_LAB_PORT_A || 8799), native: Number(process.env.PONTE_LAB_NATIVE_A || 8798), monitor: '1920x1080' },
-  { key: 'b', name: 'notebook-teste', http: Number(process.env.PONTE_LAB_PORT_B || 8797), native: Number(process.env.PONTE_LAB_NATIVE_B || 8796), monitor: '1366x768' },
+  // pc-teste holds the phone link: its adb sees celular-teste over the tailnet.
+  { key: 'a', name: 'pc-teste', kind: 'pc', http: Number(process.env.PONTE_LAB_PORT_A || 8799), native: Number(process.env.PONTE_LAB_NATIVE_A || 8798), monitor: '1920x1080',
+    adb: 'List of devices attached\n192.0.2.3:5555 device product:lab model:Celular_teste device:lab\n' },
+  { key: 'b', name: 'notebook-teste', kind: 'notebook', http: Number(process.env.PONTE_LAB_PORT_B || 8797), native: Number(process.env.PONTE_LAB_NATIVE_B || 8796), monitor: '1366x768', adb: '' },
 ];
 
 async function certificates(dir) {
@@ -42,6 +50,7 @@ for (const node of nodes) {
     ...process.env, PONTE_LAB_DIR: dir, PONTE_LAB_MONITOR: node.monitor, PONTE_LAB_TITLE: node.name, PONTE_LAB_ACCEL: '1',
     PATH: `${root}/tools/lab/bin:${process.env.PATH}`, WAYLAND_DISPLAY: 'ponte-lab-none', PONTE_SUSSURRO_SOCKET: '', PONTE_STT_URL: '',
     MAGMA_LIGHTS_CONTROLLER: path.join(dir, 'no-magma/controller.py'), YDOTOOL_SOCKET: path.join(dir, 'input.sock'),
+    PONTE_TAILSCALE_BIN: path.join(root, 'tools/lab/net/tailscale'), PONTE_SSH_BIN: path.join(root, 'tools/lab/net/ssh'),
   };
   await mkdir(path.join(dir, 'data'), { recursive: true, mode: 0o700 });
   await run('python3', ['-c', 'import socket,sys,os\np=sys.argv[1]\nif not os.path.exists(p): socket.socket(socket.AF_UNIX).bind(p)', env.YDOTOOL_SOCKET]);
@@ -53,7 +62,9 @@ for (const node of nodes) {
   const app = await createApp({
     dataDir: path.join(dir, 'data'), env, desktop, nativeTls: { cert: tls.cert, key: tls.key }, caPem: tls.ca, tailnetIdentity: identity,
     trustedHosts: [`127.0.0.1:${node.http}`, `localhost:${node.http}`],
-    meshOptions: { name: node.name, enabled: true, discover: async () => [{ ip: '127.0.0.1', port: other.native }] },
+    meshOptions: { name: node.name, kind: node.kind, enabled: true, discover: async () => [{ ip: '127.0.0.1', port: other.native }] },
+    fleetOptions: { sshConfigFile: path.join(root, 'tools/lab/net/ssh_config') },
+    devicesOptions: { adb: async () => parseAdbDevices(node.adb) },
   });
   await new Promise(resolve => app.server.listen(node.http, '127.0.0.1', resolve));
   await new Promise(resolve => app.nativeServer.listen(node.native, '127.0.0.1', resolve));

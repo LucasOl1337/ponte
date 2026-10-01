@@ -2,6 +2,8 @@
 
 Every Omarchy machine runs the same Ponte server (a *node*). The node you hold is your *home node*: the PC for the phone app, `127.0.0.1:8787` for a browser on a desktop. It keeps the links to the other nodes and relays your requests to them, so the phone app and the browser never need another node's certificate or key, and the Android app does not change.
 
+The [device list](devices.md) (`./ponte devices`, `/api/devices`) shows the mesh together with the tailnet, SSH and adb, one entry per device.
+
 ## Install a node (notebook, second PC)
 
 On that machine, as its user, with Tailscale connected:
