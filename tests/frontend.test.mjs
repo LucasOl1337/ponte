@@ -449,7 +449,7 @@ test('direct touch: a tap clicks the mapped pixel, a held move starts a semantic
   preview.dispatchEvent(evt('pointerdown', 1, 195, 109.5));
   preview.dispatchEvent(evt('pointerup', 1, 195, 109.5));
   await flushTicks();
-  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 960, y: 540, button: 'left' }]);
+  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 960, y: 540, button: 'left', textBaseline: true }]);
   h.calls.length = 0;
   // A held move starts a captured drag and releases it, but never emits a click.
   h.run("screenMode='live'");
@@ -486,7 +486,7 @@ test('direct touch tolerates finger jitter and a deliberate one-finger move drag
   preview.dispatchEvent(evt('pointermove', 31, 112, 109));
   preview.dispatchEvent(evt('pointerup', 31, 112, 109));
   await flushTicks();
-  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 492, y: 493, button: 'left' }]);
+  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 492, y: 493, button: 'left', textBaseline: true }]);
 
   h.calls.length = 0;
   // At fitted 1×, a deliberate one-finger move should hold the left button so
@@ -694,7 +694,7 @@ test('a tap on a frame that is not live never clicks: it brings the stream back 
   preview.dispatchEvent(evt('pointerdown', 2, 195, 109.5));
   preview.dispatchEvent(evt('pointerup', 2, 195, 109.5));
   await flushTicks();
-  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 960, y: 540, button: 'left' }]);
+  assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 960, y: 540, button: 'left', textBaseline: true }]);
   const marker = h.el('#tap-marker');
   assert.equal(marker.hidden, false);
   assert.equal(marker.getAttribute('data-kind'), 'left');
@@ -759,39 +759,162 @@ test('the screen shows Omarchy workspaces, lights the one on the streamed monito
   assert.deepEqual(actions().filter(a => a.type === 'workspace.focus'), [{ type: 'workspace.focus', id: 3, monitor: 'DP-1' }]);
 });
 
-test('native Android opens the phone keyboard after a PC text field receives a tap', async () => {
-  const h = powerUiHarness({ textInput: { available: true, focused: true }, userAgent: 'Android PonteAndroid/0.1.0-alpha.17' });
-  await flushTicks();
-  h.run("navigate('tela');connected=true;state.capabilities.keyboard=true");
-  await h.run('checkTextInput()');
-  assert.equal(h.el('#screen-composer').hidden, false);
-  assert.equal(h.document.activeElement, h.el('#screen-input'));
-  assert.equal(h.run('location.href'), 'ponte://keyboard/show');
-  assert.equal(h.run('screenComposerAutomatic'), true);
-});
+// Synthetic fcitx input contexts. The canvas app keeps its IC focused whatever
+// is clicked (measured on Maestri: same id and cap before and after every
+// click on its canvas); a page field shows up as a new IC or a new cap.
+const CANVAS_IC = { id: 'ic-canvas', program: 'canvas-app', cap: '90072', typeable: true };
+const FIELD_IC = { id: 'ic-page', program: 'browser', cap: '90072', typeable: true };
+const URL_IC = { id: 'ic-page', program: 'browser', cap: '1072', typeable: true };
+const TERMINAL_IC = { id: 'ic-term', program: 'terminal', cap: '100000072', typeable: true };
+const focusedOn = context => ({ available: true, focused: Boolean(context), context: context || null });
+const NATIVE_UA = 'Android PonteAndroid/0.1.0-alpha.17';
 
-test('native tap retries a transient unfocused probe and uses the Android keyboard bridge', async () => {
-  const probes = [
-    { available: true, focused: false },
-    { available: true, focused: true },
-  ];
-  const h = powerUiHarness({ textInput: () => probes.shift() ?? probes.at(-1), userAgent: 'Android PonteAndroid/0.1.0-alpha.17' });
-  let bridgeCalls = 0;
-  h.window.PonteNative = { showKeyboard: () => { bridgeCalls++; } };
+function nativeTapHarness({ textInput, tapResult }) {
+  const h = powerUiHarness({ textInput, userAgent: NATIVE_UA, actionResult: body => body.type === 'mouse.clickAt' ? (typeof tapResult === 'function' ? tapResult(body) : tapResult) : { ok: true } });
+  h.bridge = 0;
+  h.window.PonteNative = { showKeyboard: () => { h.bridge++; }, hideKeyboard() {} };
+  return h;
+}
+async function openStream(h) {
   await flushTicks();
   h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
+}
+async function tapStream(h, { x = 195, y = 109.5, id = 27 } = {}) {
+  // The fake stream ends at once and drops the screen out of live; a tap on a
+  // still frame never clicks, so each tap starts from a live screen.
+  h.run("screenMode='live'");
   const preview = h.el('#screen-preview');
-  const event = type => ({ type, pointerId: 27, clientX: 195, clientY: 109.5, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  const event = type => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
   preview.dispatchEvent(event('pointerdown'));
   preview.dispatchEvent(event('pointerup'));
   await flushTicks();
+}
+// Runs the tap's probe and every retry it schedules.
+async function settleKeyboard(h) {
+  for (let i = 0; i < 8 && h.run('keyboardCheckTimer'); i++) await h.runTimer(h.run('keyboardCheckTimer'));
+}
+
+test('native Android opens the phone keyboard when the tap focused a PC text field (none -> field)', async () => {
+  const h = nativeTapHarness({ textInput: focusedOn(FIELD_IC), tapResult: { ok: true, textBefore: null, windowChanged: false } });
+  await openStream(h);
+  await tapStream(h);
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, false);
+  assert.equal(h.document.activeElement, h.el('#screen-input'));
+  assert.equal(h.bridge, 1);
+  assert.equal(h.run('screenComposerAutomatic'), true);
+});
+
+test('a tap on a canvas whose input context was already focused never opens the keyboard (Maestri)', async () => {
+  const h = nativeTapHarness({ textInput: focusedOn(CANVAS_IC), tapResult: { ok: true, textBefore: CANVAS_IC, windowChanged: false } });
+  await openStream(h);
+  for (let i = 0; i < 3; i++) { await tapStream(h, { id: 30 + i }); await settleKeyboard(h); }
+  assert.equal(h.el('#screen-composer').hidden, true);
+  assert.equal(h.bridge, 0);
+  assert.equal(h.el('#screen-keyboard').getAttribute('data-text-focused'), 'true', 'the keyboard button still shows the PC has a focused IC');
+  assert.equal(h.calls.filter(call => call.path === '/api/textinput').length, 3, 'one probe per tap, no retries for a focus that already existed');
+});
+
+test('a terminal already focused plus a tap elsewhere in it does not open the keyboard', async () => {
+  const h = nativeTapHarness({ textInput: focusedOn(TERMINAL_IC), tapResult: { ok: true, textBefore: TERMINAL_IC, windowChanged: false } });
+  await openStream(h);
+  await tapStream(h);
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, true);
+  assert.equal(h.bridge, 0);
+});
+
+test('a tap that also activates another window is no proof of a text field: the keyboard stays closed', async () => {
+  // Maestri focuses its hidden textarea on the click that activates it: fcitx
+  // shows none -> IC exactly like a real field, so the safe answer is no.
+  const h = nativeTapHarness({ textInput: focusedOn(CANVAS_IC), tapResult: { ok: true, textBefore: null, windowChanged: true } });
+  await openStream(h);
+  await tapStream(h);
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, true);
+  assert.equal(h.bridge, 0);
+  h.el('#screen-keyboard').dispatchEvent({ type: 'click' });
+  assert.equal(h.el('#screen-composer').hidden, false, 'the manual keyboard button always works');
+});
+
+test('the same window going from its address bar to a page field (new cap) counts as the tap focusing a field', async () => {
+  const h = nativeTapHarness({ textInput: focusedOn(FIELD_IC), tapResult: { ok: true, textBefore: URL_IC, windowChanged: false } });
+  await openStream(h);
+  await tapStream(h);
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, false);
+});
+
+test('an older server without a baseline never opens the keyboard by itself', async () => {
+  const h = nativeTapHarness({ textInput: { available: true, focused: true }, tapResult: { ok: true } });
+  await openStream(h);
+  await tapStream(h);
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, true);
+  assert.equal(h.el('#screen-keyboard').getAttribute('data-text-focused'), 'true');
+});
+
+test('native tap retries a transient unfocused probe and uses the Android keyboard bridge', async () => {
+  const probes = [focusedOn(null), focusedOn(FIELD_IC)];
+  const h = nativeTapHarness({ textInput: () => probes.shift() ?? probes.at(-1), tapResult: { ok: true, textBefore: null, windowChanged: false } });
+  await openStream(h);
+  await tapStream(h);
   await h.runTimer(h.run('keyboardCheckTimer'));
   assert.equal(h.el('#screen-composer').hidden, true, 'first transient false does not open the composer');
   await h.runTimer(h.run('keyboardCheckTimer'));
   assert.equal(h.el('#screen-composer').hidden, false);
   assert.equal(h.document.activeElement, h.el('#screen-input'));
-  assert.equal(bridgeCalls, 1);
+  assert.equal(h.bridge, 1);
   assert.equal(h.calls.filter(call => call.path === '/api/textinput').length, 2);
+});
+
+test('an automatic bar closes when a later tap leaves its field; a bar opened by hand stays', async () => {
+  let current = FIELD_IC;
+  let before = null;
+  const h = nativeTapHarness({ textInput: () => focusedOn(current), tapResult: () => ({ ok: true, textBefore: before, windowChanged: false }) });
+  await openStream(h);
+  await tapStream(h);
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, false);
+  // Tap on the canvas app: its IC is focused now, not the field the bar was for.
+  before = FIELD_IC; current = CANVAS_IC;
+  await tapStream(h, { id: 41 });
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, true, 'the automatic bar followed the focus out');
+  // Opened by hand: taps that do not focus a field leave it alone.
+  h.el('#screen-keyboard').dispatchEvent({ type: 'click' });
+  assert.equal(h.run('screenComposerAutomatic'), false);
+  before = CANVAS_IC;
+  await tapStream(h, { id: 42 });
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, false);
+});
+
+test('the auto keyboard can be turned off and stays off; the button still opens the bar', async () => {
+  const h = nativeTapHarness({ textInput: focusedOn(FIELD_IC), tapResult: { ok: true, textBefore: null, windowChanged: false } });
+  await openStream(h);
+  h.el('#screen-auto-keyboard').dispatchEvent({ type: 'click' });
+  assert.equal(h.el('#screen-auto-keyboard').getAttribute('aria-pressed'), 'false');
+  assert.equal(h.run("localStorage.getItem('ponte-auto-keyboard')"), 'off');
+  await tapStream(h);
+  await settleKeyboard(h);
+  assert.equal(h.el('#screen-composer').hidden, true);
+  h.el('#screen-keyboard').dispatchEvent({ type: 'click' });
+  assert.equal(h.el('#screen-composer').hidden, false);
+});
+
+test('a drag on the stream never probes for a text field', async () => {
+  const h = nativeTapHarness({ textInput: focusedOn(FIELD_IC), tapResult: { ok: true, textBefore: null, windowChanged: false } });
+  await openStream(h);
+  const preview = h.el('#screen-preview');
+  const event = (type, x) => ({ type, pointerId: 50, clientX: x, clientY: 100, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  preview.dispatchEvent(event('pointerdown', 100));
+  preview.dispatchEvent(event('pointermove', 160));
+  preview.dispatchEvent(event('pointerup', 160));
+  await flushTicks();
+  await settleKeyboard(h);
+  assert.equal(h.calls.filter(call => call.path === '/api/textinput').length, 0);
+  assert.equal(h.el('#screen-composer').hidden, true);
 });
 
 test('floating buttons cycle the streamed monitor and toggle a forced landscape', async () => {

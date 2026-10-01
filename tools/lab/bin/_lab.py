@@ -53,12 +53,15 @@ def log(tool, args, extra=None):
 
 def targets():
     """Labelled rectangles on the synthetic monitor. Clicking a field turns the
-    fcitx focus flag on (the phone keyboard should rise); the button turns it off."""
+    fcitx focus flag on (the phone keyboard should rise); the button turns it off.
+    D is a canvas like Maestri's: its app keeps one input context focused
+    whatever is clicked inside it, so a tap there must not raise the keyboard."""
     m = monitor(); W, H = m['width'], m['height']
     return [
         ('A', 'field', (int(W * 0.12), int(H * 0.2), int(0.18 * W), 70)),
         ('B', 'field', (int(W * 0.55), int(H * 0.55), int(0.28 * W), 70)),
         ('C', 'button', (int(W * 0.7), int(H * 0.15), int(0.16 * W), 70)),
+        ('D', 'canvas', (int(W * 0.08), int(H * 0.45), int(0.3 * W), int(0.3 * H))),
     ]
 
 def target_at(x, y):

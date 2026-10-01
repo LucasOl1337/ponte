@@ -2,7 +2,12 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lab
-# fcitx5 DebugInfo: focus:1 means a PC text field is focused. The lab toggles
-# it from a click on the synthetic "text field" targets (see grim).
+# fcitx5 DebugInfo, one IC per target app: fields A/B each have their own,
+# and the canvas app (target D) keeps its IC focused like Maestri does. The
+# lab sets the focus from clicks on the synthetic targets (see ydotool).
 s = _lab.load()
-print(f"Group [wayland:] has 1 InputContext(s)\n  IC [lab] program:lab frontend:wayland_v2 cap:1 focus:{1 if s.get('textFocus') else 0}")
+focus = s.get('textFocus')
+if focus is True: focus = 'field-A'  # state written by an older lab
+ics = [('labfielda', 'lab-browser', '90072', 'field-A'), ('labfieldb', 'lab-browser-b', '90072', 'field-B'), ('labcanvas', 'lab-canvas', '90072', 'canvas')]
+lines = [f"  IC [{ic}] program:{program} frontend:wayland_v2 cap:{cap} focus:{1 if focus == key else 0}" for ic, program, cap, key in ics]
+print(f"Group [wayland:] has {len(lines)} InputContext(s)\n" + '\n'.join(lines))

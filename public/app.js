@@ -93,15 +93,17 @@ async function api(path, options = {}) {
   } finally { clearTimeout(timeout); }
 }
 
-async function action(type, payload = {}, feedback = '') {
+// The parsed answer of an action, or false when it failed (already toasted).
+async function actionResult(type, payload = {}, feedback = '') {
   if (!connected) { toast(t("Reconecte ao PC para usar este controle."), true); return false; }
   try {
-    await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}) });
+    const response = await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type,...payload}) });
     if (feedback) toast(feedback);
     if (!type.startsWith('mouse.')) setTimeout(pollState, 180);
-    return true;
+    try { const body = await response.json(); return body && typeof body === 'object' ? body : {}; } catch { return {}; }
   } catch (error) { toast(error, true); return false; }
 }
+async function action(type, payload = {}, feedback = '') { return !!await actionResult(type, payload, feedback); }
 
 // Sleep, wake and light changes run one OpenRGB call per device group on the PC
 // (~20 s). The PC answers within ~11 s; a longer job comes back as pending and
@@ -1077,6 +1079,18 @@ function sendMonitorClick(pixel, button) {
   if (!pixel || !monitor || !connected || !state?.capabilities?.mouse) return false;
   return action('mouse.clickAt', { monitor: monitor.name, x: pixel.x, y: pixel.y, button });
 }
+// A left tap also asks for the text-input baseline: the input context focused
+// on the PC right before the click, and whether the click changed the active
+// window. Resolves to { before, windowChanged } (before undefined when the PC
+// could not tell: older server, no fcitx), or false when the click failed.
+async function sendMonitorTap(pixel) {
+  const monitor = selectedMonitor();
+  if (!pixel || !monitor || !connected || !state?.capabilities?.mouse) return false;
+  const result = await actionResult('mouse.clickAt', { monitor: monitor.name, x: pixel.x, y: pixel.y, button: 'left', textBaseline: true });
+  if (!result) return false;
+  const known = Object.prototype.hasOwnProperty.call(result, 'textBefore');
+  return { before: known ? result.textBefore : undefined, windowChanged: known ? result.windowChanged !== false : true };
+}
 function reconcileLive() { if (liveWanted && !liveSession && screenIsVisible() && connected && state?.capabilities?.live && $('#monitor-select').value) startLive(); }
 function sessionIsCurrent(session) { return liveSession === session && screenIsVisible(); }
 function updateScreenButtons() {}
@@ -1752,7 +1766,7 @@ async function finishScreenPointer(event) {
   if (wasHeld) { showTapMarker(pointer.startX, pointer.startY, 'right'); sendMonitorClick(pixel, 'right'); return; }
   if (Date.now() - pointer.started < 500) {
     showTapMarker(pointer.startX, pointer.startY, 'left');
-    Promise.resolve(sendMonitorClick(pixel, 'left')).then(ok => { if (ok) scheduleKeyboardCheck(); });
+    Promise.resolve(sendMonitorTap(pixel)).then(tap => { if (tap) scheduleKeyboardCheck(220, 0, tap); });
   }
 }
 for (const name of ['pointerup','pointercancel','lostpointercapture']) screenPreview.addEventListener(name,finishScreenPointer);
@@ -1799,25 +1813,43 @@ screenPreview.addEventListener('keydown',event => {
   event.preventDefault();
 });
 
-// ---- Phone keyboard for the PC. After a tap-click, the PC reports whether a
-// text field took focus (fcitx5 input contexts). If so, a hidden input gets
-// focus, Android raises its keyboard, and every edit is forwarded live as
-// keystrokes. Back/blur closes it; a tap on a non-text area closes it too.
-// Some apps publish their fcitx input context a little after the click. Probe a
-// short bounded sequence instead of making one timing-sensitive decision; no
-// key is injected and taps on non-text UI remain silent.
+// ---- Phone keyboard for the PC. After a tap-click, the PC reports which fcitx5
+// input context (IC) is focused. The phone keyboard opens by itself only when
+// the tap *caused* that focus: no IC before -> one now, or a different IC/cap.
+// A window that keeps its IC focused all along (Maestri's canvas, a terminal,
+// a page with a field focused elsewhere) reports focus:1 whatever was tapped,
+// so "some IC is focused" alone never opens it. A tap that also activated
+// another window is not proof either (Maestri focuses its hidden textarea on
+// any click), so it stays closed; the keyboard button always works.
+// Some apps publish their IC a little after the click: a bounded sequence of
+// probes, no key injected, taps on non-text UI stay silent.
 let keyboardCheckTimer = 0;
 const TEXT_FOCUS_RETRY_MS = [180, 360, 700, 1100];
+const AUTO_KEYBOARD_KEY = 'ponte-auto-keyboard';
+let autoKeyboard = savedPreference(AUTO_KEYBOARD_KEY, 'on') !== 'off';
 let keyQueue = Promise.resolve();
 function sendKeys(work) { keyQueue = keyQueue.then(work).catch(() => {}); return keyQueue; }
-function scheduleKeyboardCheck(delay = 220, attempt = 0) {
+// tap: { before, windowChanged } from the click, or undefined (no tap baseline).
+function scheduleKeyboardCheck(delay = 220, attempt = 0, tap) {
   clearTimeout(keyboardCheckTimer);
-  keyboardCheckTimer = setTimeout(() => checkTextInput(attempt), delay);
+  keyboardCheckTimer = setTimeout(() => checkTextInput(attempt, tap), delay);
 }
 function markTextFocus(focused) {
   $('#screen-keyboard').setAttribute('data-text-focused', String(focused === true));
 }
-async function checkTextInput(attempt = 0) {
+// Mirrors backend/textinput.mjs tapFocusedText.
+function tapCausedTextFocus(tap, context) {
+  if (!tap || tap.before === undefined || tap.windowChanged !== false) return false;
+  if (!context || context.typeable === false) return false;
+  if (!tap.before) return true;
+  return !sameTextContext(tap.before, context);
+}
+function sameTextContext(a, b) { return Boolean(a && b && a.id === b.id && a.cap === b.cap); }
+// The IC an automatically opened bar belongs to: a later tap that leaves it
+// (another window, another kind of field, nothing) closes that bar. A bar the
+// user opened with the keyboard button is never closed by focus.
+let autoComposerContext = null;
+async function checkTextInput(attempt = 0, tap) {
   keyboardCheckTimer = 0;
   if (!connected || !screenIsVisible()) return;
   let info;
@@ -1826,18 +1858,29 @@ async function checkTextInput(attempt = 0) {
   if (typeof info.focused === 'boolean') {
     markTextFocus(info.focused);
     // WebView cannot raise Android's keyboard from an asynchronous JavaScript
-    // callback by itself. The native shell can, so a field tap now opens the
+    // callback by itself. The native shell can, so a field tap opens the
     // typing bar and asks the Activity to show the IME. Plain browsers retain
     // the highlighted keyboard button as their explicit, user-gesture path.
     if (navigator.userAgent.includes('PonteAndroid/')) {
-      if (info.focused && !screenComposerOpen()) openScreenComposer({ automatic: true, requestNativeKeyboard: true });
-      else if (!info.focused && screenComposerAutomatic) closeScreenComposer();
-      else if (!info.focused && info.available && attempt < TEXT_FOCUS_RETRY_MS.length) {
-        scheduleKeyboardCheck(TEXT_FOCUS_RETRY_MS[attempt], attempt + 1);
+      const caused = autoKeyboard && tapCausedTextFocus(tap, info.context);
+      if (caused && !screenComposerOpen()) { openScreenComposer({ automatic: true, requestNativeKeyboard: true }); autoComposerContext = info.context; }
+      else if (screenComposerAutomatic && (!info.focused || (tap && !sameTextContext(autoComposerContext, info.context)))) closeScreenComposer();
+      else if (!info.focused && autoKeyboard && tap && tap.before !== undefined && tap.windowChanged === false && info.available && attempt < TEXT_FOCUS_RETRY_MS.length) {
+        scheduleKeyboardCheck(TEXT_FOCUS_RETRY_MS[attempt], attempt + 1, tap);
       }
     }
   }
 }
+function setAutoKeyboard(on) {
+  autoKeyboard = on === true;
+  savePreference(AUTO_KEYBOARD_KEY, autoKeyboard ? 'on' : 'off');
+  $('#screen-auto-keyboard').setAttribute('aria-pressed', String(autoKeyboard));
+}
+$('#screen-auto-keyboard').setAttribute('aria-pressed', String(autoKeyboard));
+$('#screen-auto-keyboard').addEventListener('click', () => {
+  setAutoKeyboard(!autoKeyboard);
+  toast(autoKeyboard ? t("Teclado automático ligado: abre ao tocar num campo de texto.") : t("Teclado automático desligado: use o botão do teclado."));
+});
 // Cycle the streamed monitor; the select on Início stays the source of truth.
 $('#screen-switch-monitor').addEventListener('click', () => {
   const monitors = state?.monitors || [];
