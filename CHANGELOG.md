@@ -2,6 +2,29 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.38 (2026-10-01)
+
+The Screen tab: nothing on the PC stays stuck under a floating button, and messages leave.
+Page only; the installed APK keeps working.
+
+- **Fix: a PC target under the mic (or any floating button) could not be tapped.** The
+  button column was fixed over the picture and the pan stopped at the picture's edge, so the
+  bottom-right corner of the PC sat under the mic at any zoom. The picture is now framed in
+  the free area (the preview minus the controls, measured from their real boxes): at 1x it
+  touches no control in portrait, landscape or with the keyboard, and zoomed in the pan
+  goes past each edge by the size of the control there, so every PC pixel can be brought
+  out and tapped. In portrait the buttons are one row in the black band under the picture.
+  Lab (Poco 394x853 @3.25, 3440x1440, a target at 3390,1400): before, the tap landed on the
+  mic; now it reaches the PC in portrait, landscape and with the keyboard, at Sharp 8x and
+  Auto 4x.
+- **Fix: "You said: …" never went away.** The dictation bubble and the toasts on the Screen
+  tab sit at the top, take two lines at most, let touches through to the PC, and leave after
+  a reading time (2.5 s + 55 ms a character, 9 s at most) or at the first touch on the
+  picture. Progress ("Recording", "Transcribing") stays until it changes.
+- Lab: `tools/lab/overlays.mjs` / `overlays-matrix.sh` (how much of the picture each control
+  covers) and `tools/lab/under-fab.mjs` (the target-under-the-mic case), with
+  `PONTE_LAB_TARGET_D` drawing an extra button "E" anywhere on the synthetic monitor.
+
 ## 0.1.0-alpha.37 (2026-10-01)
 
 Pages and server messages; the installed APK keeps working.
