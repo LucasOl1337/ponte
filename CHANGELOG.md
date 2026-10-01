@@ -2,6 +2,23 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.44 (2026-10-01)
+
+An agent's conversation in Terminals → Agents follows along live. Server and page; the installed
+APK keeps working (same route, waits stay under its proxy timeout).
+
+- **Live.** An open conversation of Claude, Codex or JCode gets new messages as they are
+  written, marked "Ao vivo". The page asks `GET /api/agents/:id/transcript?since=CURSOR&wait=10`
+  and the server answers when something changed or after 10 s with `unchanged`. Only what is
+  new travels; a stale cursor, a new session or a rewritten file starts the window over.
+- **Cheap when idle.** The server only checks files while someone is waiting, once a second,
+  one read per agent shared by every waiter, at most six waits and two reads at a time. On this
+  PC a first read takes 3 ms and an unchanged answer about 1 ms. Pausing, hiding the app or
+  closing the conversation cancels the request; resuming does not repeat messages.
+- Still read-only: sending to an agent from the phone waits for a reviewed design.
+- Contract in `docs/agents-live.md`. Verified: `npm test` 537 pass, 1 skipped; mobile lab with
+  synthetic agents (append on screen in under 1 s, unchanged answers of 197 bytes).
+
 ## 0.1.0-alpha.43 (2026-10-01)
 
 Touch works on the Screen again when the phone opens straight into video. Page only.
