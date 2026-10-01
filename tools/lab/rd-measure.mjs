@@ -24,6 +24,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { connect } from '../../backend/ws.mjs';
 import { parseVideoHeader } from '../../backend/rd.mjs';
@@ -232,6 +233,47 @@ if (band && units.length) {
       row.keys = inSecond.filter(f => f.keyframe).length;
     }
   }
+}
+
+// --legible (lab desktop scene): how readable the picture is over time. Every
+// fourth frame is decoded, scaled back to the monitor's size (a WAN step sends
+// fewer pixels) and a block of still text of the backdrop, away from the
+// terminal, the cursor and the band, is compared with the backdrop itself:
+// PSNR per second in the timeline, and the first second from which it stays
+// within 1 dB of the best it reached (--legible-db N: of N dB instead).
+if (flag('legible') && units.length) {
+  const [mw, mh] = String(opt('size', '1920x1080')).split('x').map(Number);
+  const even = v => Math.round(v) & ~1;
+  const box = { x: even(mw * 0.023), y: even(mh * 0.153), w: even(mw * 0.221), h: even(mh * 0.125) };
+  const crop = `scale=${mw}:${mh}:flags=bicubic,format=yuv420p,crop=${box.w}:${box.h}:${box.x}:${box.y},format=gray`;
+  const backdrop = opt('backdrop', process.env.PONTE_RD_LAB_BACKDROP || fileURLToPath(new URL('../../docs/assets/desktop-control.png', import.meta.url)));
+  const reference = execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', backdrop, '-vf', crop, '-frames:v', '1', '-f', 'rawvideo', 'pipe:1'], { maxBuffer: 64 << 20 });
+  const size = box.w * box.h, every = 4, scores = [];
+  const decoder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'quiet', '-f', 'h264', '-i', 'pipe:0', '-fps_mode', 'passthrough', '-vf', `select='not(mod(n\\,${every}))',${crop}`, '-f', 'rawvideo', 'pipe:1'], { stdio: ['pipe', 'pipe', 'ignore'] });
+  let pending = Buffer.alloc(0), index = 0;
+  decoder.stdout.on('data', chunk => {
+    pending = Buffer.concat([pending, chunk]);
+    while (pending.length >= size) {
+      const frame = pending.subarray(0, size);
+      let sum = 0;
+      for (let i = 0; i < size; i++) { const d = frame[i] - reference[i]; sum += d * d; }
+      const f = frames[index * every];
+      if (f) scores.push({ s: (f.at - t0) / 1000, db: 10 * Math.log10(255 * 255 / Math.max(1e-9, sum / size)) });
+      index++; pending = pending.subarray(size);
+    }
+  });
+  decoder.stdin.on('error', () => {});
+  decoder.stdin.end(Buffer.concat(units));
+  await new Promise(resolve => decoder.once('close', resolve));
+  const perSecond = new Map();
+  for (const score of scores) { const s = Math.ceil(score.s); perSecond.set(s, Math.min(perSecond.get(s) ?? Infinity, score.db)); }
+  const best = Math.max(...perSecond.values());
+  const threshold = opt('legible-db') ? Number(opt('legible-db')) : best - 1;
+  const seconds = [...perSecond.keys()].sort((a, b) => a - b);
+  const from = seconds.find((s, i) => seconds.slice(i).every(later => perSecond.get(later) >= threshold));
+  report.legible = { box, decoded: index, units: units.length, bestDb: Math.round(best * 100) / 100, thresholdDb: Math.round(threshold * 100) / 100, readableFromS: from ?? null,
+    firstFrameDb: scores.length ? Math.round(scores[0].db * 100) / 100 : null };
+  for (const row of timeline) if (perSecond.has(row.s)) row.db = Math.round(perSecond.get(row.s) * 10) / 10;
 }
 
 if (app) {

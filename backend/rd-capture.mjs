@@ -299,7 +299,8 @@ export function createCapture({ mode = 'gsr', scene, env = process.env, spawn = 
   function start(next) {
     stop();
     params = { ...next };
-    const [command, args] = captureCommand({ mode, scene, ...params });
+    // PONTE_RD_LAB_BACKDROP: another picture under the lab's desktop scene (e.g. small native text).
+    const [command, args] = captureCommand({ mode, scene, ...(mode === 'lab' && env.PONTE_RD_LAB_BACKDROP ? { backdrop: env.PONTE_RD_LAB_BACKDROP } : {}), ...params });
     const run = ++generation;
     const startedAt = performance.now();
     const { readFd, writeFd } = realPipe();
