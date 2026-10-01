@@ -281,6 +281,8 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
   async function activeWindowAddress() {
     try { const active = await readHypr('activewindow'); return typeof active?.address === 'string' && active.address ? active.address : null; } catch { return null; }
   }
+  // The window the last phone tap (with a text baseline) landed in.
+  let lastTapWindow = null;
   const validMonitorName = (name) => typeof name === 'string' && name.length > 0 && name.length <= 150 && !/[\s;&|`$><()"\\]/u.test(name);
   // Hyprland 0.56+ exposes only a dpms TOGGLE through the Lua dispatch bridge,
   // and it ignores the on/off word. dpmsStatus is readable, so a monitor is set
@@ -413,13 +415,19 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         const windowBefore = textBefore !== undefined ? await activeWindowAddress() : null;
         await placePointer(point);
         await run('ydotool', ['click', buttons[value.button]]);
-        // A tap that also activated another window (follow_mouse on the move,
-        // or the click itself) may only be restoring that window's own input
-        // context: Maestri focuses its hidden textarea on any click. Without
-        // proof the point is a field, the phone does not open the keyboard.
+        // A tap that enters a window may only be restoring that window's own
+        // input context: Maestri focuses its hidden textarea on the first click
+        // after it becomes active. "Entered" covers the click activating it
+        // (before != after) and an activation the click did not do: with
+        // follow_mouse a hover, the owner's mouse or a phone scroll activates
+        // it with no IC focused, and only this tap brings the IC back (8 of 51
+        // measured clicks on Maestri). So the first phone tap into a window
+        // other than the last one tapped counts as entering it too.
         if (textBefore !== undefined) {
           const windowAfter = await activeWindowAddress();
-          return { ok: true, textBefore, windowChanged: !windowBefore || !windowAfter || windowBefore !== windowAfter };
+          const entered = !windowBefore || !windowAfter || windowBefore !== windowAfter || windowBefore !== lastTapWindow;
+          lastTapWindow = windowAfter;
+          return { ok: true, textBefore, windowChanged: entered };
         }
         break;
       }

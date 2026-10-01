@@ -1018,6 +1018,9 @@ test('a left tap with textBaseline returns the IC focused before the pointer mov
     return 'ok';
   };
   const desktop = createDesktop({ runner, exists: async () => true });
+  const first = await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true });
+  assert.equal(first.windowChanged, true, 'the first phone tap into a window counts as entering it: hover may have activated it without its IC');
+  focusedIc = 'cccc'; calls.length = 0;
   const result = await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true });
   assert.deepEqual(result, { ok: true, textBefore: { id: 'cccc', program: 'canvas-app', cap: '90072', typeable: true }, windowChanged: false });
   const firstProbe = calls.findIndex(call => call.startsWith('busctl'));
@@ -1029,6 +1032,16 @@ test('a left tap with textBaseline returns the IC focused before the pointer mov
   const switching = createDesktop({ runner: async (command, args) => { if (command === 'ydotool' && args[0] === 'click') active = '0x2'; return runner(command, args); }, exists: async () => true });
   active = '0x1';
   assert.equal((await switching.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true })).windowChanged, true);
+
+  // Activated by hover (owner's mouse, or a phone scroll under follow_mouse):
+  // the window was already active before the tap, but the last phone tap was
+  // elsewhere, so a null -> IC here may be Maestri restoring its canvas IC.
+  active = '0x1'; focusedIc = 'none';
+  assert.equal((await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true })).windowChanged, false, 'still the window of the last tap');
+  active = '0x3';
+  const hovered = await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true });
+  assert.equal(hovered.windowChanged, true, 'window activated without a phone tap counts as entered');
+  assert.equal((await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'left', textBaseline: true })).windowChanged, false, 'the next tap in it is a plain same-window tap');
 
   calls.length = 0;
   assert.deepEqual(await desktop.action({ type: 'mouse.clickAt', monitor: 'DP-1', x: 10, y: 20, button: 'right', textBaseline: true }), { ok: true });

@@ -26,6 +26,14 @@ with _lab.locked():
         if '--absolute' in args or '-a' in args: x, y = dx * f, dy * f
         else: x, y = s['cursor']['x'] + dx * f, s['cursor']['y'] + dy * f
         s['cursor'] = {'x': int(max(0, min(m['width'] - 1, round(x)))), 'y': int(max(0, min(m['height'] - 1, round(y))))}
+        # Hyprland follow_mouse=1: the window under the pointer becomes active
+        # on hover. Entering the canvas app does not focus its IC (only a
+        # click does, as measured on Maestri); leaving it drops that IC.
+        _, kind = _lab.target_at(s['cursor']['x'], s['cursor']['y'])
+        hovered = '0xlabcanvas' if kind == 'canvas' else '0xlab'
+        if s.get('active', '0xlab') != hovered:
+            if s.get('textFocus') == 'canvas' or hovered == '0xlabcanvas': s['textFocus'] = False
+            s['active'] = hovered
         extra['cursor'] = s['cursor']
     elif args[:1] == ['click']:
         code = args[1].lower()
