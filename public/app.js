@@ -43,13 +43,21 @@ if (location.hash.startsWith('#pair=')) {
   if (token) { try { localStorage.setItem(storageKey, token); } catch {} }
 }
 
+// A message stays as long as it takes to read: 2.5 s plus 55 ms a character,
+// at most 9 s (an error gets half again). Long ones are cut to two lines by
+// the stylesheet, so the timer never needs to wait for a paragraph.
+function screenMessageMs(message, error = false) {
+  const length = String(message || '').length;
+  const base = Math.min(9000, 2500 + 55 * length);
+  return Math.round(error ? Math.min(13500, base * 1.5) : base);
+}
 function toast(message, error = false) {
   const element = $('#toast');
   clearTimeout(toastTimer);
   i18n.write(element,message);
   element.classList.toggle('error', error);
   element.hidden = false;
-  toastTimer = setTimeout(() => { element.hidden = true; }, error ? 6500 : 3300);
+  toastTimer = setTimeout(() => { element.hidden = true; }, screenMessageMs(element.textContent, error));
 }
 
 // The device being controlled: empty is the node serving this page. Any other
@@ -739,6 +747,10 @@ let screenPanX = 0, screenPanY = 0;
 let screenBaseW = 0, screenBaseH = 0;
 let screenStyledSize = '', screenImageMonitor = '';
 let screenMaxScale = 6;
+// Edges of the preview that floating controls cover: `fit` frames the image at
+// 1x clear of them, `pan` is the overscroll a zoomed view gets past them.
+let screenFitInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+let screenPanInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 let screenSourceSize = '';
 // What shows the monitor: the JPEG frames' <img>, or the canvas the H.264
 // video draws on. Zoom, pan and touch mapping read whichever is on screen.
@@ -964,6 +976,83 @@ function nativePreviewRegion(previewWidth, previewHeight, monitorWidth, monitorH
   return isFullMonitorRegion(next, monitorWidth, monitorHeight) ? null : next;
 }
 
+// ---- The free area: the part of the preview no control sits on.
+// Controls that stay over the monitor (the button rail, the workspace strip)
+// each hug one edge of the preview. Whatever they cover is taken off that
+// edge, so the image is fitted inside what is left and a zoomed view can be
+// panned until any PC pixel sits inside it. Nothing on the PC is ever stuck
+// under a button: move it into the free area and tap it.
+function screenControlInsets(preview, boxes) {
+  const insets = { top: 0, right: 0, bottom: 0, left: 0 };
+  const pw = Number(preview?.width) || 0, ph = Number(preview?.height) || 0;
+  if (!(pw > 0) || !(ph > 0)) return insets;
+  const px = Number(preview.left) || 0, py = Number(preview.top) || 0;
+  const MARGIN = 6;
+  for (const box of boxes || []) {
+    if (!box || !(box.width > 0) || !(box.height > 0)) continue;
+    const left = Math.max(0, box.left - px), top = Math.max(0, box.top - py);
+    const right = Math.max(0, px + pw - (box.left + box.width)), bottom = Math.max(0, py + ph - (box.top + box.height));
+    // Off the preview entirely: nothing to clear.
+    if (box.left >= px + pw || box.left + box.width <= px || box.top >= py + ph || box.top + box.height <= py) continue;
+    // The edge it hugs is the nearest one; a long bar picks its long side.
+    const wide = box.width >= box.height;
+    const side = wide ? (top <= bottom ? 'top' : 'bottom') : (left <= right ? 'left' : 'right');
+    const reach = side === 'top' ? top + box.height : side === 'bottom' ? bottom + box.height : side === 'left' ? left + box.width : right + box.width;
+    insets[side] = Math.max(insets[side], Math.round(reach + MARGIN));
+  }
+  // Never let controls eat more than 45% of either axis: a huge inset would
+  // shrink the monitor to nothing. The overscroll still covers the rest.
+  const cap = (a, b, size) => { const total = insets[a] + insets[b], max = size * 0.45; if (total > max) { const k = max / total; insets[a] = Math.floor(insets[a] * k); insets[b] = Math.floor(insets[b] * k); } };
+  cap('left', 'right', pw); cap('top', 'bottom', ph);
+  return insets;
+}
+function fitScreenBase(preview, natural, insets) {
+  const pw = Number(preview?.width) || 0, ph = Number(preview?.height) || 0;
+  const freeW = Math.max(1, pw - (insets?.left || 0) - (insets?.right || 0));
+  const freeH = Math.max(1, ph - (insets?.top || 0) - (insets?.bottom || 0));
+  const ratio = (natural?.w || 16) / (natural?.h || 9);
+  let w = freeW, h = freeW / ratio;
+  if (h > freeH) { h = freeH; w = freeH * ratio; }
+  return { w, h };
+}
+// Pan limits for an image of size sw x sh. At 1x (it fits the free area) it is
+// centred in the free area. Zoomed, each image edge may travel to the matching
+// free-area edge, past the preview edge by exactly the control inset: that
+// overscroll is what lets the corner of the PC come out from under the rail.
+function screenPanBounds(preview, insets, sw, sh) {
+  const pw = Number(preview?.width) || 0, ph = Number(preview?.height) || 0;
+  const t = insets?.top || 0, r = insets?.right || 0, b = insets?.bottom || 0, l = insets?.left || 0;
+  const freeW = pw - l - r, freeH = ph - t - b;
+  // Smaller than the free area: it moves freely inside it (no jump when a
+  // pinch starts). Larger: its edges travel to the free area's edges.
+  const axis = (size, free, start, end, full) => size <= free + 0.5
+    ? { min: start, max: Math.max(start, full - end - size) }
+    : { min: Math.min(full - end - size, start), max: start };
+  return { x: axis(sw, freeW, l, r, pw), y: axis(sh, freeH, t, b, ph) };
+}
+function clampPan(value, bounds) { return Math.min(bounds.max, Math.max(bounds.min, value)); }
+const centerPan = bounds => (bounds.min + bounds.max) / 2;
+// The 1x frame: the biggest fitted image that touches no control. Leftover
+// letterbox often has room for the controls already (an ultrawide in portrait
+// leaves most of the height empty), so only the edges that collide give up
+// space. Zoomed, every control edge is honoured for the overscroll.
+function screenFrame(preview, natural, boxes) {
+  const all = screenControlInsets(preview, boxes);
+  const zero = { top: 0, right: 0, bottom: 0, left: 0 };
+  const live = (boxes || []).filter(box => box && box.width > 0 && box.height > 0);
+  const hits = rect => live.some(box => rect.left < box.left + box.width - 0.5 && box.left < rect.left + rect.width - 0.5 && rect.top < box.top + box.height - 0.5 && box.top < rect.top + rect.height - 0.5);
+  let best = null;
+  for (const insets of [zero, { ...zero, left: all.left, right: all.right }, { ...zero, top: all.top, bottom: all.bottom }, all]) {
+    const base = fitScreenBase(preview, natural, insets);
+    const bounds = screenPanBounds(preview, insets, base.w, base.h);
+    const rect = { left: (Number(preview?.left) || 0) + centerPan(bounds.x), top: (Number(preview?.top) || 0) + centerPan(bounds.y), width: base.w, height: base.h };
+    if (hits(rect)) continue;
+    if (!best || base.w > best.w + 0.5) best = { w: base.w, h: base.h, fit: insets };
+  }
+  if (!best) { const base = fitScreenBase(preview, natural, all); best = { w: base.w, h: base.h, fit: all }; }
+  return { ...best, pan: all };
+}
+
 function screenIsVisible() { return isScreenPage(currentPage) && !document.hidden && !nativePaused && !!token; }
 function selectedMonitor() {
   const name = $('#monitor-select').value;
@@ -1004,25 +1093,39 @@ function computeScreenBase() {
   const natural = screenNaturalSize();
   const { w: pw, h: ph } = screenPreviewSize();
   const nw = natural.w || 16, nh = natural.h || 9;
-  const ratio = nw / nh;
-  let w = pw, h = pw / ratio;
-  if (h > ph) { h = ph; w = ph * ratio; }
+  const frame = screenFrame(screenPreviewBox(), { w: nw, h: nh }, screenControlBoxes());
+  screenFitInsets = frame.fit; screenPanInsets = frame.pan;
+  const w = frame.w || pw, h = frame.h || ph;
   screenBaseW = w; screenBaseH = h;
   // Allow zooming a little past native 1:1 so text stays legible. A lighter
   // stream profile still gets 4x: blurry is fine when the point is to land a
   // finger on a small target, and the auto profile sharpens the frame in place.
   screenMaxScale = Math.max(4, Math.min(8, (nw / (w || 1)) * 1.3));
 }
+// The preview in page coordinates, and the controls that float over it.
+function screenPreviewBox() {
+  const preview = $('#screen-preview');
+  const rect = preview.getBoundingClientRect?.() || { left: 0, top: 0 };
+  const { w, h } = screenPreviewSize();
+  return { left: rect.left || 0, top: rect.top || 0, width: w, height: h };
+}
+function screenControlBoxes() {
+  return ['.screen-fabs', '#screen-workspaces', '#node-badge'].map(selector => {
+    const element = $(selector);
+    if (!element || element.hidden) return null;
+    const rect = element.getBoundingClientRect?.();
+    return rect && rect.width > 0 && rect.height > 0 ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
+  }).filter(Boolean);
+}
 function centerScreenPan() {
-  const { w: pw, h: ph } = screenPreviewSize();
-  screenPanX = (pw - screenBaseW * screenScale) / 2;
-  screenPanY = (ph - screenBaseH * screenScale) / 2;
+  const bounds = screenPanBounds(screenPreviewBox(), screenScale > 1.001 ? screenPanInsets : screenFitInsets, screenBaseW * screenScale, screenBaseH * screenScale);
+  screenPanX = centerPan(bounds.x);
+  screenPanY = centerPan(bounds.y);
 }
 function clampScreenPan() {
-  const { w: pw, h: ph } = screenPreviewSize();
-  const sw = screenBaseW * screenScale, sh = screenBaseH * screenScale;
-  screenPanX = sw <= pw ? (pw - sw) / 2 : Math.min(0, Math.max(pw - sw, screenPanX));
-  screenPanY = sh <= ph ? (ph - sh) / 2 : Math.min(0, Math.max(ph - sh, screenPanY));
+  const bounds = screenPanBounds(screenPreviewBox(), screenPanInsets, screenBaseW * screenScale, screenBaseH * screenScale);
+  screenPanX = clampPan(screenPanX, bounds.x);
+  screenPanY = clampPan(screenPanY, bounds.y);
 }
 function applyScreenTransform() {
   const image = screenSurface();
@@ -1497,7 +1600,12 @@ function screenSourceResized(size) {
   else if (!screenBaseW) applyScreenZoom();
 }
 window.addEventListener('resize',applyScreenZoom);
-if (window.ResizeObserver) new window.ResizeObserver(applyScreenZoom).observe($('#screen-preview'));
+if (window.ResizeObserver) {
+  const observer = new window.ResizeObserver(applyScreenZoom);
+  // The controls too: the free area changes when buttons hide (typing bar),
+  // the workspace strip fills in, or the rail turns into a row.
+  for (const selector of ['#screen-preview', '.screen-fabs', '#screen-workspaces']) { const element = $(selector); if (element) observer.observe(element); }
+}
 const screenPointers = new Map();
 const screenPreview = $('#screen-preview');
 let pinchDistance = 0;
@@ -1637,6 +1745,7 @@ function stopPointerMoves() {
 screenPreview.addEventListener('pointerdown',event => {
   if (!screenshotURL || event.target.closest('button')) return;
   if (event.button > 0) return;
+  dismissScreenMessages();
   // A still frame is not the PC: clicking on it would land on whatever the
   // desktop shows now. Use the tap to bring the stream back instead.
   if (screenMode !== 'live') {
@@ -3143,11 +3252,25 @@ $('#suspend-confirm').addEventListener('click', async () => { $('#suspend-dialog
 // Dictation: a short recording is transcribed on the PC and typed there. The
 // audio is uploaded once and never stored; only the text comes back.
 let dictation = null;
-function dictationStatus(element, message, error = false) {
+// Final messages (what was heard, an error) leave on their own when they float
+// over the screen; progress (recording, transcribing) stays until it changes.
+const dictationTimers = new Map();
+function dictationStatus(element, message, error = false, final = error) {
   if (!element) return;
+  clearTimeout(dictationTimers.get(element)); dictationTimers.delete(element);
   if (message) i18n.write(element, message); else element.textContent = '';
   element.hidden = !message;
   element.classList.toggle('error', error);
+  if (message && final && element.classList.contains('screen-dictate-status')) {
+    dictationTimers.set(element, setTimeout(() => { dictationTimers.delete(element); element.hidden = true; }, screenMessageMs(element.textContent, error)));
+  }
+}
+// The first touch on the monitor means the user is back on the PC: whatever
+// was only there to be read goes away (progress stays).
+function dismissScreenMessages() {
+  for (const [element, timer] of dictationTimers) { clearTimeout(timer); element.hidden = true; }
+  dictationTimers.clear();
+  if (!$('#toast').hidden) { clearTimeout(toastTimer); $('#toast').hidden = true; }
 }
 function abortDictation() {
   const current = dictation;
@@ -3205,7 +3328,7 @@ async function toggleDictation(button, status, upload) {
       if (!blob.size) throw new Error(t("Nenhum áudio foi capturado. Tente novamente."));
       dictationStatus(status,t("Transcrevendo…"));
       const text = await upload(blob);
-      dictationStatus(status,t('Você disse: {text}',{text}));
+      dictationStatus(status,t('Você disse: {text}',{text}),false,true);
     } catch (error) { dictationStatus(status,error,true); }
     finally { button.disabled = !connected || !state?.capabilities?.stt; }
   };
