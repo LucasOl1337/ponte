@@ -55,11 +55,20 @@ def targets():
     """Labelled rectangles on the synthetic monitor. Clicking a field turns the
     fcitx focus flag on (the phone keyboard should rise); the button turns it off."""
     m = monitor(); W, H = m['width'], m['height']
-    return [
+    found = [
         ('A', 'field', (int(W * 0.12), int(H * 0.2), int(0.18 * W), 70)),
         ('B', 'field', (int(W * 0.55), int(H * 0.55), int(0.28 * W), 70)),
         ('C', 'button', (int(W * 0.7), int(H * 0.15), int(0.16 * W), 70)),
     ]
+    # PONTE_LAB_TARGET_D="x,y,w,h": one more button anywhere, e.g. in the corner
+    # the phone's floating buttons cover, to prove it can still be clicked.
+    extra = os.environ.get('PONTE_LAB_TARGET_D', '')
+    if extra:
+        try:
+            x, y, w, h = (int(v) for v in extra.split(','))
+            found.append(('D', 'button', (x, y, w, h)))
+        except ValueError: pass
+    return found
 
 def target_at(x, y):
     for name, kind, (tx, ty, tw, th) in targets():
