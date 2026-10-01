@@ -54,7 +54,7 @@ The answer is `{v: 1, home: {id, name}, devices, requests, tailnet: {state}, che
 | `mirror` | this node's adb sees the phone as `device` | `adb` | `ponte desktop` / `ponte phone view` (from the surface in a later slice) |
 | `files`, `wake` | not yet | — | `why: NOT_AVAILABLE` |
 
-Reasons (`why`): `SELF`, `NO_PONTE`, `NOT_PAIRED`, `PAIRING_PENDING`, `ALREADY_PAIRED`, `OFFLINE`, `NO_ROUTE`, `NO_SSH`, `SSH_UNREACHABLE`, `UNCHECKED`, `PROBE_FAILED`, `NO_ADB`, `NOT_AVAILABLE`.
+Reasons (`why`): `SELF`, `NO_PONTE`, `NOT_PAIRED`, `PAIRING_PENDING`, `ALREADY_PAIRED`, `OFFLINE`, `NO_ROUTE`, `NO_SSH`, `SSH_NOT_LISTED`, `SSH_UNREACHABLE`, `UNCHECKED`, `PROBE_FAILED`, `NO_ADB`, `NOT_AVAILABLE`.
 
 adb is read only and only when an adb server already runs on this node (`adb devices -l`; asking would start one). `PONTE_ADB=0` turns it off, `PONTE_ADB_BIN` and `ANDROID_ADB_SERVER_PORT` move it.
 

@@ -741,6 +741,7 @@
   "Está offline.": "It is offline.",
   "Nenhum caminho até ele: nem Ponte, nem SSH.": "No way to reach it: neither Ponte nor SSH.",
   "Sem SSH configurado para ele.": "No SSH set up for it.",
+  "O SSH dele não está na lista da Ponte (ssh.hosts).": "Its SSH is not in the Ponte list (ssh.hosts).",
   "O SSH não respondeu.": "SSH did not answer.",
   "Ainda não conferido.": "Not checked yet.",
   "Não deu para ler as sessões dele.": "Could not read its sessions.",
@@ -1401,7 +1402,7 @@
     ponte: {self:'este aparelho',paired:'pareado',available:'disponível',known:'não pareado',pending:'aguardando aprovação',denied:'negado',expired:'expirou',controlsMe:'controla este aparelho'},
     adb: {device:'conectado',unauthorized:'sem autorização',offline:'offline'},
     action: {screen:'Ver tela',control:'Controlar',terminal:'Terminal',agents:'Agentes',sessions:'Sessões',info:'Informações',files:'Arquivos',wake:'Acordar',pair:'Pedir acesso',revoke:'Revogar',mirror:'Espelhar no PC',approve:'Aprovar',deny:'Negar',continue:'Continuar aqui'},
-    why: {SELF:'É este aparelho.',NO_PONTE:'Não roda a Ponte.',NOT_PAIRED:'Ainda não está pareado.',PAIRING_PENDING:'Aguardando aprovação no outro aparelho.',ALREADY_PAIRED:'Já está pareado.',OFFLINE:'Está offline.',NO_ROUTE:'Nenhum caminho até ele: nem Ponte, nem SSH.',NO_SSH:'Sem SSH configurado para ele.',SSH_UNREACHABLE:'O SSH não respondeu.',UNCHECKED:'Ainda não conferido.',PROBE_FAILED:'Não deu para ler as sessões dele.',NO_ADB:'Não está ligado por ADB neste PC.',NOT_AVAILABLE:'Ainda não existe na Ponte.'},
+    why: {SELF:'É este aparelho.',NO_PONTE:'Não roda a Ponte.',NOT_PAIRED:'Ainda não está pareado.',PAIRING_PENDING:'Aguardando aprovação no outro aparelho.',ALREADY_PAIRED:'Já está pareado.',OFFLINE:'Está offline.',NO_ROUTE:'Nenhum caminho até ele: nem Ponte, nem SSH.',NO_SSH:'Sem SSH configurado para ele.',SSH_NOT_LISTED:'O SSH dele não está na lista da Ponte (ssh.hosts).',SSH_UNREACHABLE:'O SSH não respondeu.',UNCHECKED:'Ainda não conferido.',PROBE_FAILED:'Não deu para ler as sessões dele.',NO_ADB:'Não está ligado por ADB neste PC.',NOT_AVAILABLE:'Ainda não existe na Ponte.'},
   };
   // deviceWord('why','NO_PONTE') -> 'Does not run Ponte.'; an unknown code gives '' (never the raw code).
   const deviceWord = (group,code) => hasOwn(deviceWords,group) && hasOwn(deviceWords[group],code) ? t(deviceWords[group][code]) : '';

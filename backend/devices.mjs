@@ -64,9 +64,10 @@ function capabilities({ self, ponte, ssh, adb, machine, status }) {
   const linked = self || (ponte?.state === 'paired' && ponte.online);
   const ponteWhy = () => !ponte ? 'NO_PONTE' : ponte.state === 'paired' ? 'OFFLINE' : ponte.state === 'pending' ? 'PAIRING_PENDING' : 'NOT_PAIRED';
   const configured = ssh.find(route => route.configured && route.kind !== 'tailscale-ssh');
+  // An SSH alias outside ssh.hosts is known but not opened from the phone.
   const terminal = linked ? yes('ponte')
     : configured && configured.check?.ok !== false ? { ok: true, via: 'ssh', host: configured.alias }
-    : configured ? no('SSH_UNREACHABLE') : no(ponte ? ponteWhy() : 'NO_ROUTE');
+    : configured ? no('SSH_UNREACHABLE') : no(ponte ? ponteWhy() : ssh.length ? 'SSH_NOT_LISTED' : 'NO_ROUTE');
   // Sessions continue here through the fleet's probe over a key route.
   const keyRoute = ssh.find(route => route.alias === machine?.sshAlias);
   const sessions = self ? no('SELF')

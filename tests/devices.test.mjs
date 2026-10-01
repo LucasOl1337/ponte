@@ -100,7 +100,7 @@ test('case 2: an SSH-only server is a server with a terminal through its configu
   assert.deepEqual(device.summary, { agents: 2, tools: ['claude', 'codex'] });
   // An alias outside ssh.hosts gives no terminal: the phone may only open listed ones.
   const unlisted = machine('ssh:outra', 'outra', 'server', null, [sshRoute('outra', { ok: true, ms: 9, checkedAt: 1 })]);
-  assert.deepEqual(byName(composeDevices(world({ machines: [unlisted] })), 'outra').can.terminal, { ok: false, why: 'NO_ROUTE' });
+  assert.deepEqual(byName(composeDevices(world({ machines: [unlisted] })), 'outra').can.terminal, { ok: false, why: 'SSH_NOT_LISTED' });
 });
 
 test('case 3: a phone on the tailnet is a phone; with this node\'s adb it can be mirrored', () => {
