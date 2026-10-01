@@ -10,6 +10,8 @@ It asks for bracketed paste, so a paste arrives between ESC[200~ and ESC[201~.
 - Shift+Tab cycles default -> accept edits -> plan mode.
 - Ctrl+C clears the input (twice on an empty input exits), Ctrl+D exits,
   Ctrl+U clears, Ctrl+L redraws, Ctrl+O toggles the detail line.
+- Ctrl+J (a line feed byte) inserts a new line without sending, as Claude
+  Code's "ctrl+j": "chat:newline" binding does.
 - Every key it recognises is logged to events.jsonl as
   {"tool": "claude-tui", "key": NAME}, and requests, pastes and menu answers
   too, so a test can prove what reached the program.
@@ -37,7 +39,7 @@ SEQUENCES = sorted({
     '\x1b[1~': 'Home', '\x1b[7~': 'Home', '\x1b[H': 'Home', '\x1bOH': 'Home',
     '\x1b[4~': 'End', '\x1b[8~': 'End', '\x1b[F': 'End', '\x1bOF': 'End', '\x1b[3~': 'Delete',
 }.items(), key=lambda item: -len(item[0]))
-CONTROLS = {'\r': 'Enter', '\n': 'Enter', '\t': 'Tab', '\x7f': 'BackSpace', '\x08': 'BackSpace', '\x1b': 'Escape'}
+CONTROLS = {'\r': 'Enter', '\t': 'Tab', '\x7f': 'BackSpace', '\x08': 'BackSpace', '\x1b': 'Escape'}
 for letter in 'abcdefghijklmnopqrstuvwxyz':
     CONTROLS.setdefault(chr(ord(letter) - 96), 'Ctrl+' + letter.upper())
 CONTROLS['\x03'] = 'Interrupt'
@@ -182,6 +184,7 @@ class Tui:
             if request.strip() in ('/exit', 'exit'): return False
             if request.strip(): self.submit(request)
         elif name == 'ShiftTab': self.mode = (self.mode + 1) % len(MODES)
+        elif name == 'Ctrl+J': self.insert('\n')
         elif name == 'BackSpace':
             if self.caret: self.text, self.caret = self.text[:self.caret - 1] + self.text[self.caret:], self.caret - 1
         elif name == 'Delete': self.text = self.text[:self.caret] + self.text[self.caret + 1:]

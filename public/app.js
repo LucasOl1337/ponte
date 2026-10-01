@@ -20,6 +20,82 @@ let liveWanted = true;
 let nativePaused = false;
 const savedPreference = (key, fallback = '') => { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } };
 const savePreference = (key,value) => { try { localStorage.setItem(key,value); } catch {} };
+
+// One shortcut model for the three key bars (Dev, Terminals and the screen's
+// typing bar). Each shortcut says what it sends to a Ponte terminal (`term`:
+// one input body or a sequence) and/or to the PC keyboard (`desk`: a
+// keyboard.key name). Names are Portuguese i18n keys; `deskName` when the same
+// chord means something else on the PC. Server allowlists:
+// backend/terminals.mjs `keys`, backend/desktop.mjs `keyCodes`.
+const KEY_CATALOG = [
+  {id:'enter', label:'⏎', name:'Enter', group:'base', term:{key:'Enter'}, desk:'Enter'},
+  {id:'esc', label:'Esc', name:'Esc', group:'base', term:{key:'Escape'}, desk:'Escape'},
+  {id:'ctrl-c', label:'^C', name:'Interromper (Ctrl+C)', deskName:'Copiar (Ctrl+C)', group:'base', term:{key:'Interrupt'}, desk:'Copy'},
+  {id:'menu-1', label:'1', name:'Opção 1', group:'agent', term:{text:'1'}},
+  {id:'menu-2', label:'2', name:'Opção 2', group:'agent', term:{text:'2'}},
+  {id:'menu-3', label:'3', name:'Opção 3', group:'agent', term:{text:'3'}},
+  {id:'menu-4', label:'4', name:'Opção 4', group:'agent', term:{text:'4'}},
+  {id:'shift-tab', label:'⇧Tab', name:'Trocar o modo (Shift+Tab)', group:'agent', term:{key:'ShiftTab'}, desk:'ShiftTab'},
+  {id:'newline', label:'⇧⏎', name:'Nova linha sem enviar', group:'agent', term:{key:'Ctrl+J'}, desk:'ShiftEnter'},
+  {id:'esc-esc', label:'Esc Esc', name:'Esc duas vezes (voltar a uma mensagem)', group:'agent', term:[{key:'Escape'},{key:'Escape'}]},
+  {id:'ctrl-c-twice', label:'^C ^C', name:'Ctrl+C duas vezes (sair)', group:'agent', term:[{key:'Interrupt'},{key:'Interrupt'}]},
+  {id:'ctrl-o', label:'^O', name:'Detalhes (Ctrl+O)', group:'agent', term:{key:'Ctrl+O'}},
+  {id:'ctrl-t', label:'^T', name:'Lista de tarefas (Ctrl+T)', group:'agent', term:{key:'Ctrl+T'}},
+  {id:'slash', label:'/', name:'Comando (/)', group:'agent', term:{text:'/'}},
+  {id:'at', label:'@', name:'Arquivo (@)', group:'agent', term:{text:'@'}},
+  {id:'bang', label:'!', name:'Comando de shell (!)', group:'agent', term:{text:'!'}},
+  {id:'up', label:'↑', name:'Cima', group:'nav', term:{key:'ArrowUp'}, desk:'ArrowUp'},
+  {id:'down', label:'↓', name:'Baixo', group:'nav', term:{key:'ArrowDown'}, desk:'ArrowDown'},
+  {id:'left', label:'←', name:'Esquerda', group:'nav', term:{key:'ArrowLeft'}, desk:'ArrowLeft'},
+  {id:'right', label:'→', name:'Direita', group:'nav', term:{key:'ArrowRight'}, desk:'ArrowRight'},
+  {id:'tab', label:'Tab', name:'Tab', group:'nav', term:{key:'Tab'}, desk:'Tab'},
+  {id:'home', label:'Home', name:'Início (Home)', group:'nav', term:{key:'Home'}, desk:'Home'},
+  {id:'end', label:'End', name:'Fim (End)', group:'nav', term:{key:'End'}, desk:'End'},
+  {id:'pgup', label:'PgUp', name:'Página acima', group:'nav', term:{key:'PageUp'}, desk:'PageUp'},
+  {id:'pgdn', label:'PgDn', name:'Página abaixo', group:'nav', term:{key:'PageDown'}, desk:'PageDown'},
+  {id:'backspace', label:'⌫', name:'Apagar caractere', group:'edit', term:{key:'BackSpace'}, desk:'BackSpace'},
+  {id:'delete', label:'Del', name:'Apagar à frente (Delete)', group:'edit', term:{key:'Delete'}, desk:'Delete'},
+  {id:'ctrl-a', label:'^A', name:'Início da linha (Ctrl+A)', group:'edit', term:{key:'Ctrl+A'}},
+  {id:'ctrl-e', label:'^E', name:'Fim da linha (Ctrl+E)', group:'edit', term:{key:'Ctrl+E'}},
+  {id:'ctrl-u', label:'^U', name:'Apagar a linha (Ctrl+U)', group:'edit', term:{key:'Ctrl+U'}},
+  {id:'ctrl-w', label:'^W', name:'Apagar a palavra (Ctrl+W)', group:'edit', term:{key:'Ctrl+W'}},
+  {id:'paste', label:'^V', name:'Colar (Ctrl+V)', group:'edit', desk:'Paste'},
+  {id:'term-copy', label:'^⇧C', name:'Copiar no terminal (Ctrl+Shift+C)', group:'edit', desk:'Ctrl+Shift+C'},
+  {id:'term-paste', label:'^⇧V', name:'Colar no terminal (Ctrl+Shift+V)', group:'edit', desk:'Ctrl+Shift+V'},
+  {id:'undo', label:'^Z', name:'Desfazer (Ctrl+Z)', group:'edit', desk:'Undo'},
+  {id:'redo', label:'^⇧Z', name:'Refazer (Ctrl+Shift+Z)', group:'edit', desk:'Ctrl+Shift+Z'},
+  {id:'select-all', label:'^A', name:'Selecionar tudo (Ctrl+A)', group:'edit', desk:'SelectAll'},
+  {id:'repeat', label:'↑⏎', name:'Repetir o último comando', group:'shell', term:[{key:'ArrowUp'},{key:'Enter'}]},
+  {id:'ctrl-r', label:'^R', name:'Buscar no histórico (Ctrl+R)', group:'shell', term:{key:'Ctrl+R'}, desk:'Ctrl+R'},
+  {id:'ctrl-l', label:'^L', name:'Limpar a tela (Ctrl+L)', group:'shell', term:{key:'Ctrl+L'}, desk:'Ctrl+L'},
+  {id:'ctrl-d', label:'^D', name:'Fim da entrada (Ctrl+D)', group:'shell', term:{key:'Ctrl+D'}, desk:'Ctrl+D'},
+  {id:'ctrl-z', label:'^Z', name:'Suspender (Ctrl+Z)', group:'shell', term:{key:'Ctrl+Z'}},
+  {id:'fg', label:'fg', name:'Voltar o programa suspenso (fg)', group:'shell', term:{text:'fg', enter:true}},
+  {id:'alt-tab', label:'Alt+Tab', name:'Trocar de janela (Alt+Tab)', group:'desk', desk:'AltTab'},
+  {id:'super', label:'Super', name:'Tecla Super', group:'desk', desk:'Super'},
+  {id:'ctrl-tab', label:'^Tab', name:'Próxima aba (Ctrl+Tab)', group:'desk', desk:'Ctrl+Tab'},
+  {id:'new-tab', label:'^T', name:'Nova aba (Ctrl+T)', group:'desk', desk:'Ctrl+T'},
+  {id:'close-tab', label:'^W', name:'Fechar aba (Ctrl+W)', group:'desk', desk:'Ctrl+W'},
+  {id:'find', label:'^F', name:'Buscar (Ctrl+F)', group:'desk', desk:'Ctrl+F'},
+  {id:'save', label:'^S', name:'Salvar (Ctrl+S)', group:'desk', desk:'Ctrl+S'},
+  {id:'f5', label:'F5', name:'Recarregar (F5)', group:'desk', desk:'F5'},
+  {id:'close-window', label:'Alt+F4', name:'Fechar janela (Alt+F4)', group:'desk', desk:'CloseWindow'},
+];
+const KEY_HEAD = ['enter','esc','ctrl-c'];
+// The order of the scrolling part per context, most needed first.
+const KEY_ORDER = {
+  agent: ['shift-tab','up','down','newline','menu-1','menu-2','menu-3','tab','slash','at','esc-esc','left','right','backspace','pgup','pgdn','ctrl-o','ctrl-t','repeat','ctrl-r','ctrl-l','ctrl-d','bang','ctrl-c-twice'],
+  shell: ['up','tab','ctrl-r','repeat','down','left','right','backspace','ctrl-l','ctrl-d','ctrl-z','fg','home','end','ctrl-u','ctrl-w','ctrl-a','ctrl-e','pgup','pgdn','ctrl-c-twice'],
+  desk: ['tab','backspace','up','down','left','right','paste','term-paste','term-copy','undo','shift-tab','newline','alt-tab','select-all','delete','home','end','pgup','pgdn','ctrl-l','ctrl-r','ctrl-d','find','save','new-tab','close-tab','ctrl-tab','f5','redo','super','close-window'],
+};
+const KEY_GROUPS = [['agent','Agente'],['nav','Navegação'],['edit','Edição'],['shell','Terminal'],['desk','Janelas e apps']];
+const KEY_SEQUENCE_GAP_MS = 150;
+const KEY_PROMOTE_AFTER = 3;
+const KEY_COMMAND_LIMIT = 12;
+const keyBarState = {dev:{ctx:'',menu:0,sheet:false,pinning:false,ready:false}, term:{ctx:'',menu:0,sheet:false,pinning:false,ready:false}, screen:{ctx:'',menu:0,sheet:false,pinning:false,ready:false}};
+const keyById = new Map(KEY_CATALOG.map(item => [item.id, item]));
+const keyBarElement = bar => document.querySelector(`[data-key-bar="${bar}"]`);
+const keyBarSurface = bar => bar === 'screen' ? 'desk' : 'term';
 let remoteInputGeneration = 0;
 let viewportBaseline = {width:0,height:0};
 let chosenWorkspace = 'all';
@@ -551,8 +627,9 @@ function setConnection(isConnected, error = '') {
   $('#dialog-status').textContent = isConnected ? t("Conexão privada · navegador pareado") : t("Aguardando resposta do computador");
   $('#connection-banner').hidden = isConnected || !token;
   if (!isConnected) i18n.write($('#connection-banner-text'),error || t("Conexão interrompida. Tentando reconectar…"));
-  $$('[data-app],[data-action],[data-key],[data-monitor-toggle],#mute-button,#stop-pc-audio,#btn-poweroff,#btn-unlock,#btn-suspend,#btn-reboot,#terminal-dictate,#screen-dictate,#screen-keyboard').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
+  $$('[data-app],[data-action],[data-monitor-toggle],#mute-button,#stop-pc-audio,#btn-poweroff,#btn-unlock,#btn-suspend,#btn-reboot,#terminal-dictate,#screen-dictate,#screen-keyboard').forEach(button => { button.disabled = !isConnected || busyControls.has(button.id); });
   $('#volume').disabled = !isConnected;
+  keyBarEnable('screen', isConnected);
   updateScreenButtons();
   if (isConnected && state) updateCapabilities();
   if (!isConnected) { closeScreenComposer(); markTextFocus(false); }
@@ -784,6 +861,9 @@ function navigate(page) {
   $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
   if (!nextScreen) closeScreenComposer();
   renderVisiblePage();
+  // Usage is applied on entry, not while the user is tapping the same row.
+  const keyBar = {dev:'dev',terminais:'term',tela:'screen'}[page];
+  if (keyBar) renderKeyBar(keyBar);
   window.scrollTo({top:0,behavior:'instant'});
   if (page === 'voz' && connected) loadAudio();
   reconcileLive();
@@ -845,9 +925,6 @@ document.addEventListener('click', event => {
     const lightsType = /^(power\.(sleep|wake)|lights\.(preset|sleep|restore))$/.test(type);
     runBusy(generic, () => (lightsType ? lightsAction : action)(type, payload, feedback));
   }
-  const key = event.target.closest('[data-key]');
-  if (key && key.closest('#screen-key-row')) sendKeys(async () => { if (!(await quietAction('keyboard.key',{key:key.dataset.key}))) toast(t("A tecla não chegou ao PC."), true); });
-  else if (key) action('keyboard.key',{key:key.dataset.key});
   const workspace = event.target.closest('[data-workspace]');
   if (workspace) action('workspace.focus',{id:Number(workspace.dataset.workspace)}, t('Área {workspace} em foco.',{workspace:workspace.textContent.trim()}));
   const filter = event.target.closest('[data-filter]');
@@ -2305,7 +2382,8 @@ function terminalControls() {
   $('#terminal-pause').disabled = !terminalId;
   $('#terminal-pause').setAttribute('aria-pressed',String(terminalPaused));
   $('#terminal-pause').textContent = terminalPaused ? t('Retomar leitura') : t('Pausar leitura');
-  $$('#terminal-send,#terminal-paste,#terminal-clear,#terminal-input,#terminal-close,#terminal-size,[data-terminal-key]').forEach(element => { element.disabled = !ready; });
+  $$('#terminal-send,#terminal-paste,#terminal-clear,#terminal-input,#terminal-close,#terminal-size').forEach(element => { element.disabled = !ready; });
+  keyBarEnable('term', ready);
 }
 // Agents and terminals: one list for the agents running on the PC (from
 // /api/agents), plain terminal windows and this phone's Ponte sessions.
@@ -2657,6 +2735,8 @@ function selectTerminal(id) {
   const session = terminalSessions.find(item => item.id === id);
   terminalSizeOptions(session?.cols || 40);
   terminalSessionOptions();
+  keyBarUpdate('term', sessionContext(session), '');
+  renderKeyBar('term');
 }
 // Reading back in the session: a finger on the output, a fling still running
 // or a text selection keeps the text as it is until the next read, and new
@@ -2731,6 +2811,7 @@ async function readTerminals(generation) {
         const top = output.scrollTop;
         terminalText = text;
         output.textContent = text;
+        keyBarUpdate('term', sessionContext(terminalSessions.find(session => session.id === requestedId)), text);
         if (followsTail) output.scrollTop = output.scrollHeight;
         else if (dropped) output.scrollTop = Math.max(0, top - dropped * lineHeight);
         terminalOwnScrollTop = output.scrollTop;
@@ -2919,7 +3000,7 @@ function sendScreenEnter() { sendScreenText({ enter: true }); }
 // A button tap must not steal focus from the field: that would close the
 // keyboard, shift the bar under the finger and lose the tap itself.
 for (const name of ['pointerdown','mousedown']) {
-  $$('#screen-input-send,#screen-input-more,#screen-input-clear,#screen-input-paste,#screen-key-row button').forEach(element => element.addEventListener(name, event => event.preventDefault()));
+  $$('#screen-input-send,#screen-input-more,#screen-input-clear,#screen-input-paste').forEach(element => element.addEventListener(name, event => event.preventDefault()));
 }
 $('#screen-keyboard').addEventListener('click', () => {
   if (!screenComposerOpen()) { openScreenComposer({ automatic: false, requestNativeKeyboard: true }); return; }
@@ -2988,8 +3069,6 @@ $('#terminal-close-confirm').addEventListener('click',async () => {
   if (await terminalMutation(`/terminals/${encodeURIComponent(id)}`,undefined,'DELETE')) { terminalDrafts.delete(id); selectTerminal(''); updateTerminalNavigation(); }
 });
 document.addEventListener('click',async event => {
-  const key = event.target.closest('[data-terminal-key]');
-  if (key && terminalId) { await terminalMutation(`/terminals/${encodeURIComponent(terminalId)}/input`,{key:key.dataset.terminalKey}); updateTerminalNavigation(); }
   const preview = event.target.closest('[data-preview-window]');
   if (preview) {
     const target = (state?.windows || []).find(w => w.address === preview.dataset.previewWindow);
@@ -3848,11 +3927,6 @@ function devGrid(width, height, cellWidth, cellHeight) {
   if (!(width > 0 && height > 0 && cellWidth > 0 && cellHeight > 0)) return null;
   return { cols: Math.max(20, Math.min(240, Math.floor(width / cellWidth))), rows: Math.max(8, Math.min(100, Math.floor(height / cellHeight))) };
 }
-function devKeyPayload(button) {
-  if (button.dataset.devKey) return { key: button.dataset.devKey };
-  if (button.dataset.devText) return { text: button.dataset.devText };
-  return null;
-}
 let devFont = Number(savedPreference('ponte-dev-font', String(DEV_FONT_DEFAULT)));
 if (!(devFont >= DEV_FONT_MIN && devFont <= DEV_FONT_MAX)) devFont = DEV_FONT_DEFAULT;
 let devId = '', devSessions = [], devHash = '', devHashId = '', devTimer, devGeneration = 0, devBusy = false;
@@ -3882,14 +3956,16 @@ function devRenderSessions() {
   $('#dev-empty-label').textContent = t('Novo Claude em {project}',{project:project || '~'});
   $('#dev-empty').hidden = !!devId;
   ['#dev-open-pc','#dev-send','#dev-paste','#dev-dictate','#dev-attach'].forEach(selector => { $(selector).disabled = !devId; });
-  $$('[data-dev-key],[data-dev-text]').forEach(button => { button.disabled = !devId; });
+  keyBarEnable('dev', !!devId);
+  keyBarUpdate('dev', sessionContext(devSessions.find(session => session.id === devId)), null);
   $('#dev-font-down').disabled = devFont <= DEV_FONT_MIN; $('#dev-font-up').disabled = devFont >= DEV_FONT_MAX;
 }
 function devSelect(id) {
   devId = id; devHash = ''; devHashId = ''; devFollow = true;
-  devPane = null; $('#dev-output').innerHTML = ''; devRenderSize(); $('#dev-live').hidden = true;
+  devPane = null; $('#dev-output').innerHTML = ''; devRenderSize(); $('#dev-live').hidden = true; keyBarState.dev.menu = 0;
   if (id) savePreference('ponte-dev-session', id);
   devRenderSessions();
+  renderKeyBar('dev');
 }
 async function devLoadSessions() {
   try {
@@ -3938,6 +4014,7 @@ async function devRead(generation) {
       devIdleDelay = 1000;
       const screen = $('#dev-screen');
       $('#dev-output').innerHTML = ansiToHtml(view.text, view.cursor, view.rows);
+      keyBarUpdate('dev', sessionContext(devSessions.find(session => session.id === id)), view.text);
       if (devFollow) screen.scrollTop = screen.scrollHeight;
     }
     devHash = view.hash || ''; devHashId = id;
@@ -4050,13 +4127,6 @@ $$('[data-dev-agent]').forEach(button => button.addEventListener('click', () => 
 $('#dev-project').addEventListener('change', event => savePlace(devAgent, event.target.value));
 $('#dev-create').addEventListener('click', () => devCreate(devAgent, $('#dev-project').value));
 $('#dev-empty-start').addEventListener('click', () => devCreate('claude', savedPreference('ponte-start-project') || devProjects[0] || ''));
-$('#dev-keys').addEventListener('click', event => {
-  const button = event.target.closest('[data-dev-key],[data-dev-text]');
-  const payload = button && devKeyPayload(button);
-  if (!payload || button.disabled) return;
-  try { if (navigator.vibrate) navigator.vibrate(8); } catch {}
-  devInput(payload);
-});
 $('#dev-send').addEventListener('click', () => devSend(true));
 $('#dev-paste').addEventListener('click', () => devSend(false));
 $('#dev-input').addEventListener('input', devGrow);
@@ -4146,6 +4216,195 @@ async function autoPair() {
     return true;
   } catch { return false; }
 }
+// ---- Key bar: one row for Dev, Terminals and the screen's typing bar ----
+// Head (never scrolls): Enter, Esc, Ctrl+C. Tail (scrolls): what the screen
+// asks for now (a numbered menu), the owner's pinned keys and saved commands,
+// the most used ones, then the context's default order. The tail is rebuilt
+// only when the context changes (session, agent/shell, a menu appearing), so
+// it never moves under a finger. The sheet (⋯) floats over the page and lists
+// everything by group; it never changes the size of the Dev screen (that
+// would resize the agent's pane).
+function keyStore(name, fallback) { try { const value = JSON.parse(localStorage.getItem(name) || 'null'); return value && typeof value === 'object' ? value : fallback; } catch { return fallback; } }
+function keyPins(ctx) { const all = keyStore('ponte-keys-pinned', {}); return Array.isArray(all[ctx]) ? all[ctx].filter(id => keyById.has(id)) : []; }
+function keyUsage(ctx) { const all = keyStore('ponte-keys-usage', {}); return all[ctx] && typeof all[ctx] === 'object' ? all[ctx] : {}; }
+function keyCommands() { const list = keyStore('ponte-keys-commands', []); return Array.isArray(list) ? list.filter(item => typeof item === 'string' && item.trim()).slice(0, KEY_COMMAND_LIMIT) : []; }
+function keyAvailable(item, bar) { return !!item && !!item[keyBarSurface(bar)]; }
+function keyName(item, bar) { return t(bar === 'screen' && item.deskName ? item.deskName : item.name); }
+// A numbered choice menu at the bottom of an agent's screen (Claude Code draws
+// "❯ 1. Yes", Codex "› 1. Yes"): how many options it offers, or 0.
+function keyMenuOptions(text) {
+  // A pane taller than its content ends in blank rows: look at the last
+  // sixteen rows that hold something.
+  const lines = String(text || '').replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, '').replace(/\s+$/, '').split('\n').slice(-16);
+  let pointer = false, highest = 0;
+  for (const line of lines) {
+    const match = /^[\s│|]*([❯›]\s*)?([1-9])[.)]\s+\S/.exec(line);
+    // A normal prompt below the choices means that menu is now history.
+    if (!match && /^[\s│|]*[>❯›](?:\s|$)/.test(line)) { pointer = false; highest = 0; }
+    if (!match) continue;
+    if (match[1]) pointer = true;
+    highest = Math.max(highest, Number(match[2]));
+  }
+  return pointer && highest >= 2 ? Math.min(highest, 4) : 0;
+}
+function keyTailIds(bar, ctx, menu) {
+  const now = menu ? [...Array.from({length:menu}, (_, i) => `menu-${i + 1}`), 'up', 'down'] : [];
+  const usage = keyUsage(ctx);
+  const promoted = Object.keys(usage).filter(id => usage[id] >= KEY_PROMOTE_AFTER).sort((a, b) => usage[b] - usage[a]).slice(0, 6);
+  const seen = new Set(KEY_HEAD), ids = [];
+  for (const id of [...now, ...keyPins(ctx), ...promoted, ...(KEY_ORDER[ctx] || [])]) {
+    if (seen.has(id) || !keyAvailable(keyById.get(id), bar)) continue;
+    seen.add(id); ids.push(id);
+  }
+  return ids;
+}
+function keyButton(item, bar, extra = '') {
+  const name = keyName(item, bar);
+  return `<button type="button" class="key-button${item.id === 'enter' ? ' key-enter' : ''}" data-shortcut="${escaped(item.id)}" aria-label="${escaped(name)}" title="${escaped(name)}"${extra}>${escaped(item.label)}</button>`;
+}
+function commandButton(command, index, editing) {
+  return `<button type="button" class="key-button key-command" data-key-command="${index}" title="${escaped(command)}"><span>${escaped(command)}</span>${editing ? '<b aria-hidden="true">✕</b>' : ''}</button>`;
+}
+function renderKeyBar(bar) {
+  const root = keyBarElement(bar), state = keyBarState[bar];
+  if (!root) return;
+  const oldInput = $('[data-key-command-input]', root);
+  const focused = oldInput && document.activeElement === oldInput;
+  const selection = focused ? [oldInput.selectionStart, oldInput.selectionEnd] : null;
+  if (oldInput) state.commandDraft = oldInput.value;
+  const sheetScroll = $('.key-sheet', root)?.scrollTop || 0;
+  const ctx = state.ctx || (bar === 'screen' ? 'desk' : 'shell');
+  const pins = new Set(keyPins(ctx)), commands = keyCommands();
+  const tail = keyTailIds(bar, ctx, state.menu || 0);
+  const groups = KEY_GROUPS.map(([group, title]) => {
+    const items = KEY_CATALOG.filter(item => item.group === group && keyAvailable(item, bar));
+    if (!items.length) return '';
+    return `<section><h3>${escaped(t(title))}</h3><div class="key-sheet-keys">${items.map(item => keyButton(item, bar, state.pinning ? ` aria-pressed="${pins.has(item.id)}"` : '')).join('')}</div></section>`;
+  }).join('');
+  state.shown = `${ctx}:${state.menu || 0}`;
+  root.setAttribute('data-key-context', ctx);
+  root.setAttribute('data-key-menu', String(state.menu || 0));
+  root.innerHTML = `<div class="key-row"><div class="key-head">${KEY_HEAD.map(id => keyButton(keyById.get(id), bar)).join('')}</div>`
+    + `<div class="key-tail" role="group" aria-label="${escaped(t('Mais teclas'))}">${tail.map(id => keyButton(keyById.get(id), bar)).join('')}${commands.map((command, index) => commandButton(command, index, false)).join('')}</div>`
+    + `<button type="button" class="key-button key-more" data-key-sheet aria-expanded="${state.sheet}" aria-label="${escaped(t('Todos os atalhos'))}" title="${escaped(t('Todos os atalhos'))}">⋯</button></div>`
+    + `<div class="key-sheet"${state.sheet ? '' : ' hidden'}><div class="key-sheet-top"><strong>${escaped(t('Atalhos'))}</strong><button type="button" class="button small" data-key-pin aria-pressed="${state.pinning}">${escaped(state.pinning ? t('Pronto') : t('Fixar na fileira'))}</button></div>`
+    + (state.pinning ? `<p class="hint">${escaped(t('Toque numa tecla para fixar ou soltar. Toque num comando para apagar.'))}</p>` : '')
+    + groups
+    + `<section><h3>${escaped(t('Comandos salvos'))}</h3><div class="key-sheet-keys">${commands.map((command, index) => commandButton(command, index, state.pinning)).join('')}</div>`
+    + `<div class="key-command-new"><input type="text" data-key-command-input maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${escaped(t('Novo comando, ex.: npm test'))}" aria-label="${escaped(t('Novo comando'))}"><button type="button" class="button small" data-key-command-save>${escaped(t('Salvar'))}</button></div></section></div>`;
+  keyBarEnable(bar, state.ready);
+  const newInput = $('[data-key-command-input]', root);
+  if (newInput) {
+    newInput.value = state.commandDraft || '';
+    if (focused) { newInput.focus(); if (selection) newInput.setSelectionRange?.(...selection); }
+  }
+  const sheet = $('.key-sheet', root);
+  if (sheet) sheet.scrollTop = sheetScroll;
+}
+function keyBarEnable(bar, ready) {
+  const root = keyBarElement(bar);
+  keyBarState[bar].ready = !!ready;
+  if (root) $$('[data-shortcut],[data-key-command]', root).forEach(button => { button.disabled = !ready && !keyBarState[bar].pinning; });
+}
+// The context of a bar changed (another session, a menu appeared or left).
+// Rebuilds the row only when the order would actually change.
+// text null: the screen did not change, keep what it asked for.
+function keyBarUpdate(bar, ctx, text) {
+  const state = keyBarState[bar], menu = ctx === 'desk' ? 0 : text === null ? state.menu : keyMenuOptions(text);
+  state.ctx = ctx; state.menu = menu;
+  if (state.shown !== `${ctx}:${menu}`) renderKeyBar(bar);
+}
+function sessionContext(session) { return /^(Claude|Codex|Jcode) /.test(session?.title || '') ? 'agent' : 'shell'; }
+function keyCount(ctx, id) {
+  const all = keyStore('ponte-keys-usage', {});
+  const counts = all[ctx] && typeof all[ctx] === 'object' ? all[ctx] : {};
+  counts[id] = Math.min(9999, (Number(counts[id]) || 0) + 1);
+  all[ctx] = counts;
+  savePreference('ponte-keys-usage', JSON.stringify(all));
+}
+const keyPause = ms => new Promise(resolve => setTimeout(resolve, ms));
+// What one tap sends. A sequence goes one key at a time with a short gap: an
+// Escape followed within milliseconds by another key reads as Alt+key.
+async function keyBarSend(bar, bodies) {
+  const id = bar === 'dev' ? devId : bar === 'term' ? terminalId : '';
+  const requestToken = token, node = targetNode, page = currentPage, inputGeneration = remoteInputGeneration;
+  const sameTarget = () => connected && token === requestToken && targetNode === node && currentPage === page
+    && remoteInputGeneration === inputGeneration && id === (bar === 'dev' ? devId : bar === 'term' ? terminalId : '');
+  for (let index = 0; index < bodies.length; index++) {
+    if (index) await keyPause(KEY_SEQUENCE_GAP_MS);
+    if (!sameTarget()) return false;
+    const body = bodies[index];
+    let ok;
+    if (bar === 'dev') ok = await devInput(body);
+    else if (bar === 'term') { ok = !!(terminalId && await terminalMutation(`/terminals/${encodeURIComponent(terminalId)}/input`, body)); updateTerminalNavigation(); }
+    else ok = await new Promise(resolve => sendKeys(async () => resolve(sameTarget() && await quietAction(body.text ? 'keyboard.text' : 'keyboard.key', body))));
+    if (!ok) { if (bar === 'screen') toast(t("A tecla não chegou ao PC."), true); return false; }
+  }
+  return true;
+}
+function keyBodies(item, bar) {
+  if (bar === 'screen') return [{key:item.desk}];
+  return Array.isArray(item.term) ? item.term : [item.term];
+}
+function keyCommandBodies(command, bar) { return [{text:command, enter:true}]; }
+function keyTogglePin(ctx, id) {
+  const all = keyStore('ponte-keys-pinned', {}), list = Array.isArray(all[ctx]) ? all[ctx] : [];
+  all[ctx] = list.includes(id) ? list.filter(item => item !== id) : [...list, id].slice(-8);
+  savePreference('ponte-keys-pinned', JSON.stringify(all));
+}
+function keySaveCommand(bar) {
+  const input = $('[data-key-command-input]', keyBarElement(bar));
+  const command = String(input?.value || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+  if (!command) return;
+  const list = [command, ...keyCommands().filter(item => item !== command)].slice(0, KEY_COMMAND_LIMIT);
+  savePreference('ponte-keys-commands', JSON.stringify(list));
+  input.value = '';
+  for (const name of Object.keys(keyBarState)) renderKeyBar(name);
+}
+function keyBarClick(bar, event) {
+  const state = keyBarState[bar], ctx = state.ctx || (bar === 'screen' ? 'desk' : 'shell');
+  if (event.target.closest('[data-key-sheet]')) { state.sheet = !state.sheet; if (!state.sheet) state.pinning = false; renderKeyBar(bar); return; }
+  if (event.target.closest('[data-key-pin]')) { state.pinning = !state.pinning; renderKeyBar(bar); return; }
+  if (event.target.closest('[data-key-command-save]')) { keySaveCommand(bar); return; }
+  const commandButton = event.target.closest('[data-key-command]');
+  if (commandButton) {
+    const index = Number(commandButton.dataset.keyCommand), commands = keyCommands(), command = commands[index];
+    if (command === undefined) return;
+    if (state.pinning) {
+      savePreference('ponte-keys-commands', JSON.stringify(commands.filter((_, at) => at !== index)));
+      for (const name of Object.keys(keyBarState)) renderKeyBar(name);
+      return;
+    }
+    if (commandButton.disabled) return;
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch {}
+    keyBarSend(bar, keyCommandBodies(command, bar));
+    return;
+  }
+  const button = event.target.closest('[data-shortcut]'), item = button && keyById.get(button.dataset.shortcut);
+  if (!item || !keyAvailable(item, bar)) return;
+  if (state.pinning) {
+    if (KEY_HEAD.includes(item.id)) return;
+    keyTogglePin(ctx, item.id); renderKeyBar(bar); return;
+  }
+  if (button.disabled) return;
+  try { if (navigator.vibrate) navigator.vibrate(8); } catch {}
+  if (!KEY_HEAD.includes(item.id)) keyCount(ctx, item.id);
+  keyBarSend(bar, keyBodies(item, bar));
+}
+for (const bar of Object.keys(keyBarState)) {
+  const root = keyBarElement(bar);
+  if (!root) continue;
+  root.addEventListener('click', event => keyBarClick(bar, event));
+  root.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target.closest && event.target.closest('[data-key-command-input]')) { event.preventDefault(); keySaveCommand(bar); } });
+  keyBarState[bar].ctx = bar === 'screen' ? 'desk' : 'shell';
+  renderKeyBar(bar);
+}
+// The typing bar's keys must not take the focus from its field: that would
+// close the phone keyboard and move the bar under the finger.
+for (const name of ['pointerdown','mousedown']) keyBarElement('screen')?.addEventListener(name, event => { if (event.target.closest && event.target.closest('button')) event.preventDefault(); });
+document.addEventListener('ponte-language-change', () => { for (const bar of Object.keys(keyBarState)) renderKeyBar(bar); });
+keyBarEnable('screen', connected);
+
 function enterApp(page) {
   showApp(); setConnection(false,t("Conectando ao seu computador…"));
   const first = page || location.hash.slice(1) || 'tela';

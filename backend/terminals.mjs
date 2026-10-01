@@ -35,13 +35,16 @@ const projectPattern = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 const agentLauncher = ['/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent'];
 // Stable key names for the phone, mapped to tmux key names. The keys Claude
 // Code and a shell use: Shift+Tab cycles Claude's mode, Ctrl+O/R/T its views.
+// Ctrl+J is a line feed: Claude Code and Codex take it as a new line in the
+// prompt without sending it.
 const keys = Object.freeze({
   Enter: 'Enter', Tab: 'Tab', ShiftTab: 'BTab', Escape: 'Escape', BackSpace: 'BSpace', Delete: 'DC',
   ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
   Home: 'Home', End: 'End', PageUp: 'PPage', PageDown: 'NPage', Interrupt: 'C-c',
-  'Ctrl+A': 'C-a', 'Ctrl+D': 'C-d', 'Ctrl+E': 'C-e', 'Ctrl+L': 'C-l', 'Ctrl+O': 'C-o',
+  'Ctrl+A': 'C-a', 'Ctrl+D': 'C-d', 'Ctrl+E': 'C-e', 'Ctrl+J': 'C-j', 'Ctrl+L': 'C-l', 'Ctrl+O': 'C-o',
   'Ctrl+R': 'C-r', 'Ctrl+T': 'C-t', 'Ctrl+U': 'C-u', 'Ctrl+W': 'C-w', 'Ctrl+Z': 'C-z',
 });
+export const TERMINAL_KEYS = Object.freeze(Object.keys(keys));
 
 function fields(value, names, code) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !names.includes(key))) throw new ApiError(400, code);

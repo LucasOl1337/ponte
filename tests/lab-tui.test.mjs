@@ -104,3 +104,22 @@ test('a request of several lines reaches the fake Claude TUI as one bracketed pa
   assert.deepEqual(log.filter(event => event.event === 'request').map(event => event.text), ['oi', request]);
   assert.equal(log.some(event => event.key === 'Enter' && log.indexOf(event) < log.findIndex(item => item.event === 'paste')), false, 'no line break reached it as Enter before the paste ended');
 });
+
+test('Ctrl+J gives the fake Claude TUI a new line without sending, like Claude Code, and Enter sends both lines', async t => {
+  const lab = await labTui(t, 'oi');
+  if (!lab) return;
+  const { terminals, session, until, events } = lab;
+  await until(read => plain(read.text).includes('Do you want to proceed?'), 'the first menu');
+  await terminals.input(session.id, { key: 'Escape' });
+  await until(read => plain(read.text).includes('? for shortcuts'), 'the input box');
+  await terminals.input(session.id, { text: 'primeira' });
+  await terminals.input(session.id, { key: 'Ctrl+J' });
+  await terminals.input(session.id, { text: 'segunda' });
+  await until(read => /> primeira[\s\S]*segunda/.test(plain(read.text)), 'two lines in the input box');
+  assert.deepEqual((await events()).filter(event => event.event === 'request').map(event => event.text), ['oi'], 'Ctrl+J sent nothing');
+  await terminals.input(session.id, { key: 'Enter' });
+  await until(async () => (await events()).filter(event => event.event === 'request').length === 2, 'the request');
+  const request = (await events()).filter(event => event.event === 'request').at(-1);
+  assert.deepEqual([request.text, request.lines], ['primeira\nsegunda', 2]);
+  assert.ok((await events()).some(event => event.key === 'Ctrl+J'));
+});

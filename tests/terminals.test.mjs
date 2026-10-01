@@ -382,7 +382,7 @@ test('phone key names map to fixed tmux keys, and one typed character is sent as
   const expected = {
     Enter: 'Enter', Tab: 'Tab', ShiftTab: 'BTab', Escape: 'Escape', BackSpace: 'BSpace', Delete: 'DC',
     ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End',
-    PageUp: 'PPage', PageDown: 'NPage', Interrupt: 'C-c', 'Ctrl+A': 'C-a', 'Ctrl+D': 'C-d', 'Ctrl+E': 'C-e',
+    PageUp: 'PPage', PageDown: 'NPage', Interrupt: 'C-c', 'Ctrl+A': 'C-a', 'Ctrl+D': 'C-d', 'Ctrl+E': 'C-e', 'Ctrl+J': 'C-j',
     'Ctrl+L': 'C-l', 'Ctrl+O': 'C-o', 'Ctrl+R': 'C-r', 'Ctrl+T': 'C-t', 'Ctrl+U': 'C-u', 'Ctrl+W': 'C-w', 'Ctrl+Z': 'C-z',
   };
   for (const [key, tmuxKey] of Object.entries(expected)) {
