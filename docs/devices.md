@@ -1,6 +1,6 @@
 # Devices: one list of everything this node reaches
 
-Every Ponte surface (the phone app, a browser, the remote desktop, the CLI) asks the node it holds for the same list: each computer or phone on the mesh, the tailnet, `~/.ssh/config` and this node's adb, with its kind, status, routes and what can be done with it. The decision and the migration are in [ADR 0002](adr/0002-one-device-model.md); the words in [CONTEXT.md](../CONTEXT.md#devices-adr-0002).
+The phone/browser Home and the CLI ask their home node for the same list: each computer or phone on the mesh, the tailnet, `~/.ssh/config` and this node's adb, with its kind, status, routes and what can be done with it. The remote desktop (`rd.html`) migration is a later slice. The decision and the migration are in [ADR 0002](adr/0002-one-device-model.md); the words in [CONTEXT.md](../CONTEXT.md#devices-adr-0002).
 
 ```sh
 ./ponte devices            # the list
@@ -10,6 +10,14 @@ Every Ponte surface (the phone app, a browser, the remote desktop, the CLI) asks
 ```
 
 The same answer comes from `GET /api/devices[?discover=1|deep=1|fresh=1]` and, for the phone (whose proxy allows no new route), `POST /api/action {"type":"devices.list","deep":true}`. `discover` asks the mesh again (what `/api/mesh` does) without checking SSH. Owner only and never relayed: a peer token gets `MESH_OWNER_ONLY`, `?node=` gets `MESH_INVALID_REQUEST`. Without `deep` the list comes from caches (mesh discovery 30 s, fleet inventory 15 s, SSH checks 45 s, adb 15 s) and never waits on the network.
+
+## Home and header selector (slice 4)
+
+`Seus aparelhos` replaces the separate mesh card and fleet machine list. Incoming requests appear first. Each row shows kind, status and route details, with one main action: View screen on the current target, otherwise Control, Terminal, then Ask for access. Agents and Sessions are secondary actions. Revoke is behind the overflow button. Offline unpaired devices can be expanded, paired devices stay visible. The header uses the same `can.control.ok` list and preserves the already selected target if it goes offline.
+
+Both the phone and browser use `POST /api/action` on the home node, even while controlling a remote target. Agent sessions stay a separate card. Sessions filters by the selected device's `can.sessions.machine` before the twelve-session limit; Show all clears it. Ponte terminals open on the chosen device, SSH terminals use its configured alias on the home node.
+
+No new static file or route is required by the alpha.24 APK: the implementation stays in `app.js`, with the existing `index.html`, `styles.css` and `i18n.js`. A slow deep check can exceed that APK proxy's fifteen-second read timeout. The error is shown, the last good list is retained, and the ordinary cached read retries after thirty seconds. This slice does not change the APK or its timeout. A home server without `devices.list` retains the mesh-based selector and incoming requests only. Full Home rendering requires the new home server, while old remote peers keep their existing relay path.
 
 ## A device
 
@@ -54,7 +62,7 @@ The answer is `{v: 1, home: {id, name}, devices, requests, tailnet: {state}, che
 | `mirror` | this node's adb sees the phone as `device` | `adb` | `ponte desktop` / `ponte phone view` (from the surface in a later slice) |
 | `files`, `wake` | not yet | — | `why: NOT_AVAILABLE` |
 
-Reasons (`why`): `SELF`, `NO_PONTE`, `NOT_PAIRED`, `PAIRING_PENDING`, `ALREADY_PAIRED`, `OFFLINE`, `NO_ROUTE`, `NO_SSH`, `SSH_UNREACHABLE`, `UNCHECKED`, `PROBE_FAILED`, `NO_ADB`, `NOT_AVAILABLE`.
+Reasons (`why`): `SELF`, `NO_PONTE`, `NOT_PAIRED`, `PAIRING_PENDING`, `ALREADY_PAIRED`, `OFFLINE`, `NO_ROUTE`, `NO_SSH`, `SSH_NOT_LISTED`, `SSH_UNREACHABLE`, `UNCHECKED`, `PROBE_FAILED`, `NO_ADB`, `NOT_AVAILABLE`.
 
 adb is read only and only when an adb server already runs on this node (`adb devices -l`; asking would start one). `PONTE_ADB=0` turns it off, `PONTE_ADB_BIN` and `ANDROID_ADB_SERVER_PORT` move it.
 

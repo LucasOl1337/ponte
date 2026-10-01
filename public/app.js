@@ -147,51 +147,178 @@ async function lightsAction(type, payload = {}, feedback = '') {
 }
 
 // ------------------------------------------------------------------- devices
-// The home node lists the other Ponte nodes on the tailnet (inside /api/state,
-// the only route the phone's proxy has for it) and runs the mesh.* actions.
+// "Seus aparelhos" (ADR 0002, slice 4). The home node composes one list of
+// devices (mesh, tailnet, SSH, adb) and decides what each one can do and why
+// not; this page only draws it. The list comes through POST /api/action
+// {type:'devices.list'} with home:true, the one route every APK's proxy
+// forwards, so it is always the home node's view even while controlling
+// another device. state.mesh is only a fallback before the list arrives.
 let meshSignature = '';
-const meshSelf = () => meshInfo?.self || null;
+let deviceList = null, devicesLoadedAt = 0, devicesBusy = false, devicesError = null, devicesMeshKey = '', devicesShowOffline = false;
+let devicesRefreshQueued = null;
+const devicesOpen = new Set();
+const DEVICES_REFRESH_MS = 30000;
+const meshSelf = () => deviceList?.home || meshInfo?.self || null;
 const meshPeer = id => (meshInfo?.peers || []).find(peer => peer.id === id) || null;
+const homeId = () => meshSelf()?.id || '';
+const deviceById = id => (deviceList?.devices || []).find(device => device.id === id) || null;
+const deviceWord = (group, code) => i18n.deviceWord ? i18n.deviceWord(group, code) : '';
 function targetName() {
   if (!targetNode) return meshSelf()?.name || state?.hostname || '';
-  return meshPeer(targetNode)?.name || state?.node?.name || targetNode;
+  return deviceById(targetNode)?.name || meshPeer(targetNode)?.name || state?.node?.name || targetNode;
+}
+async function loadDevices({ force = false, deep = false } = {}) {
+  // A versioned server can have SSH/tailnet devices with mesh disabled.
+  // Old unversioned servers without mesh keep their original behaviour.
+  if (!token || (!meshSelf() && !state?.version)) return;
+  if (devicesBusy) {
+    if (force) devicesRefreshQueued = { force:true, deep:deep || !!devicesRefreshQueued?.deep };
+    return;
+  }
+  if (!force && devicesLoadedAt && Date.now() - devicesLoadedAt < DEVICES_REFRESH_MS) return;
+  const requestToken = token;
+  devicesBusy = true; renderMesh();
+  try {
+    const body = deep ? { type:'devices.list', deep:true, fresh:true } : { type:'devices.list' };
+    const listing = await (await api('/action', { method:'POST', home:true, timeout: deep ? 40000 : 12000, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })).json();
+    if (requestToken !== token) return;
+    // Only adopt the versioned device contract, never a generic action reply.
+    if (listing?.v === 1 && Array.isArray(listing.devices)) { deviceList = listing; devicesError = null; }
+  } catch (error) {
+    if (requestToken === token) { devicesError = error; if (deep) toast(error, true); }
+  } finally {
+    if (requestToken === token) devicesLoadedAt = Date.now();
+    devicesBusy = false;
+    const queued = devicesRefreshQueued;
+    devicesRefreshQueued = null;
+    renderMesh();
+    if (queued && requestToken === token) await loadDevices(queued);
+  }
+}
+// The selector: this device plus every device the list says can be
+// controlled (can.control). The one being controlled stays listed even when
+// it drops, so the choice never jumps by itself.
+function controlChoices() {
+  if (deviceList) {
+    const list = deviceList.devices.filter(device => !device.self && device.can?.control?.ok).map(device => ({ id:device.id, name:device.name, offline:false }));
+    if (targetNode && !list.some(item => item.id === targetNode)) list.push({ id:targetNode, name:targetName(), offline:true });
+    return list;
+  }
+  return (meshInfo?.peers || []).filter(peer => peer.paired).map(peer => ({ id:peer.id, name:peer.name, offline:!peer.online }));
+}
+function routeChips(device) {
+  const chips = [];
+  const chip = (text, tone = '') => chips.push(`<span class="device-chip${tone ? ` ${tone}` : ''}">${escaped(text)}</span>`);
+  const routes = device.routes || [];
+  for (const route of routes.filter(item => item.via === 'ponte')) {
+    if (route.state === 'self') chip('Ponte', 'ok');
+    else if (route.state !== 'known' || !route.controlsMe) chip(`Ponte · ${deviceWord('ponte', route.state)}`, route.state === 'paired' && route.online ? 'ok' : route.state === 'denied' ? 'bad' : '');
+    if (route.controlsMe) chip(deviceWord('ponte', 'controlsMe'));
+  }
+  for (const route of routes.filter(item => item.via === 'tailscale')) {
+    if (route.online === false) chip(`Tailscale · ${deviceWord('status', 'offline')}`);
+    else if (route.link === 'direct') chip(t('Tailscale direto'), 'ok');
+    else if (route.link === 'relay' && route.relay) chip(t('Tailscale via relay {relay}', { relay:route.relay }), 'ok');
+    else chip('Tailscale', 'ok');
+  }
+  // One SSH chip: the route the Ponte opens terminals on, else the one checked.
+  const ssh = routes.filter(item => item.via === 'ssh');
+  const best = ssh.find(item => item.configured) || ssh.find(item => item.check?.ok) || ssh.find(item => item.check) || ssh[0];
+  if (best) chip(!best.check ? 'SSH' : best.check.ok ? t('SSH {ms} ms', { ms:best.check.ms ?? '?' }) : t('SSH: {code}', { code:best.check.code || '?' }), !best.check ? '' : best.check.ok ? 'ok' : 'bad');
+  for (const route of routes.filter(item => item.via === 'adb')) chip(deviceWord('adb', route.state) ? `ADB · ${deviceWord('adb', route.state)}` : 'ADB', route.state === 'device' ? 'ok' : '');
+  const agents = device.summary?.agents || 0;
+  if (agents) chip(i18n.plural('{count} agente aberto', '{count} agentes abertos', agents));
+  const tools = (device.summary?.tools || []).map(fleetKindLabel);
+  if (tools.length) chip(tools.join(', '));
+  return chips.join('');
+}
+// What a row offers, in one order everywhere (ADR 0002): the first is the
+// main button. The device on screen gets "Ver tela" instead of "Controlar".
+function deviceActions(device) {
+  const can = device.can || {};
+  const list = [];
+  if (device.self || device.id === targetNode) { if (can.screen?.ok) list.push('screen'); }
+  else if (can.control?.ok) list.push('control');
+  for (const name of ['terminal', 'pair', 'agents', 'sessions']) if (can[name]?.ok) list.push(name);
+  return list;
+}
+// One line of why, only when it says something the row does not: a Ponte
+// device that cannot be controlled, or a device with nothing to offer.
+function deviceWhy(device, actions) {
+  if (device.self || device.status === 'offline') return '';
+  const can = device.can || {};
+  const ponte = (device.routes || []).find(route => route.via === 'ponte');
+  // A device that only controls this one says so in its chip; no why.
+  if (ponte?.controlsMe && ponte.state === 'known') return '';
+  if (ponte && !can.control?.ok) {
+    const text = deviceWord('why', can.control?.why);
+    return ponte.code && can.control?.why === 'PAIRING_PENDING' ? `${text} ${t('Código {code}', { code:ponte.code })}` : text;
+  }
+  return actions.length ? '' : deviceWord('why', can.terminal?.why);
+}
+function deviceRow(device) {
+  const current = targetNode ? device.id === targetNode : device.self;
+  const actions = deviceActions(device);
+  const why = deviceWhy(device, actions);
+  const seen = device.status === 'offline' && device.lastSeen ? agentAgo(Date.parse(device.lastSeen)) : '';
+  const tag = device.self ? `<span class="device-tag lime">${h('este aparelho')}</span>`
+    : device.id === targetNode ? `<span class="device-tag lime">${h('controlando agora')}</span>`
+    : `<span class="device-tag">${escaped(seen ? `${deviceWord('status', device.status)} · ${seen}` : deviceWord('status', device.status))}</span>`;
+  const id = escaped(device.id);
+  const buttons = actions.map((name, index) => {
+    const primary = index === 0 ? ' primary' : '';
+    if (name === 'pair') return `<button type="button" class="button small${primary}" data-mesh-pair="${id}">${escaped(deviceWord('action', 'pair'))}</button>`;
+    if (name === 'control') return `<button type="button" class="button small${primary}" data-mesh-control="${id}">${escaped(deviceWord('action', 'control'))}</button>`;
+    return `<button type="button" class="button small${primary}" data-device-go="${name}" data-device-id="${id}">${escaped(deviceWord('action', name))}</button>`;
+  });
+  const revoke = device.can?.revoke?.ok;
+  if (revoke) buttons.push(`<button type="button" class="button small device-more" data-device-more="${id}" aria-expanded="${devicesOpen.has(device.id)}" aria-label="${escaped(t('Mais ações de {name}', { name:device.name }))}">⋯</button>`);
+  const extra = revoke && devicesOpen.has(device.id) ? `<div class="device-actions device-extra"><button type="button" class="button small danger-subtle" data-mesh-revoke="${id}">${escaped(deviceWord('action', 'revoke'))}</button></div>` : '';
+  return `<div class="device-row${current ? ' current' : ''}${device.status === 'offline' ? ' offline' : ''}" data-device="${id}">`
+    + `<div class="device-head"><i class="device-dot ${escaped(device.status)}"></i><strong class="device-name">${escaped(device.name)}</strong><span class="device-kind">${escaped(deviceWord('kind', device.kind))}</span>${tag}</div>`
+    + `<div class="device-routes">${routeChips(device)}</div>`
+    + (buttons.length ? `<div class="device-actions">${buttons.join('')}</div>` : '')
+    + extra
+    + (why ? `<p class="device-why">${escaped(why)}</p>` : '')
+    + '</div>';
 }
 function renderMesh() {
-  const peers = meshInfo?.peers || [];
-  const requests = meshInfo?.requests || [];
-  const controllers = meshInfo?.controllers || [];
-  const signature = JSON.stringify([meshInfo, targetNode, i18n.language]);
+  const requests = deviceList?.requests || meshInfo?.requests || [];
+  const signature = JSON.stringify([meshInfo, deviceList, targetNode, devicesBusy, !!devicesError, devicesShowOffline, [...devicesOpen], i18n.language]);
   if (signature === meshSignature) return;
   meshSignature = signature;
-  const self = meshSelf();
-  const paired = peers.filter(peer => peer.paired);
-  // The selector: this device plus paired ones, online or not.
+  const selfName = meshSelf()?.name || '';
+  const choices = controlChoices();
   const select = $('#node-select');
-  $('#node-choice').hidden = !self || (!paired.length && !targetNode);
-  if (self) {
-    select.innerHTML = [`<option value="">${escaped(t('{name} · este aparelho',{name:self.name}))}</option>`]
-      .concat(paired.map(peer => `<option value="${escaped(peer.id)}">${escaped(peer.online ? peer.name : t('{name} · offline',{name:peer.name}))}</option>`)).join('');
+  $('#node-choice').hidden = !selfName || (!choices.length && !targetNode);
+  if (selfName) {
+    select.innerHTML = [`<option value="">${escaped(t('{name} · este aparelho', { name:selfName }))}</option>`]
+      .concat(choices.map(item => `<option value="${escaped(item.id)}">${escaped(item.offline ? t('{name} · offline', { name:item.name }) : item.name)}</option>`)).join('');
     select.value = targetNode;
   }
   const badge = $('#node-badge');
   badge.hidden = !targetNode;
-  if (targetNode) { badge.textContent = targetName(); badge.setAttribute('aria-label',t('Controlando {name}. Trocar de aparelho',{name:targetName()})); badge.setAttribute('title',t('Controlando {name}',{name:targetName()})); }
-  $('#mesh-card').hidden = !self;
-  if (!self) return;
-  $('#mesh-requests').innerHTML = requests.map(item => `<div class="mesh-row mesh-request"><div><strong>${escaped(t('{name} pede para controlar este aparelho',{name:item.name}))}</strong><span>${escaped(t('Código {code}',{code:item.code}))}</span></div><div class="mesh-buttons"><button type="button" class="button small primary" data-mesh-approve="${escaped(item.code)}">${h('Aprovar')}</button><button type="button" class="button small" data-mesh-deny="${escaped(item.code)}">${h('Negar')}</button></div></div>`).join('');
-  $('#mesh-peers').innerHTML = peers.length ? peers.map(peer => {
-    const status = peer.pairing?.status === 'pending' ? t('Aguardando aprovação · código {code}',{code:peer.pairing.code})
-      : peer.pairing?.status === 'denied' ? t('Pedido negado.') : peer.pairing?.status === 'expired' ? t('Pedido expirou.')
-      : peer.paired ? (peer.online ? t('Emparelhado · online') : t('Emparelhado · offline')) : t('Disponível');
-    const buttons = peer.paired
-      ? `${peer.id === targetNode ? '' : `<button type="button" class="button small primary" data-mesh-control="${escaped(peer.id)}">${h('Controlar')}</button>`}<button type="button" class="button small danger-subtle" data-mesh-revoke="${escaped(peer.id)}">${h('Revogar')}</button>`
-      : peer.pairing?.status === 'pending' ? '' : `<button type="button" class="button small primary" data-mesh-pair="${escaped(peer.id)}">${h('Pedir acesso')}</button>`;
-    return `<div class="mesh-row${peer.id === targetNode ? ' current' : ''}"><div><strong>${escaped(peer.name)}</strong><span>${escaped(status)}</span></div><div class="mesh-buttons">${buttons}</div></div>`;
-  }).join('') : `<p class="hint">${h('Nenhum outro aparelho com Ponte no seu Tailscale.')}</p>`;
-  $('#mesh-controllers').innerHTML = controllers.length ? `<span class="small-label">${h('QUEM CONTROLA ESTE APARELHO')}</span>` + controllers.map(item => `<div class="mesh-row"><div><strong>${escaped(item.name)}</strong><span>${escaped(item.ip || '')}</span></div><div class="mesh-buttons"><button type="button" class="button small danger-subtle" data-mesh-revoke="${escaped(item.id)}">${h('Revogar')}</button></div></div>`).join('') : '';
+  if (targetNode) { badge.textContent = targetName(); badge.setAttribute('aria-label', t('Controlando {name}. Trocar de aparelho', { name:targetName() })); badge.setAttribute('title', t('Controlando {name}', { name:targetName() })); }
+  const devices = deviceList?.devices || [];
+  const card = $('#devices-card');
+  card.hidden = !meshSelf();
+  if (card.hidden) return;
+  $('#devices-refresh').disabled = devicesBusy;
+  $('#devices-requests').innerHTML = requests.map(item => `<div class="mesh-row mesh-request"><div><strong>${escaped(t('{name} pede para controlar este aparelho', { name:item.name }))}</strong><span>${escaped(t('Código {code}', { code:item.code }))}</span></div><div class="mesh-buttons"><button type="button" class="button small primary" data-mesh-approve="${escaped(item.code)}">${escaped(deviceWord('action', 'approve'))}</button><button type="button" class="button small" data-mesh-deny="${escaped(item.code)}">${escaped(deviceWord('action', 'deny'))}</button></div></div>`).join('');
+  // Offline devices nobody paired fold into one line; paired ones stay, since
+  // "the notebook is off" is worth seeing.
+  const folded = device => device.status === 'offline' && device.id !== targetNode && !(device.routes || []).some(route => route.via === 'ponte' && route.state === 'paired');
+  const shown = devices.filter(device => devicesShowOffline || !folded(device));
+  const hiddenCount = devices.length - shown.length;
+  const fold = devices.some(folded) ? `<button type="button" class="text-button devices-fold" data-devices-fold="1" aria-expanded="${devicesShowOffline}">${escaped(devicesShowOffline ? t('Esconder os offline') : i18n.plural('Mostrar {count} aparelho offline', 'Mostrar {count} aparelhos offline', hiddenCount))}</button>` : '';
+  $('#devices-list').innerHTML = shown.map(deviceRow).join('') + fold;
+  const status = $('#devices-status');
+  const message = devicesError || (!deviceList && (devicesBusy || !devicesLoadedAt) ? t('Procurando aparelhos…') : '');
+  status.hidden = !message;
+  i18n.write(status, message);
 }
 function setTargetNode(id) {
-  const next = id && id !== meshSelf()?.id ? id : '';
+  const next = id && id !== homeId() ? id : '';
   if (next === targetNode) return;
   const restart = !!liveSession || liveWanted;
   targetNode = next;
@@ -203,7 +330,7 @@ function setTargetNode(id) {
   clearTimeout(devTimer); devGeneration++; devId = ''; devSessions = []; devHash = ''; devHashId = '';
   liveWanted = restart;
   renderMesh();
-  toast(t('Agora controlando {name}.',{name:targetName()}));
+  toast(t('Agora controlando {name}.', { name:targetName() }));
   updateTerminalNavigation(); updateDevNavigation();
   pollState();
 }
@@ -212,20 +339,56 @@ async function meshAction(type, payload) {
     const response = await api('/action', { method:'POST', home:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify({type,...payload}) });
     const result = await response.json();
     setTimeout(pollState, 150);
+    loadDevices({ force:true });
     return result;
   } catch (error) { toast(error, true); return null; }
 }
+// Terminal on a device: over Ponte it is that device's own Terminals page;
+// over SSH it is a new SSH session on this node (ssh.hosts of its config).
+async function deviceTerminal(device) {
+  const terminal = device.can?.terminal;
+  if (!terminal?.ok) return;
+  if (terminal.via !== 'ssh') { setTargetNode(device.self ? '' : device.id); navigate('terminais'); return; }
+  setTargetNode('');
+  const requestToken = token;
+  try {
+    const session = await (await api('/terminals', { method:'POST', home:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify({ ...devSessionSize(), agent:'ssh', host:terminal.host }) })).json();
+    if (token !== requestToken || targetNode) return;
+    toast(t('Abrindo {title}…', { title:session.title }));
+    terminalSessions.push(session); selectTerminal(session.id); terminalPaused = false; navigate('terminais');
+  } catch (error) { toast(error, true); }
+}
 $('#node-select').addEventListener('change', event => setTargetNode(event.target.value));
-$('#node-badge').addEventListener('click', () => { navigate('inicio'); $('#mesh-card').scrollIntoView?.({block:'start'}); });
+// Opening the selector refreshes the list behind it (from the caches, fast).
+for (const type of ['focus', 'pointerdown']) $('#node-select').addEventListener(type, () => loadDevices());
+$('#node-badge').addEventListener('click', () => { navigate('inicio'); $('#devices-card').scrollIntoView?.({block:'start'}); });
+$('#devices-refresh').addEventListener('click', async () => { await loadDevices({ force:true, deep:true }); loadFleet(); });
 document.addEventListener('click', async event => {
   const control = event.target.closest('[data-mesh-control]');
   if (control) { setTargetNode(control.dataset.meshControl); navigate('tela'); return; }
+  const go = event.target.closest('[data-device-go]');
+  if (go) {
+    const device = deviceById(go.dataset.deviceId);
+    if (!device) return;
+    const where = go.dataset.deviceGo;
+    if (where === 'screen') { setTargetNode(device.self ? '' : device.id); navigate('tela'); }
+    else if (where === 'terminal') deviceTerminal(device);
+    else if (where === 'agents') { setTargetNode(device.self ? '' : device.id); navigate('terminais'); $('#agents-heading')?.scrollIntoView?.({block:'start'}); }
+    else if (where === 'sessions') {
+      fleetSessionMachine = device.can.sessions.machine;
+      renderFleet(); loadFleet(); $('#fleet-card').scrollIntoView?.({block:'start'});
+    }
+    return;
+  }
+  const more = event.target.closest('[data-device-more]');
+  if (more) { const id = more.dataset.deviceMore; if (devicesOpen.has(id)) devicesOpen.delete(id); else devicesOpen.add(id); renderMesh(); return; }
+  if (event.target.closest('[data-devices-fold]')) { devicesShowOffline = !devicesShowOffline; renderMesh(); return; }
   const button = event.target.closest('[data-mesh-pair],[data-mesh-approve],[data-mesh-deny],[data-mesh-revoke]');
   if (!button || button.disabled) return;
   button.disabled = true;
   try {
     if (button.dataset.meshPair) {
-      const peer = meshPeer(button.dataset.meshPair);
+      const peer = deviceById(button.dataset.meshPair) || meshPeer(button.dataset.meshPair);
       const result = await meshAction('mesh.pair', { peer: button.dataset.meshPair });
       if (result?.code) toast(t('Código {code}: aprove no {name}.',{code:result.code,name:result.peer?.name || peer?.name || ''}));
     } else if (button.dataset.meshApprove) {
@@ -237,17 +400,27 @@ document.addEventListener('click', async event => {
     } else if (button.dataset.meshRevoke) {
       const id = button.dataset.meshRevoke;
       const result = await meshAction('mesh.revoke', { peer: id });
-      if (result?.revoked) { toast(t('Acesso com {name} revogado.',{name:result.revoked.name})); if (targetNode === id) setTargetNode(''); }
+      if (result?.revoked) { devicesOpen.delete(id); toast(t('Acesso com {name} revogado.',{name:result.revoked.name})); if (targetNode === id) setTargetNode(''); }
     }
   } finally { button.disabled = false; }
 });
+// The list follows the mesh: a peer that comes online, pairs or asks is
+// fetched again (from the caches), at most once per change.
+function followMesh() {
+  const key = JSON.stringify([(meshInfo?.peers || []).map(peer => [peer.id, peer.online, peer.paired, peer.pairing?.status]), (meshInfo?.controllers || []).map(item => item.id), (meshInfo?.requests || []).map(item => item.code)]);
+  const changed = key !== devicesMeshKey;
+  devicesMeshKey = key;
+  if (!devicesLoadedAt) { loadDevices({ force:devicesBusy && changed }); return; }
+  loadDevices({ force:changed });
+}
 
 // ------------------------------------------------------------------- fleet
-// Every machine the home node reaches (tailnet, ~/.ssh/config, mesh), the health
-// of each SSH route, and agent sessions on the others that can continue here.
+// Agent sessions on the other machines the home node reaches (tailnet,
+// ~/.ssh/config), which can continue here.
 // Always the home node's view (home:true), through /api/action like the mesh,
 // since the phone's proxy only relays /api/state and /api/action.
 let fleetInfo = null, fleetLoadedAt = 0, fleetBusy = false, fleetJob = null, fleetSignature = '';
+let fleetSessionMachine = '';
 const FLEET_REFRESH_MS = 60000;
 async function fleetAction(type, payload = {}, timeout = 14000) {
   const response = await api('/action', { method:'POST', home:true, timeout, headers:{'Content-Type':'application/json'}, body:JSON.stringify({type,...payload}) });
@@ -261,30 +434,14 @@ async function loadFleet(fresh = false) {
   catch (error) { if (fresh) toast(error, true); }
   finally { fleetBusy = false; renderFleet(); }
 }
-function fleetHealth(health) {
-  return ({ ok:[t('Conectada'),'ok'], unchecked:[t('Não conferida'),''], unreachable:[t('Sem conexão'),'bad'], degraded:[t('Instável'),'warn'], offline:[t('Offline'),''], 'no-ssh':[t('Sem SSH'),''] })[health] || [t('Desconhecida'),''];
-}
 const fleetKindLabel = kind => ({ claude:'Claude Code', codex:'Codex', jcode:'Jcode' })[kind] || kind;
-function fleetMachineLine(machine) {
-  const [label] = fleetHealth(machine.health);
-  const parts = [label];
-  const route = (machine.routes || []).find(item => item.alias === machine.sshAlias);
-  if (machine.id !== 'self' && route?.check) parts.push(route.check.ok ? t('SSH {ms} ms',{ms:route.check.ms}) : t('SSH: {code}',{code:route.check.code}));
-  const link = machine.tailnet?.link;
-  if (link === 'direct') parts.push(t('Tailscale direto'));
-  else if (link === 'relay') parts.push(t('Tailscale via relay {relay}',{relay:machine.tailnet.relay || ''}));
-  const tools = Object.entries(machine.probe?.tools || {}).filter(([name, ok]) => ok && ['claude','codex','jcode'].includes(name)).map(([name]) => fleetKindLabel(name));
-  if (tools.length) parts.push(tools.join(', '));
-  const open = (machine.probe?.agents || []).length;
-  if (open) parts.push(i18n.plural('{count} agente aberto','{count} agentes abertos',open));
-  return parts.join(' · ');
-}
 function fleetRemoteSessions() {
   const here = (fleetInfo?.machines || []).find(machine => machine.id === 'self');
   const tools = here?.probe?.tools || {};
   const items = [];
   for (const machine of fleetInfo?.machines || []) {
     if (machine.id === 'self' || !machine.probe?.ok) continue;
+    if (fleetSessionMachine && machine.id !== fleetSessionMachine) continue;
     for (const session of machine.probe.sessions || []) if (tools[session.kind] !== false) items.push({ ...session, machine:machine.id, machineName:machine.name });
   }
   return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 12);
@@ -313,28 +470,22 @@ function renderFleet() {
   if (card.hidden) return;
   $('#fleet-refresh').disabled = fleetBusy;
   renderFleetJob();
-  const signature = JSON.stringify([fleetInfo?.checkedAt, fleetBusy, fleetJob?.status, i18n.language]);
+  const filter = $('#fleet-session-filter');
+  filter.hidden = !fleetSessionMachine;
+  const machineName = (fleetInfo?.machines || []).find(item => item.id === fleetSessionMachine)?.name
+    || deviceList?.devices.find(item => item.can?.sessions?.machine === fleetSessionMachine)?.name || '';
+  filter.textContent = fleetSessionMachine ? t('Sessões de {name} · mostrar todas', { name:machineName }) : '';
+  const signature = JSON.stringify([fleetInfo?.checkedAt, fleetBusy, fleetJob?.status, fleetSessionMachine, i18n.language]);
   if (signature === fleetSignature) return;
   fleetSignature = signature;
-  const machines = fleetInfo?.machines || [];
-  const order = { ok:0, degraded:1, unchecked:2, unreachable:3, 'no-ssh':4, offline:5 };
-  // Machines an agent can work on come first; phones and devices with no
-  // SSH route or offline fold into one line so the useful ones stay in view.
-  const workable = machine => machine.id === 'self' || (machine.kind !== 'phone' && !!machine.sshAlias);
-  const others = machines.filter(machine => !workable(machine));
-  const othersLine = others.length ? `<p class="hint">${h('Também no Tailscale: {names}.',{names:others.map(machine => `${machine.name} (${fleetHealth(machine.health)[0].toLowerCase()})`).join(', ')})}</p>` : '';
-  $('#fleet-machines').innerHTML = machines.length ? machines.filter(workable).sort((a, b) => (a.id === 'self' ? -1 : b.id === 'self' ? 1 : (order[a.health] ?? 6) - (order[b.health] ?? 6)))
-    .map(machine => {
-      const [, tone] = fleetHealth(machine.health);
-      const name = machine.id === 'self' ? t('{name} · este aparelho',{name:machine.name}) : machine.name;
-      return `<div class="mesh-row fleet-row"><div><strong><i class="fleet-dot ${tone}"></i>${escaped(name)}</strong><span>${escaped(fleetMachineLine(machine))}</span></div></div>`;
-    }).join('') + othersLine : `<p class="hint">${h(fleetBusy ? 'Conferindo as conexões…' : 'Nenhuma máquina encontrada.')}</p>`;
+  // The machines themselves live in "Seus aparelhos"; this card keeps the
+  // agent sessions on the others that can continue here.
   const sessions = fleetRemoteSessions();
   const busy = fleetJob?.status === 'running';
   $('#fleet-sessions').innerHTML = sessions.length ? sessions.map(item => {
     const where = [item.machineName, fleetKindLabel(item.kind), item.cwd, agentAgo(item.updatedAt), item.live ? t('aberto lá') : ''].filter(Boolean).join(' · ');
     return `<div class="mesh-row fleet-row"><div><strong>${escaped(item.title || item.last || fleetKindLabel(item.kind))}</strong><span>${escaped(where)}</span></div><div class="mesh-buttons"><button type="button" class="button small primary" data-fleet-continue="${escaped(item.id)}" data-fleet-machine="${escaped(item.machine)}" data-fleet-kind="${escaped(item.kind)}"${busy ? ' disabled' : ''}>${h('Continuar aqui')}</button></div></div>`;
-  }).join('') : `<p class="hint">${h(fleetBusy ? 'Procurando sessões…' : 'Nenhuma sessão recente em outra máquina.')}</p>`;
+  }).join('') : `<p class="hint">${h(fleetBusy ? 'Procurando sessões…' : 'Nenhuma sessão recente em outro aparelho.')}</p>`;
 }
 async function fleetContinue(request) {
   const from = (fleetInfo?.machines || []).find(machine => machine.id === request.from);
@@ -359,6 +510,7 @@ function fleetOpenTerminal(id) {
   selectTerminal(id); terminalPaused = false; navigate('terminais');
 }
 $('#fleet-refresh').addEventListener('click', () => loadFleet(true));
+$('#fleet-session-filter').addEventListener('click', () => { fleetSessionMachine = ''; renderFleet(); });
 document.addEventListener('click', event => {
   const go = event.target.closest('[data-fleet-continue]');
   if (go && !go.disabled) { fleetContinue({ from:go.dataset.fleetMachine, to:'self', kind:go.dataset.fleetKind, session:go.dataset.fleetContinue }); return; }
@@ -535,6 +687,7 @@ async function pollState() {
     if (requestToken !== token || requestNode !== targetNode) return;
     state = nextState;
     if (state.mesh) meshInfo = state.mesh;
+    followMesh();
     renderMesh();
     if (state.version && state.version !== UI_VERSION && typeof location.reload === 'function') {
       let guard = '';
@@ -568,7 +721,7 @@ function renderVisiblePage() {
   if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
   else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
   else if (currentPage === 'tela') renderScreenWorkspaces();
-  if (currentPage === 'inicio') { loadStartProjects(); renderFleet(); loadFleet(); }
+  if (currentPage === 'inicio') { loadStartProjects(); loadDevices(); renderFleet(); loadFleet(); }
 }
 // Omarchy lives on numbered workspaces (Super+1…0). The screen gets the same
 // row: the workspace the streamed monitor shows is lit, a dot marks the ones
@@ -3311,7 +3464,7 @@ document.addEventListener('ponte-language-change', () => {
   $$(ownedText).forEach(element => { element.textContent = t(element.textContent); });
   const bannerError = i18n.read($('#connection-banner-text'));
   setConnection(connected,bannerError);
-  if (state) { renderedAllOnce = false; renderState(); updateCapabilities(); renderDesktopTerminals(); renderFleet(); }
+  if (state) { renderedAllOnce = false; renderState(); updateCapabilities(); renderDesktopTerminals(); renderMesh(); renderFleet(); }
   else {
     $('#hostname').textContent = t('Conectando…');
     $('#dialog-hostname').textContent = t('Seu Omarchy');
