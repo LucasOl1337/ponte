@@ -58,7 +58,7 @@ test('Terminals shows one list: agents with state, place, folder and age, plain 
   // The Ponte session with the Codex inside is not listed twice; the other one is.
   assert.match(text[4], /Terminal 2.*Ponte session.*Open/);
   assert.equal(cards[0].getAttribute('data-state'), 'waiting');
-  assert.equal(h.el('#agent-count').textContent, '2 ACTIVE');
+  assert.equal(h.el('#agent-count').textContent, '3 AGENTS · 2 BUSY');
   assert.ok(h.calls.every(call => !call.options.method || call.options.method === 'GET'), 'listing never posts');
   h.i18n.setLanguage('pt'); await flush();
   assert.match(h.el('#agent-list').textContent, /Esperando você/);
@@ -101,7 +101,7 @@ test('tapping an agent opens a readable transcript; reply is explicit, one line,
   h.el('#agent-list').querySelectorAll('.agent-card')[1].click(); await flush(); await flush();
   assert.equal(h.el('#agent-reply-form').hidden, true);
   assert.equal(h.el('#agent-view').hidden, true);
-  assert.match(h.el('#agent-readonly').textContent, /Maestri canvas/);
+  assert.match(h.el('#agent-readonly').textContent, /authorized bridge/);
   assert.match(h.el('#agent-transcript').textContent, /Nothing written yet/);
 });
 
@@ -124,6 +124,28 @@ test('an older native shell that blocks /api/agents still lists PC terminal wind
 
 // Synthetic agents for the filter and notice checks: no real names, ids or paths.
 const sample = (id, state, extra = {}) => ({ id, kind: 'claude', title: `Sample ${id}`, cwd: '~/work/sample', state, waitingFor: null, since: minutesAgo(1), where: { type: 'none' }, headless: false, transcript: true, canReply: false, ...extra });
+
+test('workspace groups keep their canvas lead on top and show harness, role, model, branch and current activity', async () => {
+  const team = { workspaceId: '00000000-0000-4000-8000-0000000000a1', workspace: 'Sample team', lead: false, reportsTo: 'Claude Code', role: 'Reviewer' };
+  const items = [
+    sample('p-60-1', 'working', { kind:'jcode',title:'Sprout',where:{type:'maestri'},maestri:team,branch:'feature/sample',model:{name:'sample-model',provider:'sample-route',effort:'high'},activity:{text:'Read: sample.test.mjs'} }),
+    sample('p-61-1', 'idle', { title:'Claude Code',where:{type:'maestri'},maestri:{...team,lead:true,role:null,reportsTo:null} }),
+    sample('p-62-1', 'ready', { title:'Sprout',where:{type:'maestri'},maestri:{...team,workspaceId:'00000000-0000-4000-8000-0000000000b1',workspace:'Other team',reportsTo:null} }),
+  ];
+  const {h} = watchHarness(items);
+  await flush(); h.run("navigate('terminais')"); await flush(); await flush();
+  const cards = h.el('#agent-list').querySelectorAll('.agent-card');
+  assert.equal(cards[0].querySelector('strong').textContent,'Claude Code');
+  assert.match(cards[0].textContent,/Team lead \(canvas connections\)/);
+  assert.match(cards[1].textContent,/JCode.*Sprout.*Sample team.*feature\/sample.*Team of Claude Code · Reviewer.*sample-route · sample-model · high.*Read: sample.test.mjs/);
+  assert.match(cards[2].textContent,/Other team/);
+  assert.equal(h.el('#agent-count').textContent,'3 AGENTS · 1 BUSY');
+  cards[1].click(); await flush();
+  assert.match(h.el('#agent-dialog-meta').textContent,/feature\/sample/);
+  assert.match(h.el('#agent-dialog-meta').textContent,/Read: sample.test.mjs/);
+  assert.equal(h.el('#agent-reply-form').hidden,true);
+  assert.ok(h.calls.every(call => !call.options.method || call.options.method === 'GET'));
+});
 
 function watchHarness(initial, options = {}) {
   let items = initial;
@@ -149,11 +171,11 @@ test('automated agents are hidden by default behind "Show automated (N)", which 
   assert.equal(h.el('#agent-show-auto').hidden, false);
   assert.equal(h.el('#agent-show-auto').textContent, 'Show automated (2)', 'the count shows while they are hidden');
   assert.equal(h.el('#agent-show-auto').getAttribute('aria-pressed'), 'false');
-  assert.equal(h.el('#agent-count').textContent, '1 ACTIVE', 'hidden agents are not counted');
+  assert.equal(h.el('#agent-count').textContent, '1 AGENTS · 1 BUSY', 'automated agents are counted separately');
   h.el('#agent-show-auto').click(); await flush();
   assert.deepEqual(titles(), ['Sample p-10-1', 'Sample p-11-1', 'Sample p-12-1']);
   assert.equal(h.el('#agent-show-auto').getAttribute('aria-pressed'), 'true');
-  assert.equal(h.el('#agent-count').textContent, '3 ACTIVE');
+  assert.equal(h.el('#agent-count').textContent, '1 AGENTS · 1 BUSY', 'showing automated agents does not change the interactive count');
   assert.equal(h.run("localStorage.getItem('ponte-agents-auto')"), 'show');
   h.i18n.setLanguage('pt'); await flush();
   assert.equal(h.el('#agent-show-auto').textContent, 'Mostrar automáticos (2)');

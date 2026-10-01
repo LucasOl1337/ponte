@@ -9,8 +9,13 @@ import { ApiError, runCommand } from './process.mjs';
 // transcript or an agent's own files. Typing a reply goes through the same
 // desktop and terminal paths the phone already uses.
 
-const AGENT_NAMES = new Set(['claude', 'codex', 'grok', 'opencode', 'gemini', 'pi', 'aider', 'crush', 'goose', 'amp', 'qwen', 'cursor-agent']);
+const AGENT_NAMES = new Set(['claude', 'codex', 'jcode', 'grok', 'hermes', 'opencode', 'gemini', 'pi', 'omp', 'aider', 'crush', 'goose', 'amp', 'qwen', 'cursor-agent', 'devin', 'copilot', 'agy', 'droid']);
 const WRAPPERS = new Set(['node', 'bun', 'deno', 'python', 'python3']);
+// Shared servers and sandboxes carry an agent's name but are not a terminal
+// someone talks to: the JCode server (`jcode serve`), Codex's app-server
+// daemon, exec-server and sandbox helpers, a Hermes gateway. They still count
+// as agents for nesting, so what they start is never listed on its own.
+const SERVER_ARGS = new Set(['serve', 'app-server', 'exec-server', 'mcp-server', 'sandbox', 'daemon', 'gateway']);
 const TERMINAL_CLASS = /terminal|alacritty|kitty|ghostty|foot|wezterm|konsole|xterm/i;
 // Claude Code 2.1.x animates its window title with these two frames while a
 // turn runs and shows ✳ when it stops (constants d2/c2 in its bundle).
@@ -18,12 +23,14 @@ const TITLE_WORKING = /^[◐◑]\s*/u;
 const TITLE_IDLE = /^✳\s*/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ID = /^(p-\d{1,10}-\d{1,20}|w-[0-9a-f]{1,32})$/;
+const JCODE_SESSION = /^session_[a-z0-9_]{1,120}$/;
 const CPU_WORKING = 0.05; // share of one core between two scans
 const RECENT_WRITE_MS = 20000;
 const TAIL_BYTES = 512 * 1024;
 const MESSAGE_LIMIT = 40;
 const MESSAGE_CHARS = 3000;
 const TRANSCRIPT_BYTES = 96 * 1024;
+const SUMMARY_BYTES = 96 * 1024;
 
 export function parseStat(text) {
   const open = text.indexOf('('), close = text.lastIndexOf(')');
@@ -35,12 +42,79 @@ export function parseStat(text) {
 }
 
 export function agentKind(comm, argv = []) {
+  // JCode's binary is jcode-linux-x86_64.bin; the kernel keeps 15 characters.
+  if (comm.startsWith('jcode')) return 'jcode';
   if (AGENT_NAMES.has(comm)) return comm;
   if (WRAPPERS.has(comm) && argv[1]) {
     const name = path.basename(argv[1]).replace(/\.(c?js|mjs|ts|py)$/, '');
     if (AGENT_NAMES.has(name)) return name;
   }
   return null;
+}
+
+export function agentServer(argv = []) {
+  if (argv.includes('-p') || argv.includes('--print')) return false;
+  if (/sandbox|code-mode/.test(path.basename(argv[0] || ''))) return true;
+  // Do not mistake the literal prompt `claude -p serve` for a server.
+  for (let i = 1; i < argv.length; i++) {
+    if (['-m', '--model', '--provider', '--provider-profile', '-c', '--effort', '--reasoning-effort'].includes(argv[i])) { i++; continue; }
+    if (argv[i].startsWith('-')) continue;
+    return SERVER_ARGS.has(argv[i]);
+  }
+  return false;
+}
+
+// Tokenize saved commands for labels only, never execute or expand them.
+function splitCommand(text) {
+  const words = text.match(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g) || [];
+  return words.map(word => /^['"]/.test(word) ? word.slice(1, -1) : word);
+}
+
+// A snapshot can be over 100 MB and contains no newlines. Recover complete
+// message objects from its bounded tail without parsing the entire file.
+export function jcodeSnapshotLines(text) {
+  const lines = [];
+  const starts = /\{\s*"id"\s*:\s*"message_[a-zA-Z0-9_]+"/g;
+  let match;
+  while ((match = starts.exec(text))) {
+    let depth = 0, quoted = false, escaped = false;
+    for (let i = match.index; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (c === '\\') escaped = true;
+        else if (c === '"') quoted = false;
+      } else if (c === '"') quoted = true;
+      else if (c === '{') depth++;
+      else if (c === '}' && --depth === 0) {
+        try {
+          const message = JSON.parse(text.slice(match.index, i + 1));
+          if (Array.isArray(message.content) && ['user', 'assistant'].includes(message.role)) lines.push(JSON.stringify({ append_messages: [message] }));
+        } catch {}
+        starts.lastIndex = i + 1;
+        break;
+      }
+    }
+  }
+  return lines;
+}
+
+// Model, effort and provider as the agent was started: -m/--model,
+// --effort, Codex's -c model_reasoning_effort=, JCode's --provider-profile.
+export function modelFromArgv(argv = []) {
+  const out = {};
+  for (let index = 1; index < argv.length; index++) {
+    const arg = argv[index];
+    const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, null];
+    const value = () => inline ?? argv[++index];
+    if (flag === '-m' || flag === '--model') out.model = value();
+    else if (flag === '--effort' || flag === '--reasoning-effort') out.effort = value();
+    else if (flag === '--provider-profile' || flag === '--provider') { const v = value(); if (!out.provider || flag === '--provider-profile') out.provider = v; }
+    else if (flag === '-c' && /^model_reasoning_effort=/.test(argv[index + 1] || '')) out.effort = argv[++index].split('=')[1].replace(/^"|"$/g, '');
+    else if (flag === '-c' && /^model=/.test(argv[index + 1] || '')) out.model = argv[++index].split('=')[1].replace(/^"|"$/g, '');
+  }
+  for (const key of Object.keys(out)) { if (typeof out[key] !== 'string' || !out[key]) delete out[key]; else out[key] = out[key].slice(0, 80); }
+  return out;
 }
 
 const clip = (text, max) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -95,6 +169,93 @@ export function codexMessages(lines) {
   return out;
 }
 
+// JCode appends one JSON object per change to <session>.journal.jsonl:
+// { meta: { model, provider_key, title, working_dir, ... }, append_messages: [
+//   { role, content: [{ type: text|tool_use|tool_result, ... }], timestamp } ] }.
+// Its own system reminders arrive as user text wrapped in tags.
+export function jcodeMessages(lines) {
+  const out = [];
+  for (const line of lines) {
+    let entry; try { entry = JSON.parse(line); } catch { continue; }
+    for (const message of Array.isArray(entry?.append_messages) ? entry.append_messages : []) {
+      const at = Date.parse(message?.timestamp) || null;
+      const content = Array.isArray(message?.content) ? message.content : [];
+      if (message?.role === 'user') {
+        const text = content.map(part => part?.type === 'text' && typeof part.text === 'string' ? part.text : '').filter(part => part.trim() && !part.trimStart().startsWith('<')).join('\n').trim();
+        if (text) out.push({ role: 'user', text: clip(text, MESSAGE_CHARS), at });
+      } else if (message?.role === 'assistant') {
+        for (const part of content) {
+          // A turn that only thought writes an empty think block.
+          const text = part?.type === 'text' && typeof part.text === 'string' ? part.text.replace(/<think>[\s\S]*?<\/think>/g, '').trim() : '';
+          if (text) out.push({ role: 'assistant', text: clip(text, MESSAGE_CHARS), at });
+          else if (part?.type === 'tool_use' && typeof part.name === 'string') out.push({ role: 'tool', text: toolLine(part.name, part.input), at });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export const MESSAGE_PARSERS = { claude: claudeMessages, codex: codexMessages, jcode: jcodeMessages };
+
+// What a transcript says about now, from its last lines only: the turn
+// (an unanswered tool call or a request still being answered is a turn in
+// progress; a final assistant text closes it), the last thing done, and the
+// model the agent reported. Nothing here is guessed from CPU.
+export function transcriptSummary(format, lines) {
+  let turn = null, model = null, effort = null, provider = null, title = null, lastAt = null;
+  const pending = new Set();
+  for (const line of lines) {
+    let entry; try { entry = JSON.parse(line); } catch { continue; }
+    if (format === 'claude') {
+      if (!entry || entry.isSidechain || entry.isMeta || !entry.message) continue;
+      const content = entry.message.content;
+      if (entry.type === 'assistant') {
+        if (typeof entry.message.model === 'string' && !entry.message.model.startsWith('<')) model = entry.message.model;
+        const parts = Array.isArray(content) ? content : [];
+        for (const part of parts) if (part?.type === 'tool_use' && part.id) pending.add(part.id);
+        if (parts.some(part => part?.type === 'tool_use')) turn = 'working';
+        else if (parts.some(part => part?.type === 'text' && String(part.text || '').trim())) turn = entry.message.stop_reason === 'end_turn' || entry.message.stop_reason == null ? 'done' : 'working';
+      } else if (entry.type === 'user') {
+        const parts = Array.isArray(content) ? content : [];
+        for (const part of parts) if (part?.type === 'tool_result') pending.delete(part.tool_use_id);
+        if (typeof content === 'string' ? content.trim() && !content.trimStart().startsWith('<') : parts.some(part => part?.type === 'tool_result' || (part?.type === 'text' && !String(part.text || '').trimStart().startsWith('<')))) turn = 'working';
+      }
+    } else if (format === 'codex') {
+      const payload = entry?.payload;
+      if (entry?.type === 'turn_context' && payload) { if (typeof payload.model === 'string') model = payload.model; if (typeof payload.effort === 'string') effort = payload.effort; }
+      else if (entry?.type === 'event_msg' && payload?.type === 'task_started') turn = 'working';
+      else if (entry?.type === 'event_msg' && (payload?.type === 'task_complete' || payload?.type === 'turn_aborted')) turn = 'done';
+    } else if (format === 'jcode') {
+      const meta = entry?.meta;
+      if (meta && typeof meta === 'object') {
+        if (typeof meta.model === 'string') model = meta.model;
+        if (typeof meta.provider_key === 'string') provider = meta.provider_key;
+        if (typeof meta.reasoning_effort === 'string') effort = meta.reasoning_effort;
+        if (typeof meta.title === 'string') title = meta.title;
+      }
+      for (const message of Array.isArray(entry?.append_messages) ? entry.append_messages : []) {
+        const parts = Array.isArray(message?.content) ? message.content : [];
+        if (message.role === 'assistant') {
+          for (const part of parts) if (part?.type === 'tool_use' && part.id) pending.add(part.id);
+          turn = parts.some(part => part?.type === 'tool_use') ? 'working' : 'done';
+        } else if (message.role === 'user') {
+          for (const part of parts) if (part?.type === 'tool_result') pending.delete(part.tool_use_id);
+          if (parts.some(part => part?.type === 'tool_result' || (part?.type === 'text' && !String(part.text || '').trimStart().startsWith('<')))) turn = 'working';
+        }
+      }
+    }
+  }
+  const messages = (MESSAGE_PARSERS[format] || (() => []))(lines);
+  const last = messages.at(-1) || null;
+  if (last?.at) lastAt = last.at;
+  // The newest assistant text says what it is doing; a tool call after it is
+  // the action in progress.
+  const activity = last ? { role: last.role, text: clip(oneLine(last.text), 160), at: last.at } : null;
+  if (pending.size && turn !== 'done') turn = 'working';
+  return { turn, model: model?.slice(0,120) || null, effort: effort?.slice(0,40) || null, provider: provider?.slice(0,80) || null, title: title?.slice(0,200) || null, activity, lastAt };
+}
+
 export function lastMessages(messages, limit = MESSAGE_LIMIT, maxBytes = TRANSCRIPT_BYTES) {
   const kept = [];
   let bytes = 0;
@@ -119,12 +280,14 @@ export function createAgents(options = {}) {
   const ticksPerSecond = options.ticksPerSecond || 100;
   const claudeDir = path.join(home, '.claude');
   const codexDir = path.join(home, '.codex', 'sessions');
+  const jcodeDir = path.join(home, '.jcode');
   let bootMs = options.bootMs ?? null;
   let cache = null, inflight = null, lastScanMs = 0;
   const cpu = new Map();
   const codexFiles = new Map();
   const privateInfo = new Map();
-  const maestriNames = new Map();
+  const canvasCache = new Map();
+  const summaries = new Map();
 
   async function smallFile(file, max = 64 * 1024) {
     const info = await lstat(file);
@@ -224,33 +387,155 @@ export function createAgents(options = {}) {
     return best?.file || null;
   }
 
-  // A Maestri terminal's canvas name ("Trilho") is the clearest title. Only the
-  // two Maestri ids are taken from the process environment.
-  async function maestriName(pid) {
-    let ids = {};
+  // Maestri keeps one canvas per workspace in ~/.maestri/workspaces/<id>/
+  // workspace.json: its name, every terminal node (canvas name, agent type,
+  // command) and the ropes between terminals. A rope goes from the terminal
+  // that recruited (terminalIdA) to the recruit (terminalIdB), so a terminal
+  // with ropes going out leads that team. Parsed again only when it changed.
+  async function maestriCanvas(workspaceId) {
+    const file = path.join(home, '.maestri', 'workspaces', workspaceId, 'workspace.json');
+    try {
+      const info = await lstat(file);
+      if (!info.isFile() || info.size > 16 * 1024 * 1024) return null;
+      const cached = canvasCache.get(file);
+      if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.canvas;
+      const payload = JSON.parse(await readFile(file, 'utf8'))?.payload || {};
+      const terminals = new Map();
+      for (const node of Array.isArray(payload.nodes) ? payload.nodes : []) {
+        const terminal = node?.content?.terminal?._0;
+        if (!terminal || typeof terminal.id !== 'string' || !UUID.test(terminal.id)) continue;
+        terminals.set(terminal.id.toLowerCase(), {
+          name: oneLine(terminal.name).slice(0, 80) || null,
+          agentType: typeof terminal.agentType === 'string' ? terminal.agentType.slice(0, 40) : null,
+          maestro: terminal.isManager === true,
+          command: typeof terminal.command === 'string' ? terminal.command.slice(0, 2000) : '',
+        });
+      }
+      const recruits = new Map(), leader = new Map();
+      for (const rope of Array.isArray(payload.connections) ? payload.connections : []) {
+        const a = String(rope?.terminalIdA || '').toLowerCase(), b = String(rope?.terminalIdB || '').toLowerCase();
+        if (a === b || !terminals.has(a) || !terminals.has(b)) continue;
+        if (!recruits.has(a)) recruits.set(a, []);
+        recruits.get(a).push(b);
+        if (!leader.has(b)) leader.set(b, a);
+      }
+      const canvas = { name: oneLine(payload.name).slice(0, 80) || null, terminals, recruits, leader };
+      canvasCache.set(file, { mtimeMs: info.mtimeMs, size: info.size, canvas });
+      return canvas;
+    } catch { return null; }
+  }
+
+  // Only the two Maestri ids are taken from a process environment.
+  async function maestriIds(pid) {
+    const ids = {};
     try {
       for (const entry of (await readFile(path.join(procRoot, String(pid), 'environ'), 'utf8')).split('\0')) {
         const match = /^MAESTRI_(WORKSPACE|TERMINAL)_ID=([0-9a-f-]{36})$/i.exec(entry);
-        if (match && UUID.test(match[2])) ids[match[1].toLowerCase()] = match[2];
+        if (match && UUID.test(match[2])) ids[match[1].toLowerCase()] = match[2].toLowerCase();
       }
     } catch { return null; }
-    if (!ids.workspace || !ids.terminal) return null;
-    const file = path.join(home, '.maestri', 'workspaces', ids.workspace, 'workspace.json');
+    return ids.workspace && ids.terminal ? ids : null;
+  }
+
+  // A recruit started with a Maestri role runs inside .maestri/roles/<id>/.
+  async function roleName(cwd) {
+    const match = /^(.*\/\.maestri\/roles\/[0-9a-f-]{36})(\/|$)/i.exec(cwd || '');
+    if (!match) return null;
+    try { return oneLine(JSON.parse(await smallFile(path.join(match[1], 'role.json'), 512 * 1024))?.name).slice(0, 80) || null; } catch { return null; }
+  }
+
+  // The branch checked out where the agent works, from .git/HEAD (a worktree
+  // has a .git file pointing at its own HEAD). Never runs git.
+  async function gitBranch(dir, cache) {
+    if (!dir) return null;
+    if (cache.has(dir)) return cache.get(dir);
+    let current = dir, branch = null;
+    for (let depth = 0; depth < 16; depth++) {
+      const dotgit = path.join(current, '.git');
+      let head = null;
+      try {
+        const info = await lstat(dotgit);
+        if (info.isDirectory()) head = path.join(dotgit, 'HEAD');
+        else if (info.isFile()) { const match = /^gitdir: (.+)$/m.exec(await smallFile(dotgit, 4096)); if (match) head = path.resolve(current, match[1].trim(), 'HEAD'); }
+      } catch {}
+      if (head) {
+        try {
+          const text = (await smallFile(head, 4096)).trim();
+          const ref = /^ref: refs\/heads\/(.+)$/.exec(text);
+          branch = ref ? ref[1].slice(0, 120) : /^[0-9a-f]{7,64}$/.test(text) ? text.slice(0, 8) : null;
+        } catch {}
+        break;
+      }
+      const parent = path.dirname(current);
+      if (parent === current || current === home) break;
+      current = parent;
+    }
+    cache.set(dir, branch);
+    return branch;
+  }
+
+  // A JCode client names its session in ~/.jcode/client_sessions/<pid>,
+  // written when it starts; one older than the process belongs to a recycled pid.
+  async function jcodeSession(pid, startedAt) {
     try {
+      const file = path.join(jcodeDir, 'client_sessions', String(pid));
       const info = await lstat(file);
-      if (!info.isFile() || info.size > 8 * 1024 * 1024) return null;
-      let cached = maestriNames.get(file);
-      if (!cached || cached.mtimeMs !== info.mtimeMs) {
-        const names = new Map();
-        for (const node of JSON.parse(await readFile(file, 'utf8'))?.payload?.nodes || []) {
-          const terminal = node?.content?.terminal?._0;
-          if (terminal && typeof terminal.id === 'string' && typeof terminal.name === 'string') names.set(terminal.id, terminal.name);
-        }
-        cached = { mtimeMs: info.mtimeMs, names };
-        maestriNames.set(file, cached);
-      }
-      return cached.names.get(ids.terminal) || null;
+      if (!info.isFile() || info.size > 512 || (startedAt && info.mtimeMs < startedAt - 5000)) return null;
+      const id = (await readFile(file, 'utf8')).trim();
+      return JCODE_SESSION.test(id) ? id : null;
     } catch { return null; }
+  }
+
+  async function readTail(file, bytes) {
+    if (!file) return null;
+    let handle;
+    try {
+      handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const stat = await handle.stat();
+      if (!stat.isFile()) return null;
+      const length = Math.min(stat.size, bytes);
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
+      return { text: buffer.subarray(0, bytesRead).toString('utf8'), cut: stat.size > length, size: stat.size, mtimeMs: stat.mtimeMs };
+    } catch { return null; } finally { await handle?.close(); }
+  }
+  const tailLines = tail => { if (!tail) return []; const lines = tail.text.split('\n'); if (tail.cut) lines.shift(); return lines.filter(Boolean); };
+
+  // JCode's recent messages: the journal, plus the end of the snapshot when
+  // the journal was just folded into it. Same shape for both.
+  async function jcodeLines(info, bytes, need) {
+    const journal = await readTail(info.transcript, bytes);
+    const lines = tailLines(journal);
+    const ids = new Set();
+    for (const line of lines) { try { for (const message of JSON.parse(line)?.append_messages || []) if (message?.id) ids.add(message.id); } catch {} }
+    let snapshot = null;
+    if (ids.size < need || !lines.length) {
+      snapshot = await readTail(info.snapshot, bytes);
+      if (snapshot) {
+        const meta = {};
+        const model = /"provider_key":"([^"\\]{1,80})","model":"([^"\\]{1,120})"/.exec(snapshot.text.slice(-65536));
+        if (model) { meta.provider_key = model[1]; meta.model = model[2]; }
+        const before = jcodeSnapshotLines(snapshot.text).filter(line => !ids.has(JSON.parse(line).append_messages[0].id));
+        lines.unshift(...(meta.model ? [JSON.stringify({ meta })] : []), ...before);
+      }
+    }
+    const updatedAt = Math.max(journal?.mtimeMs || 0, snapshot?.mtimeMs || 0) || null;
+    return { lines, updatedAt, cut: !!(journal?.cut || snapshot?.cut) };
+  }
+
+  // The list reads only the end of each transcript, and again only when it grew.
+  async function summarize(info) {
+    if (!info.transcript) return null;
+    const stats = await Promise.all([info.transcript, info.snapshot].map(async file => { try { const s = await lstat(file || ''); return s.isFile() ? `${s.size}:${s.mtimeMs}` : '-'; } catch { return '-'; } }));
+    const key = stats.join('|');
+    const cached = summaries.get(info.transcript);
+    if (cached && cached.key === key) return cached.summary;
+    let lines;
+    if (info.format === 'jcode') lines = (await jcodeLines(info, SUMMARY_BYTES, 1)).lines;
+    else lines = tailLines(await readTail(info.transcript, SUMMARY_BYTES));
+    const summary = transcriptSummary(info.format, lines);
+    summaries.set(info.transcript, { key, summary });
+    return summary;
   }
 
   async function mtime(file) { try { const info = await lstat(file); return info.isFile() ? info.mtimeMs : null; } catch { return null; } }
@@ -270,28 +555,69 @@ export function createAgents(options = {}) {
     const ancestors = pid => { const chain = []; let current = procs.get(pid)?.ppid; while (current > 1 && chain.length < 64 && procs.has(current)) { chain.push(procs.get(current)); current = procs.get(current).ppid; } return chain; };
     const children = new Map();
     for (const proc of procs.values()) { if (!children.has(proc.ppid)) children.set(proc.ppid, []); children.get(proc.ppid).push(proc.pid); }
+    const toMs = start => bootAt ? Math.round(bootAt + start * 1000 / ticksPerSecond) : null;
 
     const candidates = [];
     for (const proc of procs.values()) {
-      if (!AGENT_NAMES.has(proc.comm) && !WRAPPERS.has(proc.comm)) continue;
+      if (!AGENT_NAMES.has(proc.comm) && !WRAPPERS.has(proc.comm) && !proc.comm.startsWith('jcode')) continue;
       const argv = await argvOf(proc.pid);
       const kind = agentKind(proc.comm, argv);
-      if (kind) candidates.push({ ...proc, kind, argv });
+      if (kind) candidates.push({ ...proc, kind, argv, server: agentServer(argv) });
     }
     const agentPids = new Set(candidates.map(item => item.pid));
-    // An agent started by another agent (a wrapper, a sub-agent) belongs to it.
-    const agents = candidates.filter(item => !ancestors(item.pid).some(parent => agentPids.has(parent.pid)));
+    // An agent started by another agent (a wrapper, a sub-agent, a server's
+    // helper) belongs to it; a shared server is nobody's terminal.
+    const agents = candidates.filter(item => !item.server && !ancestors(item.pid).some(parent => agentPids.has(parent.pid)));
     const needsPonte = agents.some(item => ancestors(item.pid).some(parent => parent.comm.startsWith('tmux')));
     const panes = await ponteSessions(needsPonte);
 
+    // Every terminal on a Maestri canvas is a shell the app started with the
+    // canvas's two ids. A process elsewhere that inherited ids (a daemon some
+    // terminal once started) is not under the app and is not a terminal.
+    const maestriShells = new Map();
+    for (const proc of procs.values()) {
+      const parent = procs.get(proc.ppid);
+      if (!parent || !/maestri/i.test(parent.comm) || /maestri/i.test(proc.comm)) continue;
+      const ids = await maestriIds(proc.pid);
+      if (ids) maestriShells.set(proc.pid, ids);
+    }
+    const canvases = new Map();
+    for (const ids of maestriShells.values()) if (!canvases.has(ids.workspace)) canvases.set(ids.workspace, await maestriCanvas(ids.workspace));
+    const liveShellIds = new Set([...maestriShells.values()].map(ids => `${ids.workspace}:${ids.terminal}`));
+    const agentIds = new Map();
+    for (const agent of agents) {
+      const shell = ancestors(agent.pid).find(parent => maestriShells.has(parent.pid));
+      const ids = shell ? maestriShells.get(shell.pid) : await maestriIds(agent.pid);
+      if (ids) {
+        agentIds.set(agent.pid, ids);
+        if (!canvases.has(ids.workspace)) canvases.set(ids.workspace, await maestriCanvas(ids.workspace));
+      }
+    }
+    // A restarted app may leave the old shell alive. The new live canvas
+    // terminal wins over the orphan with the same ids.
+    agents.sort((a,b) => Number(ancestors(b.pid).some(parent => maestriShells.has(parent.pid))) - Number(ancestors(a.pid).some(parent => maestriShells.has(parent.pid))));
+    const identity = ids => {
+      const canvas = canvases.get(ids.workspace);
+      const node = canvas?.terminals.get(ids.terminal);
+      if (!canvas || !node) return { workspace: canvas?.name || null, name: null, lead: false, team: 0, reportsTo: null, agentType: null, command: '' };
+      const team = (canvas.recruits.get(ids.terminal) || []).length;
+      const leader = canvas.leader.get(ids.terminal);
+      return { workspaceId: ids.workspace, workspace: canvas.name, name: node.name, maestro: node.maestro, lead: team > 0, team, reportsTo: leader ? canvas.terminals.get(leader)?.name || null : null, agentType: node.agentType, command: node.command };
+    };
+    const publicMaestri = (value, role) => value ? { workspaceId: value.workspaceId, workspace: value.workspace, name: value.name, maestro: !!value.maestro, lead: value.lead, team: value.team, reportsTo: value.reportsTo, role: role || null } : null;
+    const branches = new Map();
+
     const items = [];
     const usedWindows = new Set();
+    const usedShells = new Set();
+    const usedMaestriIds = new Set();
     const seen = new Set();
+    const summarized = new Set();
     for (const agent of agents) {
       const chain = ancestors(agent.pid);
       const id = `p-${agent.pid}-${agent.start}`;
       seen.add(id);
-      const startedAt = bootAt ? Math.round(bootAt + agent.start * 1000 / ticksPerSecond) : null;
+      const startedAt = toMs(agent.start);
       const cwd = await cwdOf(agent.pid);
       const previous = cpu.get(id);
       cpu.set(id, { ticks: agent.ticks, at: scanAt });
@@ -300,6 +626,14 @@ export function createAgents(options = {}) {
       let where = { type: 'none' };
       const host = chain.find(parent => windowByPid.has(parent.pid));
       const paneShell = chain.find(parent => panes.has(parent.pid));
+      const shell = chain.find(parent => maestriShells.has(parent.pid));
+      const ids = agentIds.get(agent.pid);
+      if (ids) {
+        const key = `${ids.workspace}:${ids.terminal}`;
+        if (!shell && liveShellIds.has(key)) continue;
+        if (usedMaestriIds.has(key)) continue;
+        usedMaestriIds.add(key);
+      }
       if (paneShell) where = { type: 'ponte', session: panes.get(paneShell.pid) };
       else if (host) {
         const win = windowByPid.get(host.pid);
@@ -309,10 +643,13 @@ export function createAgents(options = {}) {
           where = { type: /maestri/i.test(String(win.class)) ? 'maestri' : terminal ? 'terminal' : 'app', address: String(win.address), class: String(win.class).slice(0, 100), app: String(win.title || win.class).slice(0, 200), workspace: { id: Number(win.workspace?.id) || 0, name: String(win.workspace?.name ?? '').slice(0, 50) }, monitor: Number.isInteger(win.monitor) ? win.monitor : null };
           if (terminal) usedWindows.add(win.address);
         }
-      } else if (chain.some(parent => /maestri/i.test(parent.comm))) where = { type: 'maestri' };
+      } else if (shell || chain.some(parent => /maestri/i.test(parent.comm))) where = { type: 'maestri' };
+      if (shell && where.type !== 'ponte' && where.type !== 'maestri') where = { type: 'maestri' };
+      if (shell) usedShells.add(shell.pid);
+      const maestri = ids ? identity(ids) : null;
       const windowTitle = where.type === 'terminal' ? String(windowByPid.get(host.pid).title || '') : '';
 
-      let transcript = null, format = null, session = null;
+      let transcript = null, format = null, session = null, snapshot = null;
       if (agent.kind === 'claude') {
         session = await claudeSession(agent.pid, agent.start);
         format = 'claude';
@@ -326,53 +663,104 @@ export function createAgents(options = {}) {
         format = 'codex';
         const family = [agent.pid, ...(children.get(agent.pid) || [])];
         transcript = await codexTranscript(family, cwd, startedAt || 0, id);
+      } else if (agent.kind === 'jcode') {
+        const name = await jcodeSession(agent.pid, startedAt);
+        if (name) {
+          format = 'jcode';
+          transcript = path.join(jcodeDir, 'sessions', `${name}.journal.jsonl`);
+          snapshot = path.join(jcodeDir, 'sessions', `${name}.json`);
+        }
       }
-      const written = transcript ? await mtime(transcript) : null;
-      if (transcript && written === null) transcript = null;
-      privateInfo.set(id, { transcript, format });
+      let written = transcript ? await mtime(transcript) : null;
+      if (snapshot) { const other = await mtime(snapshot); if (other !== null && (written === null || other > written)) written = other; }
+      if (transcript && written === null) transcript = snapshot = null;
+      privateInfo.set(id, { transcript, format, snapshot });
+      const summary = transcript ? await summarize({ transcript, format, snapshot }) : null;
+      if (transcript) summarized.add(transcript);
 
       let state, since = null, waitingFor = null;
+      // JCode holds a sleep inhibitor ("Jcode is streaming or processing
+      // active work") as a child of the client for as long as a turn runs.
+      const jcodeBusy = agent.kind === 'jcode' && (children.get(agent.pid) || []).some(pid => procs.get(pid)?.comm === 'systemd-inhibit');
       if (session && ['busy', 'idle', 'waiting'].includes(session.status)) {
         state = { busy: 'working', idle: 'idle', waiting: 'waiting' }[session.status];
         since = Number(session.statusUpdatedAt) || null;
         if (state === 'waiting' && typeof session.waitingFor === 'string') waitingFor = session.waitingFor.slice(0, 80);
-      } else if (TITLE_WORKING.test(windowTitle)) state = 'working';
+      } else if (agent.kind === 'jcode') state = jcodeBusy || summary?.turn === 'working' ? 'working' : 'idle';
+      else if (TITLE_WORKING.test(windowTitle)) state = 'working';
       else if (TITLE_IDLE.test(windowTitle)) state = 'idle';
+      else if (agent.kind === 'codex' && summary?.turn) state = summary.turn === 'working' ? 'working' : 'idle';
       else state = (cpuShare !== null && cpuShare >= CPU_WORKING) || (written && scanAt - written < RECENT_WRITE_MS) ? 'working' : 'idle';
-      // An idle Claude that already did something in this process is ready for
+      // An idle agent that already did something in this process is ready for
       // the next request, not merely stopped. Claude creates its transcript on
       // the first message, so a fresh session has none; a resumed one has an
       // old transcript and counts once it was written or its status moved
-      // after this process started.
-      if (state === 'idle' && agent.kind === 'claude' && written !== null && startedAt
-        && (written > startedAt || (session && Number(session.statusUpdatedAt) > startedAt))) state = 'ready';
+      // after this process started. Codex and JCode close a turn explicitly.
+      if (state === 'idle' && written !== null && startedAt) {
+        if (agent.kind === 'claude' && (written > startedAt || (session && Number(session.statusUpdatedAt) > startedAt))) state = 'ready';
+        else if (agent.kind !== 'claude' && summary?.turn === 'done' && written > startedAt) state = 'ready';
+      }
       if (!since) since = written || startedAt;
 
-      const headless = agent.argv.some(arg => arg === '-p' || arg === '--print' || arg === 'exec');
-      const canvasName = where.type === 'maestri' ? await maestriName(agent.pid) : null;
-      const title = oneLine(windowTitle.replace(TITLE_WORKING, '').replace(TITLE_IDLE, '')) || oneLine(canvasName) || oneLine(session?.name) || (cwd ? path.basename(cwd) : agent.kind);
+      const detached = !!ids && !shell;
+      const headless = detached || agent.argv.some(arg => arg === '-p' || arg === '--print' || arg === 'exec');
+      const title = oneLine(windowTitle.replace(TITLE_WORKING, '').replace(TITLE_IDLE, '')) || oneLine(maestri?.name) || oneLine(session?.name) || (cwd ? path.basename(cwd) : agent.kind);
+      const launched = modelFromArgv(agent.argv);
+      const canvasLaunch = maestri?.command ? modelFromArgv(splitCommand(maestri.command)) : {};
+      const modelName = summary?.model || launched.model || canvasLaunch.model || null;
+      const model = modelName ? { name: modelName, effort: launched.effort || summary?.effort || canvasLaunch.effort || null, provider: launched.provider || summary?.provider || canvasLaunch.provider || null } : null;
       items.push({
-        id, kind: agent.kind, pid: agent.pid, title: clip(title, 200), cwd: shortPath(cwd, home), state, waitingFor, since, startedAt, where, headless,
+        id, kind: agent.kind, pid: agent.pid, title: clip(title, 200), cwd: shortPath(cwd, home), branch: await gitBranch(cwd, branches), state, waitingFor, since, startedAt, where, headless, detached,
+        maestri: publicMaestri(maestri, await roleName(cwd)), model, activity: summary?.activity || null,
         transcript: !!transcript, canReply: where.type === 'ponte' || (where.type === 'terminal' && !!where.address),
+      });
+    }
+    // Maestri terminals with no agent in them (a shell, an ssh session).
+    for (const [pid, ids] of maestriShells) {
+      if (usedShells.has(pid)) continue;
+      const maestri = identity(ids);
+      const key = `${ids.workspace}:${ids.terminal}`;
+      if (usedMaestriIds.has(key)) continue;
+      usedMaestriIds.add(key);
+      // Existing APKs whitelist p-/w- ids. Use the shell's pid/start too.
+      const id = `p-${pid}-${procs.get(pid).start}`;
+      if (!ID.test(id)) continue;
+      privateInfo.set(id, { transcript: null, format: null, snapshot: null });
+      const cwd = await cwdOf(pid);
+      items.push({
+        id, kind: 'terminal', pid, title: clip(oneLine(maestri.name) || 'Terminal', 200), cwd: shortPath(cwd, home), branch: null, state: 'terminal', waitingFor: null, since: toMs(procs.get(pid).start), startedAt: toMs(procs.get(pid).start),
+        where: { type: 'maestri' }, headless: false, maestri: publicMaestri(maestri, null), model: null, activity: null, transcript: false, canReply: false,
       });
     }
     for (const win of windows) {
       if (!TERMINAL_CLASS.test(String(win.class)) || usedWindows.has(win.address)) continue;
       const id = `w-${String(win.address).replace(/^0x/i, '').toLowerCase()}`;
       if (!ID.test(id)) continue;
-      privateInfo.set(id, { transcript: null, format: null });
+      privateInfo.set(id, { transcript: null, format: null, snapshot: null });
       items.push({
-        id, kind: 'terminal', pid: win.pid, title: clip(oneLine(win.title) || String(win.class), 200), cwd: '', state: 'terminal', waitingFor: null, since: null, startedAt: null,
+        id, kind: 'terminal', pid: win.pid, title: clip(oneLine(win.title) || String(win.class), 200), cwd: '', branch: null, state: 'terminal', waitingFor: null, since: null, startedAt: null,
         where: { type: 'terminal', address: String(win.address), class: String(win.class).slice(0, 100), workspace: { id: Number(win.workspace?.id) || 0, name: String(win.workspace?.name ?? '').slice(0, 50) }, monitor: Number.isInteger(win.monitor) ? win.monitor : null },
-        headless: false, transcript: false, canReply: false,
+        headless: false, maestri: null, model: null, activity: null, transcript: false, canReply: false,
       });
     }
     for (const key of cpu.keys()) if (!seen.has(key)) { cpu.delete(key); codexFiles.delete(key); }
     for (const key of privateInfo.keys()) if (!items.some(item => item.id === key)) privateInfo.delete(key);
+    for (const key of summaries.keys()) if (!summarized.has(key)) summaries.delete(key);
     const order = { waiting: 0, working: 1, ready: 2, idle: 3, terminal: 4 };
     items.sort((a, b) => order[a.state] - order[b.state] || (b.since || 0) - (a.since || 0));
+    // The numbers the phone shows: every agent someone talks to (automated
+    // ones apart), how many are mid-turn or waiting, and plain terminals.
+    const live = items.filter(item => item.kind !== 'terminal');
+    const interactive = live.filter(item => !item.headless);
+    const byKind = {};
+    for (const item of interactive) byKind[item.kind] = (byKind[item.kind] || 0) + 1;
+    const counts = {
+      agents: interactive.length, automated: live.length - interactive.length,
+      working: interactive.filter(item => item.state === 'working').length, waiting: interactive.filter(item => item.state === 'waiting').length,
+      terminals: items.length - live.length, maestri: interactive.filter(item => item.maestri).length, byKind,
+    };
     lastScanMs = Math.round((performance.now() - started) * 10) / 10;
-    return { items, scannedAt: scanAt, scanMs: lastScanMs };
+    return { items, counts, scannedAt: scanAt, scanMs: lastScanMs };
   }
 
   async function list({ fresh = false } = {}) {
@@ -393,22 +781,14 @@ export function createAgents(options = {}) {
     const item = await find(id, false);
     const info = privateInfo.get(id);
     if (!info?.transcript) return { id, available: false, messages: [], truncated: false, updatedAt: null };
-    let handle, text = '', updatedAt = null, cut = false;
-    try {
-      handle = await open(info.transcript, constants.O_RDONLY | constants.O_NOFOLLOW);
-      const stat = await handle.stat();
-      if (!stat.isFile()) throw new Error('not a file');
-      updatedAt = stat.mtimeMs;
-      const length = Math.min(stat.size, TAIL_BYTES);
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
-      text = buffer.subarray(0, bytesRead).toString('utf8');
-      cut = stat.size > length;
-    } catch { return { id, available: false, messages: [], truncated: false, updatedAt: null }; }
-    finally { await handle?.close(); }
-    const lines = text.split('\n');
-    if (cut) lines.shift();
-    const parsed = (info.format === 'codex' ? codexMessages : claudeMessages)(lines.filter(Boolean));
+    let lines, updatedAt, cut;
+    if (info.format === 'jcode') ({ lines, updatedAt, cut } = await jcodeLines(info, TAIL_BYTES, MESSAGE_LIMIT));
+    else {
+      const tail = await readTail(info.transcript, TAIL_BYTES);
+      if (!tail) return { id, available: false, messages: [], truncated: false, updatedAt: null };
+      lines = tailLines(tail); updatedAt = tail.mtimeMs; cut = tail.cut;
+    }
+    const parsed = (MESSAGE_PARSERS[info.format] || (() => []))(lines);
     const result = lastMessages(parsed);
     return { id, kind: item.kind, title: item.title, state: item.state, available: true, messages: result.messages, truncated: result.truncated || cut, updatedAt };
   }

@@ -1929,7 +1929,7 @@ let agentLastStatesAt = 0;
 const agentRepliedAt = {};
 let agentNoticeId = '';
 let agentNoticeTimer;
-const agentKinds = {claude:'Claude',codex:'Codex',grok:'Grok',opencode:'OpenCode',gemini:'Gemini',pi:'Pi',aider:'Aider',crush:'Crush',goose:'Goose',amp:'Amp',qwen:'Qwen','cursor-agent':'Cursor'};
+const agentKinds = {claude:'Claude',codex:'Codex',jcode:'JCode',grok:'Grok',hermes:'Hermes',opencode:'OpenCode',gemini:'Gemini',pi:'Pi',omp:'OMP',aider:'Aider',crush:'Crush',goose:'Goose',amp:'Amp',qwen:'Qwen','cursor-agent':'Cursor',devin:'Devin',copilot:'Copilot',agy:'Antigravity',droid:'Droid'};
 function agentKindLabel(kind) { return agentKinds[kind] || t('Terminal'); }
 function agentStateLabel(item) {
   if (item.state === 'working') return t('Trabalhando');
@@ -1950,13 +1950,22 @@ function agentWhere(item) {
   const where = item.where || {};
   if (where.type === 'ponte') { const session = terminalSessions.filter(item => item.id === where.session)[0]; return session && session.title ? `${t('Sessão do Ponte')} · ${session.title}` : t('Sessão do Ponte'); }
   if (where.type === 'terminal') return where.workspace && where.workspace.id > 0 ? t('Janela no workspace {workspace}',{workspace:where.workspace.name || where.workspace.id}) : t('Janela no PC');
-  if (where.type === 'maestri') return t('Maestri');
+  if (where.type === 'maestri') return item.maestri && item.maestri.workspace ? `Maestri · ${item.maestri.workspace}` : t('Maestri');
   if (where.type === 'app') return t('Dentro de {app}',{app:where.app || where.class || ''});
   return item.headless ? t('Sem janela (automático)') : t('Sem janela');
 }
-function agentSummary(item) { return [agentWhere(item), agentAgo(item.since), item.cwd].filter(Boolean).join(' · '); }
-function agentCard(attributes, kind, title, state, stateLabel, detail) {
-  return `<button class="agent-card" ${attributes} data-state="${escaped(state)}"><span><span class="agent-kind">${escaped(kind)}</span><strong>${escaped(title)}</strong><small>${escaped(detail)}</small></span><span class="agent-state" data-state="${escaped(state)}">${escaped(stateLabel)}</span></button>`;
+function agentSummary(item) { return [agentWhere(item), agentAgo(item.since), item.cwd, item.branch].filter(Boolean).join(' · '); }
+function agentRole(item) {
+  const canvas = item.maestri;
+  if (!canvas) return '';
+  return [canvas.lead ? t('Regente (conexões do canvas)') : canvas.reportsTo ? t('Equipe de {name}',{name:canvas.reportsTo}) : '', canvas.role || ''].filter(Boolean).join(' · ');
+}
+function agentModel(item) {
+  const model = item.model;
+  return model ? [model.provider,model.name,model.effort].filter(Boolean).join(' · ') : '';
+}
+function agentCard(attributes, kind, title, state, stateLabel, detail, extra) {
+  return `<button class="agent-card" ${attributes} data-state="${escaped(state)}"><span><span class="agent-kind">${escaped(kind)}</span><strong>${escaped(title)}</strong><small>${escaped(detail)}</small>${(extra || []).filter(Boolean).map(text => `<small title="${escaped(text)}">${escaped(text)}</small>`).join('')}</span><span class="agent-state" data-state="${escaped(state)}">${escaped(stateLabel)}</span></button>`;
 }
 function renderDesktopTerminals() {
   const list = $('#agent-list');
@@ -1966,10 +1975,23 @@ function renderDesktopTerminals() {
   const automated = (agentItems || []).filter(item => item.headless).length;
   const shown = agentVisibleItems();
   if (agentItems) {
+    const groups = new Map();
     shown.forEach(item => {
+      const key = item.maestri && item.maestri.workspaceId || '';
+      if (!groups.has(key)) groups.set(key,[]);
+      groups.get(key).push(item);
+    });
+    groups.forEach((items, key) => {
+      if (key) {
+        const agents = items.filter(item => item.kind !== 'terminal').length;
+        cards.push(`<h3 class="small-label">${escaped(items[0].maestri.workspace || t('Maestri'))} · ${escaped(t('{count} agentes',{count:agents}))}</h3>`);
+        items.sort((a,b) => Number(!!b.maestri.lead) - Number(!!a.maestri.lead));
+      }
+      items.forEach(item => {
       if (item.where && item.where.type === 'ponte') linked[item.where.session] = true;
-      if (item.kind === 'terminal') cards.push(agentCard(`data-preview-window="${escaped(item.where.address)}"`, t('Terminal'), item.title, 'terminal', t('Aberto'), `${agentWhere(item)} · ${t('Focar e ver no monitor')}`));
-      else cards.push(agentCard(`data-agent-id="${escaped(item.id)}"`, agentKindLabel(item.kind), item.title, item.state, agentStateLabel(item), agentSummary(item)));
+      if (item.kind === 'terminal' && item.where.address) cards.push(agentCard(`data-preview-window="${escaped(item.where.address)}"`, t('Terminal'), item.title, 'terminal', t('Aberto'), `${agentWhere(item)} · ${t('Focar e ver no monitor')}`));
+      else cards.push(agentCard(`data-agent-id="${escaped(item.id)}"`, agentKindLabel(item.kind), item.title, item.state, agentStateLabel(item), agentSummary(item),[agentRole(item),agentModel(item),item.activity && item.activity.text]));
+      });
     });
   } else {
     // A phone whose native shell predates the agent routes still lists windows.
@@ -1978,8 +2000,9 @@ function renderDesktopTerminals() {
   terminalSessions.forEach(session => {
     if (!linked[session.id]) cards.push(agentCard(`data-ponte-session="${escaped(session.id)}"`, t('Terminal'), session.title || t('Terminal'), 'terminal', t('Aberto'), t('Sessão do Ponte')));
   });
-  const working = shown.filter(item => item.state === 'working' || item.state === 'waiting').length;
-  $('#agent-count').textContent = agentItems ? t('{count} ATIVOS',{count:working}) : '';
+  const interactive = (agentItems || []).filter(item => item.kind !== 'terminal' && !item.headless);
+  const working = interactive.filter(item => item.state === 'working' || item.state === 'waiting').length;
+  $('#agent-count').textContent = agentItems ? t('{count} AGENTES · {busy} EM AÇÃO',{count:interactive.length,busy:working}) : '';
   const autoButton = $('#agent-show-auto');
   autoButton.hidden = !agentItems;
   autoButton.textContent = t('Mostrar automáticos ({count})',{count:automated});
@@ -2129,13 +2152,13 @@ function renderAgentHeader() {
   if (!item) { $('#agent-dialog-meta').textContent = t('Este agente não está mais rodando.'); $('#agent-reply-form').hidden = true; return; }
   $('#agent-dialog-kind').textContent = `${agentKindLabel(item.kind)} · ${agentStateLabel(item)}${item.waitingFor ? ` (${item.waitingFor})` : ''}`;
   $('#agent-dialog-title').textContent = item.title;
-  $('#agent-dialog-meta').textContent = agentSummary(item);
+  $('#agent-dialog-meta').textContent = [agentSummary(item),agentRole(item),agentModel(item),item.activity && item.activity.text].filter(Boolean).join('\n');
   const where = item.where || {};
   $('#agent-view').hidden = !(where.type === 'terminal' && where.address);
   $('#agent-open-session').hidden = where.type !== 'ponte';
   $('#agent-reply-form').hidden = !item.canReply;
   $('#agent-readonly').hidden = !!item.canReply;
-  $('#agent-readonly').textContent = where.type === 'maestri' ? t('Só leitura aqui: responda pelo canvas do Maestri. O Maestri não aceita mensagem de fora dele.') : t('Só leitura: este agente não tem janela de terminal nem sessão do Ponte para digitar.');
+  $('#agent-readonly').textContent = where.type === 'maestri' ? t('Só leitura por enquanto. Envio pelo Maestri precisa de uma ponte autorizada e conectada a este agente.') : t('Só leitura: este agente não tem janela de terminal nem sessão do Ponte para digitar.');
   $('#agent-reply-send').textContent = where.type === 'ponte' ? t('Enviar para a sessão') : t('Responder no PC');
   $('#agent-reply-hint').textContent = where.type === 'ponte' ? t('Digita na sessão do Ponte e aperta Enter, sem mudar o foco do PC.') : t('Atenção: traz esta janela para a frente no PC e digita o texto + Enter nela.');
   $('#agent-reply-send').disabled = agentReplyBusy;
