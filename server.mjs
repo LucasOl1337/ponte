@@ -254,10 +254,15 @@ export async function createApp(options = {}) {
     if (type === 'fleet.sessions') return fleet.sessions({ fresh });
     if (type === 'fleet.check') {
       const listing = await fleet.overview({ fresh: true, deep: true });
-      return typeof value.machine === 'string' ? { machine: listing.machines.find(item => item.id === value.machine) || null } : listing;
+      const machine = typeof value.machine === 'string' ? await devices.machine(value.machine) : null;
+      return machine ? { machine: listing.machines.find(item => item.id === machine) || null } : listing;
     }
-    if (type === 'fleet.probe') return fleet.probe(value.machine, { fresh: true });
-    if (type === 'fleet.handoff') { const { type: _, ...rest } = value; return fleet.handoff(rest); }
+    if (type === 'fleet.probe') return fleet.probe(await devices.machine(value.machine), { fresh: true });
+    if (type === 'fleet.handoff') {
+      const { type: _, ...rest } = value;
+      for (const key of ['from', 'to']) if (Object.hasOwn(rest, key)) rest[key] = await devices.machine(rest[key]);
+      return fleet.handoff(rest);
+    }
     // The phone's proxy gives up after 15 s: a short wait keeps polling cheap.
     if (type === 'fleet.job') {
       const wait = Number.isInteger(value.wait) ? Math.min(10, Math.max(0, value.wait)) : 0;
@@ -275,7 +280,8 @@ export async function createApp(options = {}) {
     if (probeRoute && req.method === 'POST') { json(res, 200, await limits.only('fleet', 2, () => fleetCall('fleet.probe', { machine: decodeURIComponent(probeRoute[1]) }))); return; }
     if (pathname === '/api/fleet/handoff' && req.method === 'POST') {
       const value = await limits.only('body', 8, () => readJson(req, 4096));
-      json(res, 202, fleet.handoff(value)); return;
+      const plain = value && typeof value === 'object' && !Array.isArray(value);
+      json(res, 202, plain ? await fleetCall('fleet.handoff', { ...value, type: 'fleet.handoff' }) : fleet.handoff(value)); return;
     }
     if (pathname === '/api/fleet/jobs' && req.method === 'GET') { json(res, 200, fleet.jobs()); return; }
     const jobRoute = pathname.match(/^\/api\/fleet\/jobs\/([a-f0-9]{16})$/);
@@ -308,7 +314,11 @@ export async function createApp(options = {}) {
   // { url, ca, token } for /api/rd?node=<paired peer>, and rd.mjs splices.
   const routeRd = options.routeRd || (async (hello, req, principal) => {
     const query = new URL(req.url, 'http://localhost').searchParams;
-    const node = query.get('node');
+    let node = query.get('node');
+    if (node && node !== mesh.id && !/^[a-f0-9]{16}$/.test(node)) {
+      if (principal.kind !== 'owner') throw new ApiError(403, 'MESH_CHAIN_DENIED');
+      node = await devices.node(node);
+    }
     if (!node || node === mesh.id) return null;
     if (principal.kind !== 'owner') throw new ApiError(403, 'MESH_CHAIN_DENIED');
     const peer = mesh.connection(node);
@@ -442,6 +452,9 @@ export async function createApp(options = {}) {
       const meshRoute = pathname === '/api/mesh' || pathname.startsWith('/api/mesh/') || pathname === '/api/devices';
       if (caller.kind === 'peer' && nodes.length) throw new ApiError(403, 'MESH_CHAIN_DENIED');
       if (caller.kind === 'peer' && meshRoute) throw new ApiError(403, 'MESH_OWNER_ONLY');
+      // A device name or any of its ids (ADR 0002) becomes the mesh id here;
+      // a 16-hex id goes on untouched, as it always did.
+      if (nodes[0] && nodes[0] !== mesh.id && !/^[a-f0-9]{16}$/.test(nodes[0])) nodes[0] = await devices.node(nodes[0]) || mesh.id;
       if (nodes[0] && nodes[0] !== mesh.id) {
         if (meshRoute) throw new ApiError(400, 'MESH_INVALID_REQUEST');
         const url = new URL(req.url, 'http://localhost');
@@ -472,7 +485,7 @@ export async function createApp(options = {}) {
       // Every device this node reaches, one model for every surface (ADR 0002).
       if (pathname === '/api/devices' && req.method === 'GET') {
         const flag = name => ['1', 'true'].includes(query.get(name));
-        json(res, 200, await limits.only('devices', 2, () => devices.list({ fresh: flag('fresh'), deep: flag('deep') }))); return;
+        json(res, 200, await limits.only('devices', 2, () => devices.list({ fresh: flag('fresh'), deep: flag('deep'), discover: flag('discover') }))); return;
       }
       const meshAdmin = pathname.match(/^\/api\/mesh\/(pair|approve|deny|revoke)$/);
       if (meshAdmin && req.method === 'POST') {
@@ -509,7 +522,7 @@ export async function createApp(options = {}) {
           }
           if (value?.type === 'devices.list') {
             if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
-            json(res, 200, await limits.only('devices', 2, () => devices.list({ fresh: value.fresh === true, deep: value.deep === true }))); return;
+            json(res, 200, await limits.only('devices', 2, () => devices.list({ fresh: value.fresh === true, deep: value.deep === true, discover: value.discover === true }))); return;
           }
           if (typeof value?.type === 'string' && value.type.startsWith('mesh.')) {
             if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');

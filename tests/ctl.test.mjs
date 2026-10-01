@@ -581,3 +581,27 @@ test('ctl real isolated tmux completes create, execute, observe, resize and remo
   assert.deepEqual(registry.sessions, []);
   assert.equal(f.calls.length, 0, 'no desktop, audio, transcription or synthetic terminal action was used');
 });
+
+test('ctl --node falls back to /api/mesh on a server without /api/devices, and validates fleet machines as any device id or name', async t => {
+  const { directory, env } = await environment(t);
+  const http = await import('node:http');
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push(req.url);
+    const send = (status, body) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+    if (req.url === '/api/mesh') return send(200, { self: { id: 'aaaaaaaaaaaaaaaa', name: 'pc-teste' }, peers: [{ id: 'feedfacecafebeef', name: 'notebook-teste', online: true, paired: true }] });
+    if (req.url === '/api/state?node=feedfacecafebeef') return send(200, { hostname: 'notebook-teste' });
+    return send(404, { errorCode: 'NOT_FOUND' });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const tokenFile = path.join(directory, 'token');
+  await writeFile(tokenFile, TOKEN, { mode: 0o600 });
+  const ctl = args => subprocess(env, ['--url', `http://127.0.0.1:${server.address().port}`, '--token-file', tokenFile, ...args]);
+  assert.equal(envelope(await ctl(['state', '--node', 'notebook-teste'])).data.hostname, 'notebook-teste');
+  assert.deepEqual(requests, ['/api/devices?discover=1', '/api/mesh', '/api/state?node=feedfacecafebeef']);
+  for (const machine of ['self', 'ssh:vm-trabalho', 'VM trabalho', 'tail:notebook-teste', 'feedfacecafebeef']) {
+    assert.equal(envelope(await ctl(['fleet', 'probe', '--machine', machine, '--dry-run'])).data.method, 'POST', machine);
+  }
+  assert.equal(envelope(await ctl(['fleet', 'probe', '--machine', 'a/b', '--dry-run']), false).error.code, 'USAGE');
+});

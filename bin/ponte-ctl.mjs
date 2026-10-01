@@ -222,10 +222,36 @@ function redacted(request) {
 
 const NODE_ID = /^[a-f0-9]{16}$/;
 
-// --node NAME|ID: the home node's paired devices come from /api/mesh (owner
-// only); a 16-hex id is taken as is, so it also works without that route.
+// --node DEVICE: a 16-hex id is taken as is, so it works without any listing.
+// Any other id of a device (ssh:ALIAS, tail:NAME…) or its name is looked up in
+// the home node's device list (ADR 0002); a server without /api/devices falls
+// back to the paired devices of /api/mesh (owner only).
 async function resolveNode(client, value) {
   if (NODE_ID.test(value)) return { id: value, name: null };
+  let listing;
+  try { listing = await client.request({ method: 'GET', path: '/api/devices?discover=1' }); } catch (error) {
+    if (error?.status === 404) return resolveMeshNode(client, value);
+    throw error;
+  }
+  const wanted = value.toLowerCase();
+  const devices = Array.isArray(listing?.devices) ? listing.devices : [];
+  const paired = item => (item.routes || []).some(route => route.via === 'ponte' && route.state === 'paired');
+  const byId = devices.find(item => (item.ids || []).some(id => String(id).toLowerCase() === wanted));
+  const named = devices.filter(item => String(item.name || '').toLowerCase() === wanted);
+  if (!byId && named.length > 1) throw new CliError('MESH_PEER_AMBIGUOUS', 'More than one device has this name. Use one of its ids (ponte devices).', 2);
+  const device = byId || named[0];
+  if (!device) {
+    const known = devices.filter(paired).map(item => item.name).join(', ');
+    throw new CliError('MESH_PEER_NOT_FOUND', `No device called ${JSON.stringify(value)} (${known ? `paired: ${known}` : 'none is paired yet'}).`, 2);
+  }
+  if (device.self) return { id: null, name: device.name };
+  const ponte = (device.routes || []).find(route => route.via === 'ponte');
+  if (!ponte) throw new CliError('DEVICE_NOT_PONTE', `${device.name} does not run Ponte: reach it with terminals create --agent ssh --host ALIAS instead of --node.`, 2);
+  if (!paired(device)) throw new CliError('MESH_PEER_NOT_PAIRED', `${device.name} is on the tailnet but not paired with this device: ponte mesh pair ${device.name}, then approve it there.`, 2);
+  return { id: device.id, name: device.name };
+}
+
+async function resolveMeshNode(client, value) {
   const listing = await client.request({ method: 'GET', path: '/api/mesh' });
   const self = listing?.self || {};
   const wanted = value.toLowerCase();

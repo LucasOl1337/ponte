@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { detectNodeKind } from '../backend/mesh.mjs';
-import { composeDevices, findDevice, parseAdbDevices, createDevices, CAPABILITIES, DEVICE_KINDS } from '../backend/devices.mjs';
+import { composeDevices, findDevice, resolveDevice, nodeTarget, fleetMachine, parseAdbDevices, createDevices, CAPABILITIES, DEVICE_KINDS } from '../backend/devices.mjs';
 
 // Fixtures in the shapes mesh.list(), mesh.nodes() and fleet.overview()
 // return. Addresses are documentation ranges (RFC 5737), names are made up.
@@ -195,6 +195,52 @@ test('findDevice takes any id a device answers to, its name without case, or sel
   assert.equal(findDevice(listing, 'self')?.id, HOME.id);
   assert.equal(findDevice(listing, 'nada'), null);
   assert.equal(findDevice(listing, ''), null);
+});
+
+// Slice 2: every door (?node=, ctl --node, ./ponte rd, fleet --from/--to) goes through these.
+test('the resolver takes any id or the name, refuses a shared name, and says what each door can do with the device', () => {
+  const notebook = machine('ssh:notebook-teste', 'notebook-teste', 'computer', tail('notebook-teste', '192.0.2.2'), [sshRoute('notebook-teste', null)]);
+  const vm = machine('ssh:vm-trabalho', 'VM trabalho', 'server', null, [sshRoute('vm-trabalho', null, { configured: true })]);
+  const twin = n => machine(`ssh:gemeo-${n}`, 'gemeo', 'server', null, [sshRoute(`gemeo-${n}`, null)]);
+  const listing = composeDevices(world({
+    peers: [{ id: NOTE.id, name: NOTE.name, online: true, paired: true }, { id: 'c3c3c3c3c3c3c3c3', name: 'tablet-teste', online: true, paired: false }],
+    nodes: [{ id: NOTE.id, ip: '192.0.2.2' }], machines: [notebook, vm, twin(1), twin(2)],
+  }));
+  for (const value of [NOTE.id, 'ssh:notebook-teste', 'tail:notebook-teste', 'Notebook-Teste']) assert.equal(resolveDevice(listing, value).id, NOTE.id, value);
+  assert.equal(resolveDevice(listing, 'self').self, true);
+  assert.equal(resolveDevice(listing, 'ssh:gemeo-2').id, 'ssh:gemeo-2', 'an id wins over a shared name');
+  assert.throws(() => resolveDevice(listing, 'gemeo'), { code: 'MESH_PEER_AMBIGUOUS', status: 409 });
+  for (const value of ['nada', '', '  ']) assert.throws(() => resolveDevice(listing, value), { code: 'MESH_PEER_NOT_FOUND', status: 404 }, value);
+
+  // ?node=: null is this node, the mesh id for a paired node, a clear refusal otherwise.
+  assert.equal(nodeTarget(resolveDevice(listing, 'self')), null);
+  assert.equal(nodeTarget(resolveDevice(listing, 'ssh:notebook-teste')), NOTE.id);
+  assert.throws(() => nodeTarget(resolveDevice(listing, 'VM trabalho')), { code: 'DEVICE_NOT_PONTE', parameters: { name: 'VM trabalho' } });
+  assert.throws(() => nodeTarget(resolveDevice(listing, 'tablet-teste')), { code: 'MESH_PEER_NOT_PAIRED', parameters: { name: 'tablet-teste' } });
+
+  // The fleet: self or the machine's ssh:ALIAS, from any id or the name.
+  assert.equal(fleetMachine(resolveDevice(listing, HOME.id)), 'self');
+  assert.equal(fleetMachine(resolveDevice(listing, NOTE.id)), 'ssh:notebook-teste');
+  assert.equal(fleetMachine(resolveDevice(listing, 'vm trabalho')), 'ssh:vm-trabalho');
+  assert.throws(() => fleetMachine(resolveDevice(listing, 'tablet-teste')), { code: 'FLEET_MACHINE_NOT_FOUND' });
+});
+
+test('createDevices.node and .machine pass old ids through without listing and resolve the rest', async () => {
+  let lists = 0;
+  const mesh = {
+    view: () => { lists += 1; return { self: HOME, peers: [{ id: NOTE.id, name: NOTE.name, online: true, paired: true }], requests: [], controllers: [] }; },
+    nodes: () => ({ self: { ...HOME, kind: 'pc' }, nodes: [{ id: NOTE.id, ip: '192.0.2.2' }] }),
+  };
+  const notebook = machine('ssh:notebook-teste', 'notebook-teste', 'computer', tail('notebook-teste', '192.0.2.2'), [sshRoute('notebook-teste', null)]);
+  const devices = createDevices({ mesh, fleet: { overview: async () => ({ tailnet: { state: 'Running' }, machines: [selfMachine, notebook] }) }, adb: false });
+  assert.equal(await devices.node('d4d4d4d4d4d4d4d4'), 'd4d4d4d4d4d4d4d4', 'a 16-hex id is the old door, kept as is');
+  assert.equal(await devices.machine('ssh:qualquer'), 'ssh:qualquer');
+  assert.equal(await devices.machine('self'), 'self');
+  assert.equal(lists, 0);
+  assert.equal(await devices.node('tail:notebook-teste'), NOTE.id);
+  assert.equal(await devices.node('pc-teste'), null);
+  assert.equal(await devices.machine('notebook-teste'), 'ssh:notebook-teste');
+  assert.equal(await devices.machine(NOTE.id), 'ssh:notebook-teste');
 });
 
 test('createDevices reads the mesh cache by default, waits only when asked, and keeps adb off unless its server runs', async () => {

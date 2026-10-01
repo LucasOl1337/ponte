@@ -32,3 +32,6 @@ Terms used in code, docs, measurements and conversation. The Portuguese name is 
 
 **Capacidade** (capability, `can.*`)
 : What can be done with a device now (screen, control, terminal, agents, sessions, info, files, wake, pair, revoke, mirror), with the route it goes through (`via`) or the reason it cannot (`why`). Decided by the home node; surfaces only draw it.
+
+**Words** (`PonteI18n.deviceWord(group, code)` in `public/i18n.js`)
+: Kinds PC, Notebook, Celular, Servidor, Outro; states online, offline, sem conferir; Ponte route pareado, disponível, não pareado, aguardando aprovação, negado, expirou, controla este aparelho; actions Ver tela, Controlar, Terminal, Agentes, Sessões, Informações, Arquivos, Acordar, Pedir acesso, Revogar, Espelhar no PC, Aprovar, Negar, Continuar aqui. Every `why` code has one short sentence ("Não roda a Ponte.", "O SSH não respondeu."). A surface never prints a code.

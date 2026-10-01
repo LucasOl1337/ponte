@@ -1,6 +1,6 @@
 # ADR 0002: one device model, served by the home node, drawn by every surface
 
-- Status: proposed (2026-10-01), waiting for the owner's review before the first slice
+- Status: accepted (2026-10-01); slices 1 to 3 implemented, 4 and 5 (UI) wait for the owner
 - Vocabulary: [CONTEXT.md](../../CONTEXT.md); the UI term is **aparelho**, the code term is `device`
 
 ## Context

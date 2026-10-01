@@ -34,7 +34,7 @@ An agent on A drives B with the same CLI and A's own key: `--node <name|id>` sen
 ./ponte ctl terminals create --node notebook
 ```
 
-A name is matched without case among paired devices; a 16-hex id is used as is. See the [CLI guide](cli.md#outro-aparelho-da-malha---node) for the error codes.
+A name is matched without case, and any other id of the device (`ssh:ALIAS`, `tail:NAME`, see [devices](devices.md#one-resolver)) works too; a 16-hex id is used as is. See the [CLI guide](cli.md#outro-aparelho-da-malha---node) for the error codes.
 
 ## SSH between the computers
 

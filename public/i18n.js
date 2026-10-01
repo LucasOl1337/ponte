@@ -725,6 +725,44 @@
   "Controlar": "Control",
   "Revogar": "Revoke",
   "Pedir acesso": "Ask for access",
+  "Seus aparelhos": "Your devices",
+  "este aparelho": "this device",
+  "controlando {name}": "controlling {name}",
+  "PC": "PC",
+  "Notebook": "Notebook",
+  "Celular": "Phone",
+  "Servidor": "Server",
+  "Outro": "Other",
+  "online": "online",
+  "offline": "offline",
+  "sem conferir": "not checked",
+  "pareado": "paired",
+  "disponível": "available",
+  "não pareado": "not paired",
+  "aguardando aprovação": "waiting for approval",
+  "negado": "denied",
+  "expirou": "expired",
+  "controla este aparelho": "controls this device",
+  "conectado": "connected",
+  "sem autorização": "not authorized",
+  "Ver tela": "View screen",
+  "Agentes": "Agents",
+  "Sessões": "Sessions",
+  "Espelhar no PC": "Mirror on the PC",
+  "Informações": "Info",
+  "É este aparelho.": "It is this device.",
+  "Não roda a Ponte.": "Does not run Ponte.",
+  "Ainda não está pareado.": "Not paired yet.",
+  "Aguardando aprovação no outro aparelho.": "Waiting for approval on the other device.",
+  "Já está pareado.": "Already paired.",
+  "Está offline.": "It is offline.",
+  "Nenhum caminho até ele: nem Ponte, nem SSH.": "No way to reach it: neither Ponte nor SSH.",
+  "Sem SSH configurado para ele.": "No SSH set up for it.",
+  "O SSH não respondeu.": "SSH did not answer.",
+  "Ainda não conferido.": "Not checked yet.",
+  "Não deu para ler as sessões dele.": "Could not read its sessions.",
+  "Não está ligado por ADB neste PC.": "Not connected to this PC over ADB.",
+  "Ainda não existe na Ponte.": "Not in Ponte yet.",
   "Nenhum outro aparelho com Ponte no seu Tailscale.": "No other device with Ponte on your Tailscale.",
   "QUEM CONTROLA ESTE APARELHO": "WHO CONTROLS THIS DEVICE",
   "Agora controlando {name}.": "Now controlling {name}.",
@@ -1244,6 +1282,14 @@
     "en": "More than one device has this name. Use its id.",
     "pt": "Mais de um aparelho tem esse nome. Use o id."
   },
+  "MESH_PEER_NOT_PAIRED": {
+    "en": "{name} runs Ponte but is not paired with this device yet. Ask for access first.",
+    "pt": "{name} tem Ponte, mas ainda não está pareado com este aparelho. Peça acesso primeiro."
+  },
+  "DEVICE_NOT_PONTE": {
+    "en": "{name} does not run Ponte: it can be reached by SSH, not controlled.",
+    "pt": "{name} não roda a Ponte: dá para chegar por SSH, não controlar."
+  },
   "RD_PEER_CONTROL": {
     "en": "{name} is controlling this screen through Ponte.",
     "pt": "{name} está controlando esta tela pela Ponte."
@@ -1357,6 +1403,19 @@
     "pt": "Habilite Wake-on-LAN na BIOS/UEFI (Power On By PCI-E) e no Linux com sudo ethtool -s {interface} wol g. Acorde com Magic Packet para {mac} na porta UDP 9."
   }
 };
+  // Device vocabulary (ADR 0002): each code of /api/devices to its words, so every
+  // surface says the same thing. Values are keys of `english` (or proper names).
+  const deviceWords = {
+    kind: {pc:'PC',notebook:'Notebook',phone:'Celular',server:'Servidor',other:'Outro'},
+    status: {online:'online',offline:'offline',unknown:'sem conferir'},
+    route: {ponte:'Ponte',tailscale:'Tailscale',ssh:'SSH',adb:'ADB'},
+    ponte: {self:'este aparelho',paired:'pareado',available:'disponível',known:'não pareado',pending:'aguardando aprovação',denied:'negado',expired:'expirou',controlsMe:'controla este aparelho'},
+    adb: {device:'conectado',unauthorized:'sem autorização',offline:'offline'},
+    action: {screen:'Ver tela',control:'Controlar',terminal:'Terminal',agents:'Agentes',sessions:'Sessões',info:'Informações',files:'Arquivos',wake:'Acordar',pair:'Pedir acesso',revoke:'Revogar',mirror:'Espelhar no PC',approve:'Aprovar',deny:'Negar',continue:'Continuar aqui'},
+    why: {SELF:'É este aparelho.',NO_PONTE:'Não roda a Ponte.',NOT_PAIRED:'Ainda não está pareado.',PAIRING_PENDING:'Aguardando aprovação no outro aparelho.',ALREADY_PAIRED:'Já está pareado.',OFFLINE:'Está offline.',NO_ROUTE:'Nenhum caminho até ele: nem Ponte, nem SSH.',NO_SSH:'Sem SSH configurado para ele.',SSH_UNREACHABLE:'O SSH não respondeu.',UNCHECKED:'Ainda não conferido.',PROBE_FAILED:'Não deu para ler as sessões dele.',NO_ADB:'Não está ligado por ADB neste PC.',NOT_AVAILABLE:'Ainda não existe na Ponte.'},
+  };
+  // deviceWord('why','NO_PONTE') -> 'Does not run Ponte.'; an unknown code gives '' (never the raw code).
+  const deviceWord = (group,code) => hasOwn(deviceWords,group) && hasOwn(deviceWords[group],code) ? t(deviceWords[group][code]) : '';
   const storageKey = 'ponte-language';
   let language = 'en';
   try { if (localStorage.getItem(storageKey) === 'pt') language = 'pt'; } catch {}
@@ -1435,5 +1494,6 @@
   document.documentElement.lang = locale();
   document.addEventListener('change',event => { if (event.target.matches('[data-language-select]')) setLanguage(event.target.value); });
   window.addEventListener('storage',event => { if (event.key === storageKey) setLanguage(event.newValue === 'pt' ? 'pt' : 'en'); });
+  window.PonteI18n.deviceWord = deviceWord; window.PonteI18n.deviceWords = deviceWords;
   apply();
 })();

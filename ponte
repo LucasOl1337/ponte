@@ -1090,8 +1090,8 @@ def fleet_main(argv, sleep=time.sleep):
     go = sub.add_parser('continue', help='Continue a session on another machine: fast-forward the project, copy the session, resume it in a Ponte terminal.')
     go.add_argument('kind', choices=['claude', 'codex', 'jcode'])
     go.add_argument('session')
-    go.add_argument('--from', dest='source', required=True, help='Machine id from ./ponte fleet sessions (self or ssh:ALIAS).')
-    go.add_argument('--to', default='self', help='Destination machine (default: this one).')
+    go.add_argument('--from', dest='source', required=True, help='Machine from ./ponte fleet sessions: self, ssh:ALIAS, or any device id or name (./ponte devices).')
+    go.add_argument('--to', default='self', help='Destination machine, same forms as --from (default: this one).')
     go.add_argument('--git', choices=['branch', 'changes', 'none'], default='branch', help='branch: fast-forward the branch (default); changes: also carry uncommitted changes as a patch; none: leave the project alone.')
     go.add_argument('--no-resume', action='store_true', help='Copy the session only; do not open a terminal.')
     go.add_argument('--force', action='store_true', help='Copy even when the session is still open, or newer at the destination (a backup is kept).')
@@ -1214,9 +1214,50 @@ def rd_mesh(origin, token):
     return mesh.get('self') or {}, peers
 
 
+def rd_devices(origin, token):
+    """The home node's device list (ADR 0002), or None from a server without it."""
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+    request = Request(origin + '/api/devices?discover=1', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'})
+    try:
+        with urlopen(request, timeout=5) as response:
+            body = json.loads(response.read(1 << 20))
+    except HTTPError:
+        return None
+    return [item for item in (body.get('devices') if isinstance(body, dict) else None) or [] if isinstance(item, dict)]
+
+
+def rd_device_node(devices, device):
+    """Node id for any id of a device (ssh:ALIAS, tail:NAME, the mesh id...) or its name; '' is this node."""
+    wanted = device.casefold()
+    paired = lambda item: any(route.get('via') == 'ponte' and route.get('state') == 'paired' for route in item.get('routes') or [])
+    chosen = next((item for item in devices if wanted in (str(value).casefold() for value in item.get('ids') or [])), None)
+    named = [item for item in devices if str(item.get('name', '')).casefold() == wanted]
+    if not chosen and len(named) > 1:
+        raise ValueError(f'More than one device is called {device!r}; use one of its ids (./ponte devices).')
+    chosen = chosen or (named[0] if named else None)
+    if not chosen:
+        names = ', '.join(str(item.get('name')) for item in devices if paired(item)) or 'none paired'
+        raise ValueError(f'No device called {device!r} (paired: {names}).')
+    if chosen.get('self'):
+        return ''
+    if not any(route.get('via') == 'ponte' for route in chosen.get('routes') or []):
+        raise ValueError(f"{chosen.get('name')} does not run Ponte: it can be reached by SSH, not controlled.")
+    if not paired(chosen):
+        raise ValueError(f"{chosen.get('name')} runs Ponte but is not paired with this device yet: ./ponte mesh pair {chosen.get('name')}, then approve it there.")
+    return str(chosen['id'])
+
+
 def rd_node(origin, token, device):
-    """Node id for a device name (or id) from the home node's /api/mesh; '' is this node."""
+    """Node id for a device (any of its ids, or its name) from the home node's
+    /api/devices, or /api/mesh on a server without it; '' is this node."""
     from urllib.error import HTTPError, URLError
+    try:
+        devices = rd_devices(origin, token)
+    except (URLError, OSError, ValueError) as error:
+        raise ValueError(f'Ponte is not answering at {origin}. Start it with ./ponte start.') from error
+    if devices is not None:
+        return rd_device_node(devices, device)
     try:
         self_node, peers = rd_mesh(origin, token)
     except HTTPError as error:
@@ -1273,7 +1314,7 @@ def rd_browser():
 def rd_main(argv):
     """Open the remote desktop client: Chromium in --app mode with a profile of its own."""
     parser = argparse.ArgumentParser(prog='ponte rd', description='Control a paired device (or this PC) from a desktop window: Chromium app with its own profile, Keyboard Lock in full screen. The window has a device picker.')
-    parser.add_argument('device', nargs='?', help='Device name or node id (./ponte mesh list). Default: the first paired device online; this machine when none is paired. Use "self" for this machine.')
+    parser.add_argument('device', nargs='?', help='Device name or any of its ids (./ponte devices). Default: the first paired device online; this machine when none is paired. Use "self" for this machine.')
     parser.add_argument('--monitor', help='Monitor to show first (e.g. DP-3).')
     parser.add_argument('--print-url', action='store_true', help='Only print the URL (it carries the pairing key).')
     parser.add_argument('--notify', action='store_true', help='Also report success or failure as a desktop notification (the menu entry uses it).')
