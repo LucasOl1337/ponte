@@ -4,7 +4,7 @@ import path from 'node:path';
 import { isIPv4 } from 'node:net';
 import { constants } from 'node:fs';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { open, rename, unlink } from 'node:fs/promises';
+import { open, readdir, readFile, rename, unlink } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { ApiError, runCommand } from './process.mjs';
 import { normalizePeerAddress } from './tailscale.mjs';
@@ -42,6 +42,20 @@ const cleanName = (value, fallback = 'Ponte') => {
 };
 const cleanOs = value => (typeof value === 'string' ? value.replace(/[^\w .-]/g, '').slice(0, 24) : '') || 'linux';
 const isTailnetOrLoopback = ip => isIPv4(ip);
+// What kind of computer a node is, for the device list (`backend/devices.mjs`).
+// Optional everywhere: a node up to 0.1.0-alpha.33 sends none.
+export const NODE_KINDS = Object.freeze(['pc', 'notebook', 'server']);
+const cleanKind = value => NODE_KINDS.includes(value) ? value : null;
+// A battery that powers the system (not a mouse's) means a notebook.
+export async function detectNodeKind(powerDir = '/sys/class/power_supply') {
+  let entries = [];
+  try { entries = await readdir(powerDir); } catch { return 'pc'; }
+  for (const entry of entries.slice(0, 32)) {
+    const read = name => readFile(path.join(powerDir, entry, name), 'utf8').then(value => value.trim(), () => '');
+    if (await read('type') === 'Battery' && await read('scope') !== 'Device') return 'notebook';
+  }
+  return 'pc';
+}
 
 async function writePrivateJson(file, value) {
   const temporary = `${file}.${randomBytes(6).toString('hex')}.tmp`;
@@ -95,12 +109,14 @@ export const peerFailure = (error, name) => new ApiError(502, CERTIFICATE_ERRORS
 export async function createMesh({
   dataDir, env = process.env, runner = runCommand, identity, version = 'dev', caPem = null, selfPort = null,
   probePort = null, name = null, discover = null, enabled = true, pollInterval = 2000, now = () => Date.now(),
+  kind = null, powerDir,
 } = {}) {
   const nodeFile = path.join(dataDir, 'node.json');
   const meshFile = path.join(dataDir, 'mesh.json');
   const binary = env.PONTE_TAILSCALE_BIN || 'tailscale';
   const port = probePort || Number(env.PONTE_MESH_PORT) || selfPort || 8788;
   const selfOs = cleanOs(env.PONTE_NODE_OS || process.platform);
+  const selfKind = cleanKind(kind) || cleanKind(env.PONTE_NODE_KIND) || await detectNodeKind(powerDir);
 
   // Identity: a random id that never changes and the tailnet host name.
   let node = await readPrivateJson(nodeFile).catch(() => null);
@@ -114,7 +130,7 @@ export async function createMesh({
   const stored = await readPrivateJson(meshFile).catch(() => null);
   for (const item of Array.isArray(stored?.peers) ? stored.peers : []) {
     if (ID.test(item?.peerId) && isTailnetOrLoopback(item.ip) && Number.isInteger(item.port) && typeof item.token === 'string' && PEM.test(item.caPem || '')) {
-      peers.set(item.peerId, { peerId: item.peerId, name: cleanName(item.name), ip: item.ip, port: item.port, caPem: item.caPem, token: item.token, os: cleanOs(item.os), version: String(item.version || ''), pairedAt: item.pairedAt || null });
+      peers.set(item.peerId, { peerId: item.peerId, name: cleanName(item.name), ip: item.ip, port: item.port, caPem: item.caPem, token: item.token, os: cleanOs(item.os), kind: cleanKind(item.kind), version: String(item.version || ''), pairedAt: item.pairedAt || null });
     }
   }
   for (const item of Array.isArray(stored?.grants) ? stored.grants : []) {
@@ -150,7 +166,7 @@ export async function createMesh({
   async function hello(ip, probe = port) {
     const { status, body } = await tlsJson({ ip, port: probe, target: '/api/mesh/hello', timeout: HELLO_TIMEOUT });
     if (status !== 200 || body?.name !== 'Ponte' || !ID.test(body.nodeId || '') || !PEM.test(body.caPem || '')) throw new Error('not a Ponte node');
-    return { id: body.nodeId, name: cleanName(body.nodeName), version: String(body.version || '').slice(0, 40), os: cleanOs(body.os), caPem: body.caPem, ip, port: probe };
+    return { id: body.nodeId, name: cleanName(body.nodeName), version: String(body.version || '').slice(0, 40), os: cleanOs(body.os), kind: cleanKind(body.kind), caPem: body.caPem, ip, port: probe };
   }
 
   // Online tailnet peers without tags, owned by the owner of this node. The
@@ -184,7 +200,7 @@ export async function createMesh({
       for (const item of discovered.values()) {
         const peer = peers.get(item.id);
         if (peer && (peer.ip !== item.ip || peer.port !== item.port)) { peer.ip = item.ip; peer.port = item.port; dropAgent(item.id); moved = true; }
-        if (peer) { peer.name = item.name; peer.os = item.os; peer.version = item.version; }
+        if (peer) { peer.name = item.name; peer.os = item.os; peer.kind = item.kind; peer.version = item.version; }
       }
       if (moved) await save().catch(() => {});
       discoveredAt = now();
@@ -330,7 +346,7 @@ export async function createMesh({
     if (answer.status === 404) { settle(entry, 'expired'); return; }
     const result = answer.body?.status;
     if (answer.status === 200 && result === 'approved' && typeof answer.body.token === 'string' && answer.body.nodeId === entry.id) {
-      peers.set(entry.id, { peerId: entry.id, name: entry.name, ip: entry.ip, port: entry.port, caPem: entry.caPem, token: answer.body.token, os: entry.os, version: entry.version, pairedAt: new Date(now()).toISOString() });
+      peers.set(entry.id, { peerId: entry.id, name: entry.name, ip: entry.ip, port: entry.port, caPem: entry.caPem, token: answer.body.token, os: entry.os, kind: entry.kind, version: entry.version, pairedAt: new Date(now()).toISOString() });
       await save();
       settle(entry, 'paired');
       return;
@@ -377,6 +393,16 @@ export async function createMesh({
   }
   const controllerList = () => [...grants.values()].map(item => ({ id: item.nodeId, name: item.name, ip: item.ip, approvedAt: item.approvedAt, lastSeen: item.lastSeen }));
   const self = () => ({ id: node.id, name: node.name, os: selfOs, version });
+  // For the device list only (never served as is): every node this one knows,
+  // with the tailnet address and kind that the public views leave out.
+  function nodes() {
+    const list = new Map();
+    for (const item of grants.values()) list.set(item.nodeId, { id: item.nodeId, ip: item.ip, kind: null });
+    for (const item of peers.values()) list.set(item.peerId, { id: item.peerId, ip: item.ip, kind: item.kind || null });
+    for (const item of discovered.values()) list.set(item.id, { id: item.id, ip: item.ip, kind: item.kind || list.get(item.id)?.kind || null });
+    for (const item of outgoing.values()) if (!list.has(item.id)) list.set(item.id, { id: item.id, ip: item.ip, kind: item.kind || null });
+    return { self: { ...self(), kind: selfKind }, nodes: [...list.values()] };
+  }
 
   // The light view for /api/state: from the cache, never waiting on the network.
   function view() {
@@ -394,7 +420,7 @@ export async function createMesh({
   }
 
   function hellobody() {
-    return { name: 'Ponte', nodeId: node.id, nodeName: node.name, version, os: selfOs, caPem: caPem ? String(caPem) : null };
+    return { name: 'Ponte', nodeId: node.id, nodeName: node.name, version, os: selfOs, kind: selfKind, caPem: caPem ? String(caPem) : null };
   }
 
   // ------------------------------------------------------------------ relay
@@ -499,7 +525,8 @@ export async function createMesh({
     get id() { return node.id; },
     get name() { return node.name; },
     get enabled() { return enabled; },
-    hello: hellobody, refresh, view, list, active, createRequest, requestStatus, approve, deny, revoke, pair,
+    get kind() { return selfKind; },
+    hello: hellobody, refresh, view, list, nodes, active, createRequest, requestStatus, approve, deny, revoke, pair,
     authorizePeer, relay, connection, forget, isPeer: id => peers.has(id), close,
     // One JSON request to a paired node with its peer token and pinned CA.
     async call(peerId, { method = 'GET', target, body, timeout = 30000 }) {

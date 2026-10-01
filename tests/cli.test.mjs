@@ -197,6 +197,10 @@ test('configuration rejects public permissions, symlinks, relative paths and pla
   for (const hosts of ['work-vm', ['-oProxyCommand=id'], ['root@kvm'], ['a b'], [''], [{ host: 'x', label: '<b>' }], [{ host: 'x', label: '' }], ['x', 'x'], Array(17).fill(0).map((_, i) => `h${i}`)]) {
     assert.throws(() => runtimeSettings({ ssh: { hosts } }, f.env), /ssh\.hosts|SSH/, JSON.stringify(hosts));
   }
+  // node.kind: what this node says it is in the device list; unset is guessed.
+  assert.equal(runtimeSettings({}, f.env).nodeKind, null);
+  assert.equal(runtimeSettings({ node: { kind: 'notebook' } }, f.env).nodeKind, 'notebook');
+  for (const kind of ['phone', 'Notebook', '', 1]) assert.throws(() => runtimeSettings({ node: { kind } }, f.env), /node\.kind/, String(kind));
   const defaults = defaultPaths({ HOME: f.home });
   assert.equal(defaults.configFile, path.join(f.home, '.config/ponte/config.json'));
   assert.equal(defaults.dataDir, path.join(f.home, '.local/state/ponte'));
