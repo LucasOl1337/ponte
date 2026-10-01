@@ -1313,8 +1313,8 @@
     "pt": "Esta chave de aparelho só vale do aparelho para o qual foi aprovada."
   },
   "MESH_PEER_NOT_FOUND": {
-    "en": "This device is not paired or was not found on the tailnet.",
-    "pt": "Este aparelho não está pareado ou não foi encontrado no tailnet."
+    "en": "No paired device has that name or id.",
+    "pt": "Nenhum aparelho pareado tem esse nome ou id."
   },
   "MESH_PEER_AMBIGUOUS": {
     "en": "More than one device has this name. Use its id.",
