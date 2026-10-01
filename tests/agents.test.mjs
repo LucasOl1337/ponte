@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, mkdir, writeFile, symlink, rm, utimes } from 'node:fs/promises';
-import { createAgents, parseStat, agentKind, claudeMessages, codexMessages, lastMessages } from '../backend/agents.mjs';
+import { createAgents, parseStat, agentKind, agentServer, modelFromArgv, claudeMessages, codexMessages, lastMessages } from '../backend/agents.mjs';
 import { createApp } from '../server.mjs';
 
 const BOOT = 1790000000;
@@ -11,10 +11,15 @@ const SESSION = '00000000-0000-4000-8000-000000000001';
 const CODEX = '0190a000-0000-7000-8000-000000000003';
 const MAESTRI_WS = '00000000-0000-4000-8000-0000000000a1';
 const MAESTRI_TERM = '00000000-0000-4000-8000-0000000000a2';
+const JCODE_A = 'session_fixture_alpha';
+const JCODE_B = 'session_fixture_beta';
+const AGENT_START = 10000;
+const AGENT_STARTED_AT = BOOT * 1000 + AGENT_START * 10;
+const AGENT_WRITTEN_AT = AGENT_STARTED_AT + 20000;
 const TOKEN = 'test_token_with_at_least_thirty_two_characters';
 
 // A fake /proc and home: processes with stat/cmdline/cwd/environ/fd, plus the
-// Claude, Codex and Maestri files the scanner reads.
+// Claude, Codex, JCode and Maestri files the scanner reads.
 async function world(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ponte-agents-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -56,6 +61,22 @@ function hypr(clients, active = { value: null }) {
 
 const foot = (pid, address, title, ws = 2) => ({ pid, address, title, class: 'foot', monitor: 0, workspace: { id: ws, name: String(ws) } });
 const line = value => JSON.stringify(value);
+const jcodeMessage = (id, role, content, second = 0) => ({ id: `message_${id.replace(/-/g, '')}`, role, content, timestamp: `2026-09-28T10:00:${String(second).padStart(2, '0')}Z` });
+
+async function jcodeFiles(w, pid, session, { meta = {}, messages = [], snapshot = null, journal = true, writtenAt = AGENT_WRITTEN_AT } = {}) {
+  const mapping = await w.file(`.jcode/client_sessions/${pid}`, `${session}\n`);
+  await utimes(mapping, writtenAt / 1000, writtenAt / 1000);
+  let journalFile = null, snapshotFile = null;
+  if (journal) {
+    journalFile = await w.file(`.jcode/sessions/${session}.journal.jsonl`, line({ meta, append_messages: messages }));
+    await utimes(journalFile, writtenAt / 1000, writtenAt / 1000);
+  }
+  if (snapshot !== null) {
+    snapshotFile = await w.file(`.jcode/sessions/${session}.json`, line({ id: session, ...meta, messages: snapshot }));
+    await utimes(snapshotFile, writtenAt / 1000, writtenAt / 1000);
+  }
+  return { mapping, journalFile, snapshotFile };
+}
 
 test('parseStat survives spaces and parentheses in comm; agentKind sees through node wrappers', () => {
   const stat = parseStat('42 (tmux: server (x)) S 7 1 1 0 -1 0 0 0 0 0 30 12 0 0 20 0 1 0 555 1 1\n');
@@ -64,6 +85,307 @@ test('parseStat survives spaces and parentheses in comm; agentKind sees through 
   assert.equal(agentKind('node', ['node', '/usr/lib/node_modules/@openai/codex/bin/codex.js']), 'codex');
   assert.equal(agentKind('node', ['node', 'server.mjs']), null);
   assert.equal(agentKind('bash', ['bash']), null);
+});
+
+test('JCode native/truncated names and Hermes native/Python wrappers are detected in the process scan', async t => {
+  const w = await world(t);
+  const cases = [
+    { pid: 100, comm: 'jcode', argv: [path.join(w.home, 'bin', 'jcode')], kind: 'jcode' },
+    { pid: 200, comm: 'jcode-linux-x86', argv: [path.join(w.home, 'bin', 'jcode-linux-x86_64.bin')], kind: 'jcode' },
+    { pid: 300, comm: 'hermes', argv: [path.join(w.home, 'bin', 'hermes')], kind: 'hermes' },
+    { pid: 400, comm: 'python3', argv: ['python3', path.join(w.home, 'bin', 'hermes.py')], kind: 'hermes' },
+    { pid: 500, comm: 'node', argv: ['node', path.join(w.home, 'bin', 'jcode.js')], kind: 'jcode' },
+  ];
+  for (const { pid, comm, argv, kind } of cases) {
+    assert.equal(agentKind(comm, argv), kind);
+    await w.add(pid, comm, 1, { argv });
+  }
+  const { items, counts } = await createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 }).list();
+  assert.deepEqual(items.map(item => [item.pid, item.kind]).sort((a, b) => a[0] - b[0]), cases.map(({ pid, kind }) => [pid, kind]));
+  assert.deepEqual(counts, { agents: 5, automated: 0, working: 0, waiting: 0, terminals: 0, maestri: 0, byKind: { jcode: 3, hermes: 2 } });
+});
+
+test('Codex app-server and JCode serve/sandbox/code-mode daemons are excluded even with inherited Maestri ids', async t => {
+  const w = await world(t);
+  const environ = [`MAESTRI_WORKSPACE_ID=${MAESTRI_WS}`, `MAESTRI_TERMINAL_ID=${MAESTRI_TERM}`];
+  await w.add(100, 'maestri-app', 1);
+  await w.add(101, 'bash', 100, { environ });
+  await w.add(102, 'jcode', 101, { environ });
+  const modes = [
+    ['codex', 'codex', 'app-server'],
+    ['jcode', 'jcode', 'serve'],
+    ['jcode', 'jcode', 'sandbox'],
+    ['jcode-linux-x86', 'jcode-sandbox'],
+    ['jcode-linux-x86', 'jcode-code-mode'],
+    ['codex', 'codex-linux-sandbox'],
+    ['codex', 'codex-code-mode'],
+  ];
+  for (const [index, [comm, binary, ...args]] of modes.entries()) {
+    const argv = [path.join(w.home, 'bin', binary), ...args];
+    assert.equal(agentServer(argv), true, binary + ' ' + args.join(' '));
+    // A shared daemon can retain ids from the shell that originally launched it.
+    await w.add(200 + index * 2, comm, 1, { argv, environ });
+    await w.add(201 + index * 2, 'jcode', 200 + index * 2, { environ });
+  }
+  assert.equal(agentServer([path.join(w.home, 'bin', 'jcode'), '--model', 'fixture-model']), false);
+  assert.equal(agentServer([path.join(w.home, 'bin', 'codex'), 'exec', '--json']), false);
+  const { items, counts } = await createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 }).list();
+  assert.deepEqual(items.map(item => [item.pid, item.kind, item.where.type]), [[102, 'jcode', 'maestri']]);
+  assert.deepEqual(counts, { agents: 1, automated: 0, working: 0, waiting: 0, terminals: 0, maestri: 1, byKind: { jcode: 1 } });
+});
+
+test('one JCode client with a server child and nested helper remains one interactive terminal', async t => {
+  const w = await world(t);
+  await w.add(100, 'foot', 1);
+  await w.add(101, 'bash', 100);
+  await w.add(102, 'jcode-linux-x86', 101, { start: AGENT_START });
+  await w.add(103, 'jcode-linux-x86', 102, { argv: [path.join(w.home, 'bin', 'jcode'), 'serve'] });
+  await w.add(104, 'node', 103, { argv: ['node', path.join(w.home, 'bin', 'jcode.js')] });
+  await w.add(105, 'systemd-inhibit', 102);
+  const { items, counts } = await createAgents({ procRoot: w.proc, home: w.home, runner: hypr([foot(100, '0xa1', 'JCode fixture')]).runner, bootMs: BOOT * 1000 }).list();
+  assert.equal(items.length, 1);
+  assert.deepEqual([items[0].id, items[0].kind, items[0].where.type, items[0].state, items[0].canReply], [`p-102-${AGENT_START}`, 'jcode', 'terminal', 'working', true]);
+  assert.deepEqual(counts, { agents: 1, automated: 0, working: 1, waiting: 0, terminals: 0, maestri: 0, byKind: { jcode: 1 } });
+});
+
+test('a literal Claude print prompt named serve is not a daemon and remains an automated agent', async t => {
+  assert.equal(agentServer(['claude', '-p', 'serve']), false);
+  const w = await world(t);
+  await w.add(102, 'claude', 1, { argv: ['claude', '-p', 'serve'] });
+  const { items, counts } = await createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 }).list();
+  assert.equal(items.length, 1);
+  assert.deepEqual([items[0].pid, items[0].kind, items[0].headless, items[0].where.type], [102, 'claude', true, 'none']);
+  assert.deepEqual(counts, { agents: 0, automated: 1, working: 0, waiting: 0, terminals: 0, maestri: 0, byKind: {} });
+});
+
+test('after a Maestri restart the live app client wins over an orphan with the same workspace and terminal ids', async t => {
+  const w = await world(t);
+  const cwd = path.join(w.home, 'work', 'restart-fixture');
+  const environ = [`MAESTRI_WORKSPACE_ID=${MAESTRI_WS}`, `MAESTRI_TERMINAL_ID=${MAESTRI_TERM}`];
+  // The old app is gone, but its shell and client still retain both ids.
+  await w.add(101, 'bash', 1, { environ });
+  await w.add(102, 'jcode', 101, { cwd, environ, start: AGENT_START - 1000 });
+  await w.add(200, 'maestri-app', 1);
+  await w.add(201, 'bash', 200, { environ });
+  await w.add(202, 'jcode', 201, { cwd, environ, start: AGENT_START });
+  await w.file(`.maestri/workspaces/${MAESTRI_WS}/workspace.json`, line({ payload: {
+    name: 'Equipe restart fixture', nodes: [{ content: { terminal: { _0: { id: MAESTRI_TERM, name: 'Cliente novo fixture', agentType: 'jcode' } } } }],
+  } }));
+  await jcodeFiles(w, 102, JCODE_A, {
+    meta: { model: 'fixture-orphan-model' },
+    messages: [jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'assistant', [{ type: 'text', text: 'Atividade do órfão.' }])],
+  });
+  await jcodeFiles(w, 202, JCODE_B, {
+    meta: { model: 'fixture-live-model' },
+    messages: [jcodeMessage('00000000-0000-4000-8000-0000000000e2', 'assistant', [{ type: 'text', text: 'Atividade do cliente novo.' }], 1)],
+  });
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const { items, counts } = await agents.list();
+  assert.equal(items.length, 1);
+  assert.deepEqual([items[0].pid, items[0].id, items[0].title, items[0].where.type], [202, `p-202-${AGENT_START}`, 'Cliente novo fixture', 'maestri']);
+  assert.equal(items[0].model.name, 'fixture-live-model');
+  assert.equal(items[0].activity.text, 'Atividade do cliente novo.');
+  assert.deepEqual(counts, { agents: 1, automated: 0, working: 0, waiting: 0, terminals: 0, maestri: 1, byKind: { jcode: 1 } });
+  assert.deepEqual((await agents.transcript(items[0].id)).messages.map(message => message.text), ['Atividade do cliente novo.']);
+  await assert.rejects(agents.transcript(`p-102-${AGENT_START - 1000}`), { code: 'AGENT_NOT_FOUND' });
+});
+
+test('two JCode clients in the same cwd get distinct models and activity from their PID session mappings', async t => {
+  const w = await world(t);
+  const cwd = path.join(w.home, 'work', 'shared-fixture');
+  await w.add(100, 'foot', 1);
+  await w.add(101, 'bash', 100);
+  await w.add(102, 'jcode', 101, { cwd, start: AGENT_START });
+  // Without a sleep inhibitor, a pending journal tool call is the busy signal.
+  await w.add(200, 'foot', 1);
+  await w.add(201, 'bash', 200);
+  await w.add(202, 'jcode', 201, { cwd, start: AGENT_START });
+  await jcodeFiles(w, 102, JCODE_A, {
+    meta: { working_dir: cwd, provider_key: 'fixture-alpha-provider', model: 'fixture-alpha-model', reasoning_effort: 'high' },
+    messages: [jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'assistant', [{ type: 'tool_use', id: 'fixture-alpha-tool', name: 'read', input: { path: path.join(cwd, 'alpha.mjs'), description: 'Conferir fluxo alfa' } }], 1)],
+  });
+  await jcodeFiles(w, 202, JCODE_B, {
+    writtenAt: AGENT_WRITTEN_AT + 1000,
+    meta: { working_dir: cwd, provider_key: 'fixture-beta-provider', model: 'fixture-beta-model', reasoning_effort: 'low' },
+    messages: [jcodeMessage('00000000-0000-4000-8000-0000000000e2', 'assistant', [{ type: 'text', text: 'Fluxo beta pronto.' }], 2)],
+  });
+  const { items, counts } = await createAgents({ procRoot: w.proc, home: w.home, runner: hypr([foot(100, '0xa1', 'JCode'), foot(200, '0xa2', 'JCode')]).runner, bootMs: BOOT * 1000, now: () => AGENT_WRITTEN_AT + 60000 }).list();
+  const alpha = items.find(item => item.pid === 102), beta = items.find(item => item.pid === 202);
+  assert.equal(items.length, 2);
+  assert.equal(alpha.cwd, beta.cwd);
+  assert.notEqual(alpha.id, beta.id);
+  assert.deepEqual([alpha.model, beta.model], [
+    { name: 'fixture-alpha-model', effort: 'high', provider: 'fixture-alpha-provider' },
+    { name: 'fixture-beta-model', effort: 'low', provider: 'fixture-beta-provider' },
+  ]);
+  assert.deepEqual([alpha.activity, beta.activity], [
+    { role: 'tool', text: 'read: Conferir fluxo alfa', at: Date.parse('2026-09-28T10:00:01Z') },
+    { role: 'assistant', text: 'Fluxo beta pronto.', at: Date.parse('2026-09-28T10:00:02Z') },
+  ]);
+  assert.deepEqual([alpha.state, beta.state, alpha.transcript, beta.transcript], ['working', 'ready', true, true]);
+  assert.deepEqual(counts, { agents: 2, automated: 0, working: 1, waiting: 0, terminals: 0, maestri: 0, byKind: { jcode: 2 } });
+  assert.ok(!JSON.stringify(items).includes('client_sessions') && !JSON.stringify(items).includes('.journal.jsonl'));
+});
+
+test('a JCode journal transcript uses the JCode parser and does not expose reminders, thoughts or tool results', async t => {
+  const w = await world(t);
+  await w.add(102, 'jcode', 1, { start: AGENT_START });
+  await jcodeFiles(w, 102, JCODE_A, { messages: [
+    jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'user', [{ type: 'text', text: '<system-reminder>fixture context</system-reminder>' }]),
+    jcodeMessage('00000000-0000-4000-8000-0000000000e2', 'user', [{ type: 'text', text: 'Confere o fluxo da fixture.' }], 1),
+    jcodeMessage('00000000-0000-4000-8000-0000000000e3', 'assistant', [{ type: 'tool_use', id: 'fixture-read', name: 'read', input: { path: path.join(w.home, 'work', 'fixture.mjs'), description: 'Ler fixture' } }], 2),
+    jcodeMessage('00000000-0000-4000-8000-0000000000e4', 'user', [{ type: 'tool_result', tool_use_id: 'fixture-read', content: 'fixture result should stay private' }], 3),
+    jcodeMessage('00000000-0000-4000-8000-0000000000e5', 'assistant', [{ type: 'text', text: '<think>fixture thought should stay private</think>Fluxo conferido.' }], 4),
+  ] });
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000, now: () => AGENT_WRITTEN_AT + 60000 });
+  const [item] = (await agents.list()).items;
+  const transcript = await agents.transcript(item.id);
+  assert.equal(transcript.available, true);
+  assert.equal(transcript.kind, 'jcode');
+  assert.deepEqual(transcript.messages.map(message => [message.role, message.text]), [
+    ['user', 'Confere o fluxo da fixture.'], ['tool', 'read: Ler fixture'], ['assistant', 'Fluxo conferido.'],
+  ]);
+  assert.equal(transcript.updatedAt, AGENT_WRITTEN_AT);
+  assert.ok(!JSON.stringify(transcript).includes('should stay private'));
+  assert.ok(!JSON.stringify(transcript).includes('system-reminder'));
+});
+
+test('JCode transcript combines a compacted JSON snapshot with its journal without duplicate message ids', async t => {
+  const w = await world(t);
+  await w.add(102, 'jcode', 1, { start: AGENT_START });
+  const first = jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'user', [{ type: 'text', text: 'Primeiro pedido da fixture.' }]);
+  const shared = jcodeMessage('00000000-0000-4000-8000-0000000000e2', 'assistant', [{ type: 'text', text: 'Primeira resposta.' }], 1);
+  await jcodeFiles(w, 102, JCODE_A, {
+    snapshot: [first, shared],
+    messages: [shared,
+      jcodeMessage('00000000-0000-4000-8000-0000000000e3', 'user', [{ type: 'text', text: 'Segundo pedido da fixture.' }], 2),
+      jcodeMessage('00000000-0000-4000-8000-0000000000e4', 'assistant', [{ type: 'text', text: 'Resposta nova.' }], 3),
+    ],
+  });
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const [item] = (await agents.list()).items;
+  const transcript = await agents.transcript(item.id);
+  assert.equal(transcript.available, true);
+  assert.deepEqual(transcript.messages.map(message => message.text), ['Primeiro pedido da fixture.', 'Primeira resposta.', 'Segundo pedido da fixture.', 'Resposta nova.']);
+  assert.equal(transcript.truncated, false);
+});
+
+test('a mapped JCode session remains readable after the journal is folded entirely into its JSON snapshot', async t => {
+  const w = await world(t);
+  await w.add(102, 'jcode', 1, { start: AGENT_START });
+  await jcodeFiles(w, 102, JCODE_A, {
+    journal: false,
+    meta: { provider_key: 'fixture-json-provider', model: 'fixture-json-model' },
+    snapshot: [
+      jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'user', [{ type: 'text', text: 'Pedido compactado da fixture.' }]),
+      jcodeMessage('00000000-0000-4000-8000-0000000000e2', 'assistant', [{ type: 'text', text: 'Resposta compactada.' }], 1),
+    ],
+  });
+  const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+  const [item] = (await agents.list()).items;
+  assert.deepEqual([item.transcript, item.state, item.model], [true, 'ready', { name: 'fixture-json-model', effort: null, provider: 'fixture-json-provider' }]);
+  assert.deepEqual(item.activity, { role: 'assistant', text: 'Resposta compactada.', at: Date.parse('2026-09-28T10:00:01Z') });
+  const transcript = await agents.transcript(item.id);
+  assert.equal(transcript.available, true);
+  assert.deepEqual(transcript.messages.map(message => message.text), ['Pedido compactado da fixture.', 'Resposta compactada.']);
+  assert.equal(transcript.updatedAt, AGENT_WRITTEN_AT);
+});
+
+test('JCode ignores missing, stale or invalid PID mappings instead of guessing another session in the same cwd', async t => {
+  for (const mode of ['missing', 'stale', 'invalid']) await t.test(mode, async t => {
+    const w = await world(t);
+    const cwd = path.join(w.home, 'work', 'shared-fixture');
+    await w.add(102, 'jcode', 1, { cwd, start: AGENT_START });
+    // A recent unrelated session is not evidence of this client's identity.
+    await jcodeFiles(w, 999, JCODE_B, { meta: { working_dir: cwd, provider_key: 'fixture-provider', model: 'fixture-unrelated-model' }, messages: [jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'assistant', [{ type: 'text', text: 'Outra sessão.' }])] });
+    if (mode !== 'missing') {
+      const mapping = await w.file('.jcode/client_sessions/102', mode === 'invalid' ? '../session_fixture_beta\n' : `${JCODE_B}\n`);
+      const at = mode === 'stale' ? AGENT_STARTED_AT - 10000 : AGENT_WRITTEN_AT;
+      await utimes(mapping, at / 1000, at / 1000);
+    }
+    const agents = createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 });
+    const [item] = (await agents.list()).items;
+    assert.deepEqual([item.transcript, item.model, item.activity], [false, null, null]);
+    assert.deepEqual(await agents.transcript(item.id), { id: item.id, available: false, messages: [], truncated: false, updatedAt: null });
+  });
+});
+
+test('Maestri identity includes workspace, lead, reportsTo, role, live model, branch and latest tool activity', async t => {
+  const w = await world(t);
+  const recruitId = '00000000-0000-4000-8000-0000000000a3';
+  const roleId = '00000000-0000-4000-8000-0000000000a4';
+  const otherWorkspace = '00000000-0000-4000-8000-0000000000b1';
+  const otherTerminal = '00000000-0000-4000-8000-0000000000b2';
+  const leaderRepo = path.join(w.home, 'work', 'leader-fixture');
+  const recruitRepo = path.join(w.home, '.maestri', 'roles', roleId, 'project');
+  const otherRepo = path.join(w.home, 'work', 'other-fixture');
+  const environ = (workspace, terminal) => [`MAESTRI_WORKSPACE_ID=${workspace}`, `MAESTRI_TERMINAL_ID=${terminal}`];
+  const node = (id, name, agentType, isManager = false) => ({ content: { terminal: { _0: { id, name, agentType, isManager } } } });
+  await w.add(100, 'maestri-app', 1);
+  await w.add(101, 'bash', 100, { environ: environ(MAESTRI_WS, MAESTRI_TERM) });
+  await w.add(102, 'jcode', 101, { cwd: path.join(leaderRepo, 'src'), start: AGENT_START, argv: [path.join(w.home, 'bin', 'jcode'), '--model=fixture-launch-model', '--effort', 'high', '--provider-profile', 'fixture-launch-provider'] });
+  await w.add(103, 'systemd-inhibit', 102);
+  await w.add(201, 'bash', 100, { environ: environ(MAESTRI_WS, recruitId) });
+  await w.add(202, 'python3', 201, { cwd: path.join(recruitRepo, 'src'), start: AGENT_START, argv: ['python3', path.join(w.home, 'bin', 'hermes.py'), '-m', 'fixture-hermes-model', '--reasoning-effort=low'] });
+  await w.add(301, 'bash', 100, { environ: environ(otherWorkspace, otherTerminal) });
+  await w.add(302, 'codex', 301, { cwd: otherRepo, start: AGENT_START, argv: [path.join(w.home, 'bin', 'codex'), '--model', 'fixture-codex-model', '-c', 'model_reasoning_effort="medium"'] });
+  await w.file(`.maestri/workspaces/${MAESTRI_WS}/workspace.json`, line({ payload: {
+    name: ' Equipe \n fixture ', nodes: [node(MAESTRI_TERM, 'Regente fixture', 'jcode', true), node(recruitId, 'Revisor fixture', 'hermes')],
+    connections: [
+      { terminalIdA: MAESTRI_TERM, terminalIdB: recruitId },
+      { terminalIdA: MAESTRI_TERM, terminalIdB: MAESTRI_TERM },
+      { terminalIdA: MAESTRI_TERM, terminalIdB: otherTerminal },
+    ],
+  } }));
+  await w.file(`.maestri/workspaces/${otherWorkspace}/workspace.json`, line({ payload: { name: 'Outra equipe fixture', nodes: [node(otherTerminal, 'Regente fixture', 'codex')], connections: [] } }));
+  await w.file(`.maestri/roles/${roleId}/role.json`, line({ name: ' Revisor \n de testes ' }));
+  await w.file('work/leader-fixture/.git/HEAD', 'ref: refs/heads/fixture/leader\n');
+  const gitdir = path.join(w.home, 'git-fixture', 'worktrees', 'recruit');
+  await w.file(`.maestri/roles/${roleId}/project/.git`, `gitdir: ${path.relative(recruitRepo, gitdir)}\n`);
+  await w.file('git-fixture/worktrees/recruit/HEAD', 'ref: refs/heads/fixture/recruit\n');
+  await w.file('work/other-fixture/.git/HEAD', `${'a'.repeat(40)}\n`);
+  await jcodeFiles(w, 102, JCODE_A, {
+    meta: { provider_key: 'fixture-live-provider', model: 'fixture-live-model', reasoning_effort: 'low' },
+    messages: [
+      jcodeMessage('00000000-0000-4000-8000-0000000000e1', 'assistant', [{ type: 'text', text: 'Conferindo a contagem.' }], 1),
+      jcodeMessage('00000000-0000-4000-8000-0000000000e2', 'assistant', [{ type: 'tool_use', id: 'fixture-edit', name: 'apply_patch', input: { path: path.join(leaderRepo, 'src', 'fixture.mjs'), description: 'Ajustar contagem' } }], 2),
+    ],
+  });
+  const { items, counts } = await createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 }).list();
+  const leader = items.find(item => item.pid === 102), recruit = items.find(item => item.pid === 202), other = items.find(item => item.pid === 302);
+  assert.equal(items.length, 3);
+  assert.deepEqual(leader.maestri, { workspaceId: MAESTRI_WS, workspace: 'Equipe fixture', name: 'Regente fixture', maestro: true, lead: true, team: 1, reportsTo: null, role: null });
+  assert.deepEqual(recruit.maestri, { workspaceId: MAESTRI_WS, workspace: 'Equipe fixture', name: 'Revisor fixture', maestro: false, lead: false, team: 0, reportsTo: 'Regente fixture', role: 'Revisor de testes' });
+  assert.deepEqual(other.maestri, { workspaceId: otherWorkspace, workspace: 'Outra equipe fixture', name: 'Regente fixture', maestro: false, lead: false, team: 0, reportsTo: null, role: null });
+  assert.deepEqual([leader.title, recruit.title, other.title], ['Regente fixture', 'Revisor fixture', 'Regente fixture']);
+  assert.deepEqual([leader.branch, recruit.branch, other.branch], ['fixture/leader', 'fixture/recruit', 'aaaaaaaa']);
+  assert.deepEqual([leader.model, recruit.model, other.model], [
+    { name: 'fixture-live-model', effort: 'high', provider: 'fixture-launch-provider' },
+    { name: 'fixture-hermes-model', effort: 'low', provider: null },
+    { name: 'fixture-codex-model', effort: 'medium', provider: null },
+  ]);
+  assert.deepEqual(leader.activity, { role: 'tool', text: 'apply_patch: Ajustar contagem', at: Date.parse('2026-09-28T10:00:02Z') });
+  assert.deepEqual([recruit.activity, other.activity], [null, null]);
+  assert.ok(items.every(item => item.where.type === 'maestri' && !item.canReply));
+  assert.equal(counts.maestri, 3);
+});
+
+test('model options come from argv or the Maestri launch command when a transcript has no model', async t => {
+  const w = await world(t);
+  const jcode = path.join(w.home, 'bin', 'jcode');
+  assert.deepEqual(modelFromArgv([jcode, '--provider', 'fixture-provider', '--provider-profile=fixture-profile', '--model=fixture-model', '--reasoning-effort=high']), { provider: 'fixture-profile', model: 'fixture-model', effort: 'high' });
+  assert.deepEqual(modelFromArgv([path.join(w.home, 'bin', 'codex'), '-c', 'model="fixture-codex-model"', '-c', 'model_reasoning_effort="low"']), { model: 'fixture-codex-model', effort: 'low' });
+  assert.deepEqual(modelFromArgv([jcode, '--model']), {});
+  await w.add(100, 'maestri-app', 1);
+  await w.add(101, 'bash', 100, { environ: [`MAESTRI_WORKSPACE_ID=${MAESTRI_WS}`, `MAESTRI_TERMINAL_ID=${MAESTRI_TERM}`] });
+  await w.add(102, 'jcode', 101, { argv: [jcode] });
+  await w.file(`.maestri/workspaces/${MAESTRI_WS}/workspace.json`, line({ payload: {
+    name: 'Equipe fixture', nodes: [{ content: { terminal: { _0: { id: MAESTRI_TERM, name: 'Modelo fixture', command: `"${jcode}" --model "fixture-canvas-model" --effort high --provider-profile fixture-canvas-profile` } } } }],
+  } }));
+  const { items } = await createAgents({ procRoot: w.proc, home: w.home, runner: hypr([]).runner, bootMs: BOOT * 1000 }).list();
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].model, { name: 'fixture-canvas-model', effort: 'high', provider: 'fixture-canvas-profile' });
+  assert.equal(items[0].transcript, false);
 });
 
 test('a Claude Code in a foot window is matched by pid ancestry, its session file and its transcript', async t => {

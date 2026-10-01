@@ -4,6 +4,11 @@
   const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
   // Portuguese source messages are stable translation keys. English is the global default.
   const english = {
+  "Regente (conexões do canvas)": "Team lead (canvas connections)",
+  "Equipe de {name}": "Team of {name}",
+  "{count} agentes": "{count} agents",
+  "{count} AGENTES · {busy} EM AÇÃO": "{count} AGENTS · {busy} BUSY",
+  "Só leitura por enquanto. Envio pelo Maestri precisa de uma ponte autorizada e conectada a este agente.": "Read-only for now. Sending through Maestri needs an authorized bridge connected to this agent.",
   "Conferir todas as conexões": "Check every connection",
   "SESSÕES DE AGENTES": "AGENT SESSIONS",
   "Continuar aqui traz o projeto por fast-forward, copia a conversa e reabre o agente num terminal do Ponte. Nada é descartado: se o destino tiver mudanças ou a branch divergir, para e avisa.": "Continue here fast-forwards the project, copies the conversation and reopens the agent in a Ponte terminal. Nothing is discarded: if the destination has changes or the branch diverged, it stops and tells you.",
