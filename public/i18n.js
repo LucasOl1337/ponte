@@ -760,6 +760,7 @@
   "Esconder os offline": "Hide offline devices",
   "Procurando aparelhos…": "Looking for devices…",
   "Procurar sessões de novo": "Look for sessions again",
+  "Sessões de {name} · mostrar todas": "Sessions on {name} · show all",
   "Nenhuma sessão recente em outro aparelho.": "No recent session on another device."
 };
   // Public API/proxy copy mirrors the authoritative catalogs; parity is tested.

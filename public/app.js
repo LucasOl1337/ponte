@@ -303,7 +303,7 @@ function renderMesh() {
   const fold = devices.some(folded) ? `<button type="button" class="text-button devices-fold" data-devices-fold="1" aria-expanded="${devicesShowOffline}">${escaped(devicesShowOffline ? t('Esconder os offline') : i18n.plural('Mostrar {count} aparelho offline', 'Mostrar {count} aparelhos offline', hiddenCount))}</button>` : '';
   $('#devices-list').innerHTML = shown.map(deviceRow).join('') + fold;
   const status = $('#devices-status');
-  const message = deviceList ? '' : devicesBusy || !devicesLoadedAt ? t('Procurando aparelhos…') : devicesError ? devicesError : '';
+  const message = devicesError || (!deviceList && (devicesBusy || !devicesLoadedAt) ? t('Procurando aparelhos…') : '');
   status.hidden = !message;
   i18n.write(status, message);
 }
@@ -364,7 +364,10 @@ document.addEventListener('click', async event => {
     if (where === 'screen') { setTargetNode(device.self ? '' : device.id); navigate('tela'); }
     else if (where === 'terminal') deviceTerminal(device);
     else if (where === 'agents') { setTargetNode(device.self ? '' : device.id); navigate('terminais'); $('#agents-heading')?.scrollIntoView?.({block:'start'}); }
-    else if (where === 'sessions') { loadFleet(); $('#fleet-card').scrollIntoView?.({block:'start'}); }
+    else if (where === 'sessions') {
+      fleetSessionMachine = device.can.sessions.machine;
+      renderFleet(); loadFleet(); $('#fleet-card').scrollIntoView?.({block:'start'});
+    }
     return;
   }
   const more = event.target.closest('[data-device-more]');
@@ -398,7 +401,7 @@ function followMesh() {
   const changed = key !== devicesMeshKey;
   devicesMeshKey = key;
   if (!devicesLoadedAt) { loadDevices({ force:devicesBusy && changed }); return; }
-  if (changed) loadDevices({ force:true });
+  loadDevices({ force:changed });
 }
 
 // ------------------------------------------------------------------- fleet
@@ -407,6 +410,7 @@ function followMesh() {
 // Always the home node's view (home:true), through /api/action like the mesh,
 // since the phone's proxy only relays /api/state and /api/action.
 let fleetInfo = null, fleetLoadedAt = 0, fleetBusy = false, fleetJob = null, fleetSignature = '';
+let fleetSessionMachine = '';
 const FLEET_REFRESH_MS = 60000;
 async function fleetAction(type, payload = {}, timeout = 14000) {
   const response = await api('/action', { method:'POST', home:true, timeout, headers:{'Content-Type':'application/json'}, body:JSON.stringify({type,...payload}) });
@@ -427,6 +431,7 @@ function fleetRemoteSessions() {
   const items = [];
   for (const machine of fleetInfo?.machines || []) {
     if (machine.id === 'self' || !machine.probe?.ok) continue;
+    if (fleetSessionMachine && machine.id !== fleetSessionMachine) continue;
     for (const session of machine.probe.sessions || []) if (tools[session.kind] !== false) items.push({ ...session, machine:machine.id, machineName:machine.name });
   }
   return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 12);
@@ -455,7 +460,12 @@ function renderFleet() {
   if (card.hidden) return;
   $('#fleet-refresh').disabled = fleetBusy;
   renderFleetJob();
-  const signature = JSON.stringify([fleetInfo?.checkedAt, fleetBusy, fleetJob?.status, i18n.language]);
+  const filter = $('#fleet-session-filter');
+  filter.hidden = !fleetSessionMachine;
+  const machineName = (fleetInfo?.machines || []).find(item => item.id === fleetSessionMachine)?.name
+    || deviceList?.devices.find(item => item.can?.sessions?.machine === fleetSessionMachine)?.name || '';
+  filter.textContent = fleetSessionMachine ? t('Sessões de {name} · mostrar todas', { name:machineName }) : '';
+  const signature = JSON.stringify([fleetInfo?.checkedAt, fleetBusy, fleetJob?.status, fleetSessionMachine, i18n.language]);
   if (signature === fleetSignature) return;
   fleetSignature = signature;
   // The machines themselves live in "Seus aparelhos"; this card keeps the
@@ -490,6 +500,7 @@ function fleetOpenTerminal(id) {
   selectTerminal(id); terminalPaused = false; navigate('terminais');
 }
 $('#fleet-refresh').addEventListener('click', () => loadFleet(true));
+$('#fleet-session-filter').addEventListener('click', () => { fleetSessionMachine = ''; renderFleet(); });
 document.addEventListener('click', event => {
   const go = event.target.closest('[data-fleet-continue]');
   if (go && !go.disabled) { fleetContinue({ from:go.dataset.fleetMachine, to:'self', kind:go.dataset.fleetKind, session:go.dataset.fleetContinue }); return; }

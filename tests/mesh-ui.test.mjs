@@ -410,3 +410,44 @@ test('an SSH terminal reply after switching target never inserts a home session 
   assert.equal(h.run('targetNode'), NOTEBOOK);
   assert.equal(h.run("terminalSessions.some(session=>session.id==='home-ssh-session')"), false);
 });
+
+test('a list failure is visible with cached rows and is retried by state polling outside Home after the TTL', async () => {
+  let broken = false;
+  const h = harness({ respond: (path, options, body) => broken && body?.type === 'devices.list' ? fail(503, {error:'Device list temporarily unavailable.'}) : null });
+  await flush();
+  broken = true;
+  await h.run('loadDevices({force:true})');
+  assert.ok(h.row('notebook-teste'), 'the last good list is retained');
+  assert.equal(h.el('#devices-status').hidden, false);
+  assert.match(h.el('#devices-status').textContent, /temporarily unavailable/);
+  h.run("navigate('tela'); devicesLoadedAt = Date.now()-DEVICES_REFRESH_MS-1");
+  const before = h.calls.filter(call => call.body?.type === 'devices.list').length;
+  broken = false;
+  await h.run('pollState()');
+  await flush();
+  assert.equal(h.calls.filter(call => call.body?.type === 'devices.list').length, before+1);
+  assert.equal(h.el('#devices-status').hidden, true);
+});
+
+test('Sessions filters by can.sessions.machine before the 12-item limit, and Show all clears the filter', async () => {
+  const mine = {id:'my-session',kind:'claude',title:'Session on selected server',updatedAt:1};
+  const others = Array.from({length:12}, (_,index) => ({id:`other-${index}`,kind:'claude',title:`Other server session ${index}`,updatedAt:100+index}));
+  const fleet = {checkedAt:1,machines:[
+    {id:'self',name:'pc-teste',probe:{ok:true,tools:{claude:true},sessions:[]}},
+    {id:'ssh:servidor-teste',name:'servidor-teste',probe:{ok:true,sessions:[mine]}},
+    {id:'ssh:other-server',name:'other-server',probe:{ok:true,sessions:others}},
+  ]};
+  const h = harness({respond:(path,options,body) => body?.type === 'fleet.list' ? ok(fleet) : null});
+  await flush();
+  await h.run('loadFleet()');
+  assert.doesNotMatch(h.el('#fleet-sessions').textContent,/Session on selected server/);
+  h.row('servidor-teste').querySelector('[data-device-go="sessions"]').click();
+  await flush();
+  assert.match(h.el('#fleet-sessions').textContent,/Session on selected server/);
+  assert.doesNotMatch(h.el('#fleet-sessions').textContent,/Other server session/);
+  assert.equal(h.el('#fleet-session-filter').hidden,false);
+  assert.equal(h.el('#fleet-session-filter').textContent,'Sessions on servidor-teste · show all');
+  h.el('#fleet-session-filter').click();
+  assert.equal(h.el('#fleet-session-filter').hidden,true);
+  assert.match(h.el('#fleet-sessions').textContent,/Other server session/);
+});
