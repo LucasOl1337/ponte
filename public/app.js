@@ -10,7 +10,7 @@ const escaped = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&am
 const storageKey = 'ponte-pair-token';
 // Kept equal to package.json. When the PC reports a different version the page
 // reloads once, so a phone left open never runs stale code after an update.
-const UI_VERSION = '0.1.0-alpha.42';
+const UI_VERSION = '0.1.0-alpha.43';
 let token = '';
 let state = null;
 let connected = false;
@@ -2083,7 +2083,8 @@ function stopPointerMoves() {
   flushMovement();
 }
 screenPreview.addEventListener('pointerdown',event => {
-  if (!screenshotURL || event.target.closest('button')) return;
+  // A live video session may never have shown a JPEG frame: the canvas is the picture then.
+  if (!(screenshotURL || screenCanvasOn) || event.target.closest('button')) return;
   if (event.button > 0) return;
   dismissScreenMessages();
   // A still frame is not the PC: clicking on it would land on whatever the

@@ -580,6 +580,23 @@ test('direct touch: a tap clicks the mapped pixel, a held move starts a semantic
   assert.deepEqual(actions(), [{ type: 'mouse.clickAt', monitor: 'HDMI-A-1', x: 192, y: 108, button: 'right' }]);
 });
 
+test('video-only screen: touches work when no JPEG frame ever arrived', async () => {
+  const h = powerUiHarness();
+  await flushTicks();
+  // The APK's video tunnel can open straight into the canvas, with no screenshot URL at all.
+  h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL=null;screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;showVideoCanvas(true);$('#screen-video').width=1920;$('#screen-video').height=1080;applyScreenZoom();$('#monitor-select').value='HDMI-A-1'");
+  const preview = h.el('#screen-preview');
+  const evt = (type, id, x, y) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, target: preview, preventDefault(){}, closest: () => null });
+  preview.dispatchEvent(evt('pointerdown', 1, 150, 110));
+  preview.dispatchEvent(evt('pointerdown', 2, 240, 110));
+  preview.dispatchEvent(evt('pointermove', 1, 100, 110));
+  preview.dispatchEvent(evt('pointermove', 2, 290, 110));
+  preview.dispatchEvent(evt('pointerup', 1, 100, 110));
+  preview.dispatchEvent(evt('pointerup', 2, 290, 110));
+  await flushTicks();
+  assert.ok(h.run('screenScale') > 1.5, `pinch on the video canvas zooms (scale ${h.run('screenScale')})`);
+});
+
 test('direct touch tolerates finger jitter and a deliberate one-finger move drags like a mouse', async () => {
   const h = powerUiHarness();
   await flushTicks();

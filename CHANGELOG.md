@@ -2,6 +2,19 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.43 (2026-10-01)
+
+Touch works on the Screen again when the phone opens straight into video. Page only.
+
+- **The Screen ignored every touch after a cold start with the video tunnel.** The gesture
+  handler only ran once a JPEG frame had been shown (`screenshotURL`), a check from before the
+  APK's video tunnel (alpha.33). An app opened from scratch on the `versionCode 22` APK goes
+  straight to the video canvas, so taps, pinch zoom and scrolling did nothing until something
+  forced a JPEG frame. Found on the Poco while testing the floating controls: two pointers
+  reached the preview and the zoom stayed at 1.
+- Verified: a new test pinches on a video-only screen (fails before, passes after); `npm test`
+  on the Poco after the update.
+
 ## 0.1.0-alpha.42 (2026-10-01)
 
 The remote desktop's video climbs back after a dip, on the PC's Ponte Remoto too. Server only.
