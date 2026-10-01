@@ -517,3 +517,5 @@ body[data-keyboard-open=true] .terminal-page{padding-bottom:20px}
 .key-command-new{display:flex;gap:6px;margin-top:8px}
 .key-command-new input{flex:1;min-width:0;margin:0;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);padding:6px 10px;font:14px ui-monospace,monospace}
 .terminal-keys .key-sheet{bottom:auto;top:calc(100% + 6px)}
+
+.dailywork-card{grid-column:1/-1}.dailywork-item{padding:14px 0;border-bottom:1px solid var(--border)}.dailywork-item p{margin:8px 0;color:var(--muted);white-space:pre-wrap}.dailywork-card details{margin:20px 0}.dailywork-card summary{cursor:pointer;font-weight:600}.dailywork-card form{display:grid;gap:12px;margin-top:20px}.dailywork-card label{display:grid;gap:6px}.dailywork-card input,.dailywork-card textarea,.dailywork-card select{width:100%;box-sizing:border-box}.dailywork-card dialog{max-width:680px;width:calc(100% - 40px)}.dailywork-card pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:45vh;overflow:auto;padding:16px;background:var(--surface2)}

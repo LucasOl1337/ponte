@@ -33,6 +33,7 @@ test('native TLS requires the dedicated certificate, validates names, authentica
     nativeTls: { cert, key: await readFile(keyFile) },
     desktop: { getState: async () => ({ hostname: 'test-pc' }), close: async () => {} },
     audio: { close: async () => {} },
+    dailywork: { summary: async () => ({ estado: 'indisponivel', pendencias: [], agora: [], contador_pendencias: null }), action: async () => { throw new Error('unused'); } },
   });
   t.after(() => app.close());
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
@@ -52,7 +53,7 @@ test('native TLS requires the dedicated certificate, validates names, authentica
   await assert.rejects(request('/api/health', { ca: undefined }), error => error.code === 'DEPTH_ZERO_SELF_SIGNED_CERT');
   await assert.rejects(request('/api/health', { servername: 'wrong.example' }), error => error.code === 'ERR_TLS_CERT_ALTNAME_INVALID');
   assert.equal((await request('/api/state')).status, 401);
-  assert.deepEqual(JSON.parse((await request('/api/state', { headers: { Authorization: `Bearer ${TOKEN}` } })).body), { hostname: 'test-pc', version: '0.1.0-alpha.45' });
+  assert.deepEqual(JSON.parse((await request('/api/state', { headers: { Authorization: `Bearer ${TOKEN}` } })).body), { hostname: 'test-pc', version: '0.1.0-alpha.45', dailywork: { estado: 'indisponivel', pendencias: [], agora: [], contador_pendencias: null } });
   assert.equal((await request('/api/state', { headers: { Authorization: `Bearer ${TOKEN}`, Origin: 'https://evil.example' } })).status, 403);
   assert.equal((await request('/api/state', { servername: '', headers: { Authorization: `Bearer ${TOKEN}`, Host: 'evil.example' } })).status, 403);
   assert.equal((await request('/server.key')).status, 404);

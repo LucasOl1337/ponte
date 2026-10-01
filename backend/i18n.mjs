@@ -1,4 +1,8 @@
 export const messages = {
+  DAILYWORK_UNAVAILABLE: { en: 'DailyWork is unavailable.', pt: 'DailyWork indisponível.' },
+  DAILYWORK_UNCERTAIN: { en: 'DailyWork did not confirm this action. Consult the receipt before retrying.', pt: 'DailyWork não confirmou a ação. Consulte o recibo antes de repetir.' },
+  DAILYWORK_REJECTED: { en: 'DailyWork refused the action.', pt: 'DailyWork recusou a ação.' },
+  DAILYWORK_ACTION_INVALID: { en: 'This DailyWork action is not allowed.', pt: 'Esta ação do DailyWork não é permitida.' },
   "INVALID_AGENT_QUERY": {
     "en": "Invalid conversation cursor or wait time.",
     "pt": "Cursor de conversa ou tempo de espera inválido."

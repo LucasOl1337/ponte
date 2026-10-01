@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createDailyWork } from './backend/dailywork.mjs';
 import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -207,6 +208,7 @@ export async function createApp(options = {}) {
   const tokenBytes = Buffer.from(initialized.token);
   const guard = createRequestGuard(options.trustedHosts || settings?.trustedHosts || (env.OMARCHY_REMOTE_TRUSTED_HOSTS || '').split(',').filter(Boolean));
   const desktop = options.desktop || createDesktop({ env });
+  const dailywork = options.dailywork || createDailyWork({ descriptor: env.PONTE_DAILYWORK_DESCRIPTOR });
   const audio = options.audio || await createAudioStore(initialized.dataDir, { env });
   const limits = createLimits();
   const live = createLiveStreaming(desktop);
@@ -468,6 +470,7 @@ export async function createApp(options = {}) {
         if (state?.capabilities) state.capabilities = { ...state.capabilities, stt: await transcriber.available(), rd: (await rd.capabilities()).rd };
         if (state && typeof state === 'object') state.version = uiVersion;
         if (state && typeof state === 'object' && caller.kind === 'owner' && mesh.active()) state.mesh = mesh.view();
+        if (state && caller.kind === 'owner') state.dailywork = await dailywork.summary();
         json(res, 200, state); return;
       }
       // The fleet: machines, SSH routes, agent sessions everywhere, and
@@ -517,6 +520,12 @@ export async function createApp(options = {}) {
           let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
           // Pairing actions for the phone, whose proxy reaches no /api/mesh route.
           // Fleet actions too: the phone's proxy has no /api/fleet route.
+          if (typeof value?.type === 'string' && value.type.startsWith('dailywork.')) {
+            if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
+            try { json(res, 200, await dailywork.action(value.type, value)); }
+            catch (e) { json(res, e.status || 503, { ok: false, errorCode: e.code || 'DAILYWORK_UNAVAILABLE', error: 'DailyWork não confirmou a ação.', confirmed: Boolean(e.confirmed), dailywork: e.dailywork || { codigo: 'DAILYWORK_INDISPONIVEL' } }); }
+            return;
+          }
           if (typeof value?.type === 'string' && value.type.startsWith('fleet.')) {
             if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
             json(res, value.type === 'fleet.handoff' ? 202 : 200, await fleetCall(value.type, value)); return;
