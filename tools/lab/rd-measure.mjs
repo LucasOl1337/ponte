@@ -169,10 +169,20 @@ const avg = list => list.length ? Math.round(list.reduce((s, f) => s + f.bytes, 
 const pongs = texts.filter(m => m.t === 'pong').map(m => m.at - m.c);
 const gaps = frames.slice(1).map((f, i) => ({ at: f.at, gap: f.at - frames[i].at }));
 const freezes = gaps.filter(g => g.gap > 250);
+// A same-step capacity probe is still an encoder restart. Report its actual
+// arrival gap separately, not hidden in the whole run's p95.
+const restartGaps = (session?.metrics.decisions || []).filter(d => d.reason !== 'shed').map(d => {
+  const index = frames.findIndex(f => f.at > d.at && f.keyframe);
+  const key = frames[index], before = frames[index - 1];
+  return { s: Math.round((d.at - t0) / 10) / 100, reason: d.reason, step: d.step,
+    keyframeAfterMs: key ? Math.round(key.at - d.at) : null,
+    arrivalGapMs: key && before ? Math.round(key.at - before.at) : null };
+});
 const report = {
   url: app ? '(in-process)' : url, ready: ready && { monitor: ready.monitor, width: ready.width, height: ready.height, fps: ready.fps, codec: ready.codec },
   ...(client ? { client } : {}), ...(plan.length ? { plan: opt('plan'), netem } : {}), ...(opt('scene') ? { scene: opt('scene') } : {}),
   firstFrameMs, frames: frames.length, seconds: Math.round(span * 10) / 10,
+  ...(session ? { restartGaps } : {}),
   fps: Math.round((frames.length - 1) / span * 10) / 10,
   kbps: Math.round(frames.reduce((s, f) => s + f.bytes, 0) * 8 / span / 1000),
   keyframes: keys.length, avgKeyBytes: avg(keys), avgDeltaBytes: avg(deltas),
