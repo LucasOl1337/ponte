@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { KEY_CODES, BUTTON_CODES, HELPER, absolutePoint, absoluteToLayout, logicalBox, createRdInput } from '../backend/rd-input.mjs';
@@ -128,6 +129,84 @@ test('the helper in dry-run logs the evdev frames it would write, and releases w
   input.stop();
   const after = events(await readLog(logFile, l => events(l).includes('ponte-rd-keys:KEY_LEFTSHIFT=0') && events(l).includes('ponte-rd-abs:BTN_LEFT=0')));
   for (const released of ['ponte-rd-keys:KEY_A=0', 'ponte-rd-keys:KEY_LEFTSHIFT=0', 'ponte-rd-abs:BTN_LEFT=0']) assert.ok(after.includes(released), released);
+});
+
+test('key accounting counts only applied acknowledgements, not repeats, heartbeat or unmatched ups', { skip: !hasPython }, async t => {
+  const input = createRdInput({ dryRun: true });
+  t.after(() => input.stop());
+  input.key('KeyA', true);
+  input.key('KeyA', true);
+  input.alive();
+  input.key('KeyA', false);
+  input.key('KeyA', false);
+  input.key('NotAKey', true);
+  await input.stop(); // all key acknowledgements must be included after drain
+  assert.deepEqual(input.keyStats(), {
+    queued: 4, injected: 2, discarded: { unknown_code: 1, duplicate_down: 1, up_without_down: 1 },
+    unconfirmed: {}, pending: 0, dryRun: true,
+  });
+  assert.equal(input.ready, false);
+  assert.ok(input.stats.acked > input.keyStats().injected);
+});
+
+function fakeWorker() {
+  const children = [];
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    child.written = [];
+    child.stdin = Object.assign(new EventEmitter(), {
+      write(text) { child.written.push(JSON.parse(text)); return false; },
+      end() {},
+    });
+    child.kill = () => child.emit('close', null);
+    children.push(child);
+    return child;
+  };
+  return { children, spawn };
+}
+
+test('backpressure is pending, helper exits and tracking overflow remain unconfirmed, three failures reject keys', async () => {
+  const fake = fakeWorker();
+  const input = createRdInput({ spawn: fake.spawn, log: { error() {} } });
+  input.key('KeyA', true);
+  fake.children[0].stdout.emit('data', '{"ready":true}\n');
+  assert.equal(input.keyStats().pending, 1, 'write false is backpressure, not rejection');
+  fake.children[0].stdout.emit('data', '{"s":1,"applied":true}\n');
+  assert.equal(input.keyStats().injected, 1);
+  for (let i = 0; i < 4097; i++) input.key('KeyB', true);
+  fake.children[0].stdout.emit('data', '{"s":2,"applied":true}\n');
+  assert.equal(input.keyStats().injected, 1, 'an evicted ack is not claimed as injected');
+  assert.equal(input.keyStats().unconfirmed.tracking_overflow, 1);
+  fake.children[0].emit('close', 1);
+  assert.equal(input.ready, false);
+  assert.equal(input.keyStats().unconfirmed.helper_exit, 4096);
+  for (let i = 0; i < 2; i++) { input.key('KeyC', true); fake.children.at(-1).emit('close', 1); }
+  assert.equal(input.key('KeyD', true), false);
+  assert.equal(input.keyStats().discarded.worker_disabled, 1);
+  assert.equal(input.keyStats().pending, 0);
+  assert.equal(input.keyStats().queued, 4100);
+});
+
+test('stdin failures and legacy acks cannot be called injected, and an old worker close cannot clear a new worker', async () => {
+  const fake = fakeWorker();
+  const input = createRdInput({ spawn: fake.spawn, log: { error() {} } });
+  input.key('KeyA', true);
+  fake.children[0].stdout.emit('data', '{"s":1}\n');
+  assert.equal(input.keyStats().unconfirmed.legacy_ack, 1);
+  input.key('KeyB', true);
+  fake.children[0].stdin.emit('error', new Error('EPIPE'));
+  assert.equal(input.keyStats().unconfirmed.stdin_error, 1);
+  fake.children[0].emit('error', new Error('spawn failed'));
+  input.key('KeyC', true);
+  fake.children[0].emit('close', 1);
+  assert.equal(input.keyStats().pending, 1);
+  fake.children[1].stdout.emit('data', '{"s":3,"applied":true}\n');
+  assert.equal(input.keyStats().injected, 1);
+  const stopped = input.stop();
+  fake.children[1].emit('close', 0);
+  await stopped;
+  assert.equal(input.keyStats().pending, 0);
 });
 
 test('the helper releases a held key after the watchdog when nothing arrives, and on EOF', { skip: !hasPython }, async t => {

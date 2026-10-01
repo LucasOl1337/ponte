@@ -10,7 +10,7 @@ import { createCapture } from './rd-capture.mjs';
 import { createRdInput } from './rd-input.mjs';
 import { createRateControl, scaleBox } from './rd-rate.mjs';
 import { copyToClipboard } from './images.mjs';
-import { connect, pipe } from './ws.mjs';
+import { connect } from './ws.mjs';
 import { commandExists, runCommand } from './process.mjs';
 
 export const RD_VERSION = 1;
@@ -19,6 +19,28 @@ export const MAX_CLIP_BYTES = 1024 * 1024;
 const HELLO_TIMEOUT_MS = 5000;
 const AUTHED_MAX_MESSAGE = MAX_CLIP_BYTES + 64 * 1024; // a clip may be 1 MiB; before the hello only 64 KiB
 const epochNow = () => performance.timeOrigin + performance.now();
+const INPUT_REASONS = ['invalid_payload', 'ended', 'not_holder', 'view_only', 'input_unavailable', 'early_overflow', 'unknown_code', 'worker_disabled', 'stopped', 'duplicate_down', 'up_without_down', 'helper_noop', 'legacy_ack', 'stdin_error', 'spawn_error', 'helper_exit', 'stop_without_ack', 'stop_timeout', 'tracking_overflow'];
+const countReason = (counts, reason) => { counts[reason] = (counts[reason] || 0) + 1; };
+const parseText = text => { try { return JSON.parse(text); } catch { return null; } };
+const newSessionId = () => randomBytes(16).toString('hex');
+const validSessionId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id);
+function observedInput(value) {
+  if (!value || typeof value !== 'object') return null;
+  const result = {};
+  for (const name of ['received', 'queued', 'injected', 'pending']) {
+    if (!Number.isSafeInteger(value[name]) || value[name] < 0) return null;
+    result[name] = value[name];
+  }
+  for (const name of ['discarded', 'unconfirmed']) {
+    result[name] = {};
+    for (const reason of INPUT_REASONS) {
+      const count = value[name]?.[reason];
+      if (Number.isSafeInteger(count) && count > 0) result[name][reason] = count;
+    }
+  }
+  result.dryRun = value.dryRun === true;
+  return result;
+}
 
 // Video message header, big-endian (DataView's default): u8 type = 1,
 // u8 flags (bit0 keyframe), u16 reserved, u32 seq, f64 server send time (ms epoch).
@@ -143,6 +165,7 @@ export function createRemoteDesktop({
   }
   const clip = clipboard || createClipboard({ env, spawn });
   const sessions = new Set();
+  const relays = new Set();
   let holder = null, closed = false;
   let capsCache = null;
   const metrics = [];
@@ -171,13 +194,18 @@ export function createRemoteDesktop({
   function accept(ws, req, { authorize, route }) {
     if (closed) { ws.close(1001, 'restarting'); return; }
     let state = 'hello', session = null;
+    const keys = { received: 0, discarded: {} };
     const early = [];
     const timer = setTimeout(() => ws.close(1008, 'hello timeout'), HELLO_TIMEOUT_MS);
     ws.once('close', () => { clearTimeout(timer); if (session) { session.end('closed'); sessions.delete(session); } });
     ws.on('message', (data, binary) => {
+      const isKey = !binary && parseText(data)?.t === 'key';
+      if (isKey) keys.received++;
       if (state === 'open') { if (!binary) session.message(data); return; }
+      if (state === 'relayed') return;
       if (state === 'hello') { state = 'checking'; hello(data, binary); return; }
       if (early.length < 256 && !binary) early.push(data);
+      else if (isKey) countReason(keys.discarded, 'early_overflow');
     });
     async function hello(data, binary) {
       clearTimeout(timer);
@@ -195,7 +223,7 @@ export function createRemoteDesktop({
       if (ws.readyState !== 'open') return;
       if (!caps.video) { refuse(ws, 'RD_UNAVAILABLE', 1011); return; }
       ws.maxMessage = AUTHED_MAX_MESSAGE;
-      session = new Session(ws, message, principal, caps);
+      session = new Session(ws, message, principal, caps, keys);
       sessions.add(session);
       try { await session.start(); }
       catch (error) { log.error?.(`[rd] session failed: ${error.message}`); refuse(ws, error.code || 'RD_UNAVAILABLE', 1011); return; }
@@ -207,27 +235,72 @@ export function createRemoteDesktop({
     // are the two joined, so a dead link can be told apart from a busy one.
     async function relay(target, message, principal) {
       if (principal.kind !== 'owner') { refuse(ws, 'MESH_OWNER_ONLY', 1008); return; } // no A → B → C
-      let upstream;
+      let upstream, linked = false, finished = false, sessionId = newSessionId(), targetObserved = null;
+      let forwarded = 0, targetObservedAt = null;
+      const draining = new Set();
+      const closeCode = code => (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1011) || (code >= 3000 && code <= 4999) ? code : 1001;
+      const record = {
+        close(reason, code = 1001) {
+          if (finished) return;
+          finished = true;
+          relays.delete(record);
+          const lost = keys.received - forwarded - Object.values(keys.discarded).reduce((sum, count) => sum + count, 0);
+          if (lost > 0) keys.discarded.relay_closed = lost;
+          log.info?.(`[rd] session closed ${JSON.stringify({ role: 'relay', sessionId, reason, input: { received: keys.received, forwarded, discarded: keys.discarded, unobserved: Math.max(0, forwarded - (targetObserved?.received || 0)) }, targetObserved, targetObservedAt, complete: false })}`);
+          if (ws.readyState === 'open') ws.close(closeCode(code), reason);
+          if (upstream?.readyState === 'open') upstream.close(closeCode(code), reason);
+        },
+      };
+      relays.add(record);
+      ws.once('close', code => record.close('client_closed', code === 1006 ? 1001 : code));
       try { upstream = await connect(target.url, { ca: target.ca, checkServerIdentity: target.checkServerIdentity, timeout: 5000 }); }
-      catch (error) { refuse(ws, target.failure?.(error) || 'MESH_PEER_UNREACHABLE', 1011); return; }
-      if (ws.readyState !== 'open') { upstream.terminate(); return; }
-      ws.once('close', () => { if (state !== 'relayed') upstream.terminate(); });
-      upstream.once('close', () => { if (state !== 'relayed') refuse(ws, 'PEER_OFFLINE', 1011); });
-      upstream.once('message', (reply, binary) => {
-        let answer = null;
-        if (!binary) { try { answer = JSON.parse(reply); } catch {} }
+      catch (error) { refuse(ws, target.failure?.(error) || 'MESH_PEER_UNREACHABLE', 1011); record.close('connect_failed', 1011); return; }
+      if (ws.readyState !== 'open') { upstream.terminate(); record.close('client_closed'); return; }
+      ws.maxMessage = AUTHED_MAX_MESSAGE;
+      upstream.once('close', code => {
+        if (!linked) refuse(ws, 'PEER_OFFLINE', 1011);
+        record.close('target_closed', code === 1006 ? 1011 : code);
+      });
+      // RD keeps WebSocket parsing for control accounting and fragmented text.
+      // Binary video stays a Buffer, never decoded. Pause the source while the
+      // destination's stream queue drains, as socket.pipe did before.
+      const forward = (source, destination, data) => {
+        if (destination.readyState !== 'open' || destination.socket.destroyed || !destination.socket.writable) return false;
+        const writable = destination.send(data);
+        if (!writable && !draining.has(destination)) {
+          draining.add(destination);
+          source.socket.pause();
+          destination.socket.once('drain', () => { draining.delete(destination); source.socket.resume(); });
+        }
+        return true;
+      };
+      const forwardClient = (data, binary) => {
+        const isKey = !binary && parseText(data)?.t === 'key';
+        if (forward(ws, upstream, data)) { if (isKey) forwarded++; }
+        else if (isKey) countReason(keys.discarded, 'target_closed');
+      };
+      upstream.on('message', (reply, binary) => {
+        const answer = binary ? null : parseText(reply);
         if (answer?.t === 'error' && answer.code === 'PAIRING_REQUIRED') {
           // The far node no longer knows this node's token: the link is dead.
           target.revoked?.();
-          upstream.terminate(); refuse(ws, target.revoked ? 'PEER_REVOKED' : 'PAIRING_REQUIRED', 1008); return;
+          upstream.terminate(); refuse(ws, target.revoked ? 'PEER_REVOKED' : 'PAIRING_REQUIRED', 1008); record.close('peer_revoked', 1008); return;
         }
-        if (ws.readyState !== 'open' || upstream.readyState !== 'open') { upstream.terminate(); refuse(ws, 'PEER_OFFLINE', 1011); return; }
-        ws.send(reply);
-        for (const text of early.splice(0)) upstream.send(text);
-        state = 'relayed';
-        pipe(ws, upstream);
+        if (answer?.t === 'ready' && validSessionId(answer.sessionId)) sessionId = answer.sessionId;
+        if (answer?.t === 'input-stats' && answer.sessionId === sessionId) {
+          const input = observedInput(answer.input);
+          if (input) { targetObserved = input; targetObservedAt = epochNow(); }
+        }
+        if (ws.readyState !== 'open' || upstream.readyState !== 'open') { upstream.terminate(); refuse(ws, 'PEER_OFFLINE', 1011); record.close('link_closed', 1011); return; }
+        forward(upstream, ws, reply);
+        if (!linked) {
+          linked = true;
+          state = 'relayed';
+          ws.on('message', forwardClient);
+          for (const text of early.splice(0)) forwardClient(text, false);
+        }
       });
-      upstream.send(JSON.stringify({ ...message, token: target.token }));
+      upstream.send(JSON.stringify({ ...message, token: target.token, sessionId }));
     }
   }
 
@@ -238,8 +311,10 @@ export function createRemoteDesktop({
   }
 
   class Session {
-    constructor(ws, hello, principal, caps) {
+    constructor(ws, hello, principal, caps, keys) {
       this.ws = ws; this.principal = principal; this.caps = caps;
+      this.id = principal.kind === 'peer' && validSessionId(hello.sessionId) ? hello.sessionId : newSessionId();
+      this.keys = keys;
       this.fps = Math.max(1, Math.min(maxFps, Math.round(Number(hello.maxFps) || maxFps)));
       this.requestedMonitor = typeof hello.monitor === 'string' ? hello.monitor : null;
       this.adapt = createAdaptation({ fps: this.fps, kbps, now });
@@ -269,7 +344,7 @@ export function createRemoteDesktop({
       if (this.caps.input && this.wantsInput) {
         if (holder && holder !== this) holder.take();
         holder = this;
-        this.input = createInput({ python, dryRun: inputMode === 'dry-run', logFile: inputLog, mapping, env, spawn, now, log });
+        this.input = createInput({ python, dryRun: inputMode === 'dry-run', logFile: inputLog, mapping, env, spawn, now, log, onStats: () => this.reportInput() });
         this.input.setMonitors(this.monitors);
         this.input.start();
       }
@@ -377,7 +452,7 @@ export function createRemoteDesktop({
       const input = !!this.input;
       this.announced = { monitor: params.monitor, codec: sps.codec, width: sps.width, height: sps.height };
       this.sendJson({
-        t: 'ready', v: RD_VERSION, node: nodeInfo(), monitors, monitor: params.monitor,
+        t: 'ready', v: RD_VERSION, sessionId: this.id, node: nodeInfo(), monitors, monitor: params.monitor,
         width: sps.width, height: sps.height, fps: params.fps, codec: sps.codec,
         input: { abs: input, rel: input, keys: input, clipboard: true },
       });
@@ -403,15 +478,39 @@ export function createRemoteDesktop({
 
     sendJson(value) { if (this.ws.readyState === 'open') this.ws.send(JSON.stringify(value)); }
 
+    inputSummary() {
+      const worker = this.input?.keyStats?.() || { queued: 0, injected: 0, pending: 0, discarded: {}, unconfirmed: {}, dryRun: inputMode === 'dry-run' };
+      const discarded = { ...this.keys.discarded };
+      for (const [reason, count] of Object.entries(worker.discarded)) discarded[reason] = (discarded[reason] || 0) + count;
+      return { received: this.keys.received, ...worker, discarded };
+    }
+
+    reportInput() {
+      if (this.ended || this.inputTimer) return;
+      this.inputTimer = setTimeout(() => {
+        this.inputTimer = null;
+        this.sendJson({ t: 'input-stats', sessionId: this.id, input: this.inputSummary() });
+      }, 100);
+      this.inputTimer.unref?.();
+    }
+
     async message(text) {
       let m;
       try { m = JSON.parse(text); } catch { return; }
-      if (!m || typeof m !== 'object' || this.ended) return;
+      if (!m || typeof m !== 'object') return;
+      if (this.ended) { if (m.t === 'key') countReason(this.keys.discarded, 'ended'); return; }
       const input = holder === this ? this.input : null;
       input?.alive();
       const num = value => typeof value === 'number' && Number.isFinite(value);
       switch (m.t) {
-        case 'key': if (typeof m.code === 'string' && m.code.length <= 32) input?.key(m.code, m.down === true); break;
+        case 'key':
+          if (typeof m.code !== 'string' || m.code.length > 32 || typeof m.down !== 'boolean') countReason(this.keys.discarded, 'invalid_payload');
+          else if (!this.wantsInput) countReason(this.keys.discarded, 'view_only');
+          else if (!this.caps.input) countReason(this.keys.discarded, 'input_unavailable');
+          else if (!input) countReason(this.keys.discarded, 'not_holder');
+          else input.key(m.code, m.down);
+          this.reportInput();
+          break;
         case 'move': if (num(m.x) && num(m.y)) input?.move(this.monitor, m.x, m.y); break;
         case 'rel': if (num(m.dx) && num(m.dy)) input?.rel(m.dx, m.dy); break;
         case 'btn': if (Number.isInteger(m.b) && m.b >= 0 && m.b <= 4) input?.button(m.b, m.down === true); break;
@@ -456,11 +555,12 @@ export function createRemoteDesktop({
     }
 
     end(reason) {
-      if (this.ended) return;
+      if (this.ended) return this.endPromise;
       this.ended = true;
       clearInterval(this.timer);
+      clearTimeout(this.inputTimer);
       this.capture?.stop();
-      this.input?.stop();
+      const stopped = this.input?.stop();
       this.stopClipboard?.();
       if (holder === this) holder = null;
       const summary = summarize(this.metrics);
@@ -471,6 +571,13 @@ export function createRemoteDesktop({
       const started = this.metrics.startedAt;
       const steps = this.metrics.decisions.slice(-10).map(d => `${d.reason} ${((d.at - started) / 1000).toFixed(1)} s${d.step !== undefined ? ` W${d.step}` : ''}`).join(', ');
       log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}${steps ? `; ${steps}` : ''}`);
+      this.endPromise = Promise.resolve(stopped).then(() => {
+        const input = this.inputSummary();
+        summary.input = input;
+        summary.sessionId = this.id;
+        log.info?.(`[rd] session closed ${JSON.stringify({ role: 'target', sessionId: this.id, reason, input })}`);
+      });
+      return this.endPromise;
     }
   }
 
@@ -481,7 +588,10 @@ export function createRemoteDesktop({
     metrics,
     async close() {
       closed = true;
-      for (const session of sessions) { session.end('shutdown'); session.ws.close(1001, 'restarting'); }
+      const pending = [];
+      for (const relay of relays) relay.close('shutdown');
+      for (const session of sessions) { pending.push(session.end('shutdown')); session.ws.close(1001, 'restarting'); }
+      await Promise.all(pending);
     },
   };
 }

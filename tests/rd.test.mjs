@@ -127,6 +127,37 @@ test('a second session takes over: the first gets taken and is closed with 4001;
   assert.ok(app.rd.holder && app.rd.sessions[0] === app.rd.holder);
 });
 
+const closedRecords = logs => logs.filter(line => line.startsWith('[rd] session closed ')).map(line => JSON.parse(line.slice('[rd] session closed '.length)));
+
+function syntheticCapture({ onUnit }) {
+  return {
+    start(params) { onUnit({ params, keyframe: true, data: Buffer.alloc(40), sps: { codec: 'avc1.640034', width: params.width, height: params.height }, firstAt: performance.now(), lastAt: performance.now() }); },
+    restart() {}, stop() {}, running: true,
+  };
+}
+
+function inputRig(t, options = {}) {
+  const logs = [];
+  const rd = createRemoteDesktop({
+    inputMode: 'dry-run', readMonitors: async () => MONITORS, probe: async () => 0,
+    exists: async () => true, clipboard: fakeClipboard(), makeCapture: syntheticCapture,
+    log: { info: line => logs.push(line), error() {} }, ...options,
+  });
+  t.after(() => rd.close());
+  const open = async (hello = {}) => {
+    const ws = Object.assign(new EventEmitter(), {
+      readyState: 'open', bufferedAmount: 0, sent: [],
+      send(text) { if (typeof text === 'string') this.sent.push(JSON.parse(text)); return true; },
+      close(code, reason) { this.readyState = 'closed'; this.emit('close', code, reason); },
+    });
+    rd.accept(ws, {}, { authorize: async () => ({ kind: 'owner' }) });
+    ws.emit('message', JSON.stringify({ t: 'hello', v: 1, token: TOKEN, ...hello }), false);
+    await new Promise(resolve => setImmediate(resolve));
+    return ws;
+  };
+  return { rd, logs, open };
+}
+
 test('a view-only session never steals the holder, and an input-unavailable session owns nothing', async t => {
   const inputs = [];
   const options = {
@@ -164,6 +195,86 @@ test('a view-only session never steals the holder, and an input-unavailable sess
   assert.equal(inputs[0].keys, 1, 'only the controller feeds the helper');
   await open(unavailable);
   assert.equal(unavailable.holder, null);
+});
+
+test('target session closed is after helper drain and contains safe received/queued/injected/reason counts', async t => {
+  const rig = inputRig(t);
+  const ws = await rig.open({ sessionId: 'unsafe-session-id\n' });
+  for (const message of [
+    { t: 'key', code: 'KeyA', down: true }, { t: 'key', code: 'KeyA', down: true },
+    { t: 'key', code: 'KeyA', down: false }, { t: 'key', code: 'KeyA', down: false },
+    { t: 'key', code: 'SECRET_UNSUPPORTED_CODE', down: true }, { t: 'key', code: 'KeyB', down: 'SECRET_VALUE' },
+  ]) ws.emit('message', JSON.stringify(message), false);
+  await rig.rd.close();
+  const [record] = closedRecords(rig.logs);
+  assert.match(record.sessionId, /^[a-f0-9]{32}$/);
+  assert.deepEqual(record.input, {
+    received: 6, queued: 4, injected: 2, pending: 0, dryRun: true,
+    discarded: { invalid_payload: 1, unknown_code: 1, duplicate_down: 1, up_without_down: 1 }, unconfirmed: {},
+  });
+  assert.equal(rig.logs.join('\n').includes('SECRET'), false, 'no key codes, token or typed text in metrics');
+  assert.equal(closedRecords(rig.logs).length, 1);
+});
+
+test('keys over the bounded early queue are accounted as early_overflow, not injected', async t => {
+  let resolveProbe;
+  const rig = inputRig(t, { probe: () => new Promise(resolve => { resolveProbe = resolve; }) });
+  const ws = await rig.open();
+  for (let i = 0; i < 257; i++) ws.emit('message', JSON.stringify({ t: 'key', code: 'KeyA', down: true }), false);
+  resolveProbe(0);
+  await new Promise(resolve => setImmediate(resolve));
+  await rig.rd.close();
+  const [record] = closedRecords(rig.logs);
+  assert.equal(record.input.received, 257);
+  assert.equal(record.input.queued, 256);
+  assert.equal(record.input.injected, 1);
+  assert.equal(record.input.discarded.early_overflow, 1);
+  assert.equal(record.input.discarded.duplicate_down, 255);
+  assert.equal(record.input.pending, 0);
+});
+
+test('RD relay accounts early and fragmented keys, observes only target acks, and closes without an invented injected total', async t => {
+  const targetLogs = [], relayLogs = [];
+  const notebook = await rdApp(t, { probe: async () => 0, exists: async () => true, makeCapture: syntheticCapture, log: { info: line => targetLogs.push(line), error() {} } });
+  const pc = await rdApp(t, { probe: async () => 0, exists: async () => true, makeCapture: syntheticCapture, log: { info: line => relayLogs.push(line), error() {} } }, { routeRd: async () => ({ url: notebook.url, token: TOKEN }) });
+  const c = await client(pc.url);
+  c.send({ t: 'key', code: 'KeyB', down: true });
+  const key = JSON.stringify({ t: 'key', code: 'KeyC', down: true });
+  const fragment = (opcode, text, fin) => {
+    const payload = Buffer.from(text), mask = Buffer.from([1, 2, 3, 4]);
+    return Buffer.concat([Buffer.from([(fin ? 128 : 0) | opcode, 128 | payload.length]), mask, Buffer.from(payload.map((byte, i) => byte ^ mask[i % 4]))]);
+  };
+  c.ws.socket.write(fragment(1, key.slice(0, 10), false));
+  await c.until(() => c.texts.find(message => message.t === 'ready'), 'relayed ready');
+  c.ws.socket.write(fragment(0, key.slice(10), true));
+  c.send({ t: 'key', code: 'KeyC', down: true });
+  c.send({ t: 'key', code: 'KeyC', down: false });
+  await c.until(() => c.texts.find(message => message.t === 'input-stats' && message.input.received === 4 && message.input.pending === 0), 'target input accounting');
+  c.ws.close();
+  await c.until(() => closedRecords(targetLogs).length && closedRecords(relayLogs).length, 'both session closed logs');
+  const [target] = closedRecords(targetLogs), [relay] = closedRecords(relayLogs);
+  assert.equal(relay.sessionId, target.sessionId);
+  assert.equal(relay.input.received, 4);
+  assert.equal(relay.input.forwarded, 4);
+  assert.equal(Object.hasOwn(relay.input, 'injected'), false);
+  assert.equal(relay.targetObserved.injected, 3);
+  assert.equal(relay.targetObserved.discarded.duplicate_down, 1);
+  assert.equal(relay.complete, false, 'last target snapshot is not a guaranteed final total');
+  assert.equal(target.input.injected, 3);
+  assert.equal(target.input.pending, 0);
+});
+
+test('a relay which cannot connect records early keys as relay_closed, with no target injection claim', async t => {
+  const logs = [];
+  const pc = await rdApp(t, { exists: async () => true, makeCapture: syntheticCapture, log: { info: line => logs.push(line), error() {} } }, { routeRd: async () => ({ url: 'ws://127.0.0.1:9/api/rd', token: TOKEN }) });
+  const c = await client(pc.url);
+  c.send({ t: 'key', code: 'KeyA', down: true });
+  await c.until(() => c.closed && closedRecords(logs).length, 'relay failed closed');
+  const [record] = closedRecords(logs);
+  assert.equal(record.input.received, 1);
+  assert.equal(record.input.forwarded, 0);
+  assert.equal(record.input.discarded.relay_closed, 1);
+  assert.equal(record.targetObserved, null);
 });
 
 test('the hello is required and checked: wrong token → PAIRING_REQUIRED and 1008; bad Origin → 403 before any upgrade', { skip: !canRun }, async t => {

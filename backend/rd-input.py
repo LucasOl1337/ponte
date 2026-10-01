@@ -105,9 +105,9 @@ wheel_rest = [0, 0]       # hi-res units not yet worth a whole notch
 def press(device, code, value):
     key = (device, code)
     if value and key in held:
-        return            # the client's auto-repeat: the target repeats by itself
+        return 'duplicate_down'  # the target repeats by itself
     if not value and key not in held:
-        return
+        return 'up_without_down'
     device.write(EV_KEY, code, 1 if value else 0)
     device.syn()
     if value:
@@ -133,13 +133,17 @@ def handle(msg):
     if 'k' in msg:
         code = int(msg['k'])
         if code in KEYS:
-            press(keys, code, msg.get('v'))
+            reason = press(keys, code, msg.get('v'))
+            return {'applied': reason is None, **({'reason': reason} if reason else {})}
+        return {'applied': False, 'reason': 'unknown_code'}
     elif 'b' in msg:
         code = int(msg['b'])
         if code in BUTTONS:
             # A release goes to the device that pressed, even if the other one moved since.
             device = next((d for d, c in held if c == code), pointer) if not msg.get('v') else pointer
-            press(device, code, msg.get('v'))
+            reason = press(device, code, msg.get('v'))
+            return {'applied': reason is None, **({'reason': reason} if reason else {})}
+        return {'applied': False, 'reason': 'unknown_button'}
     elif 'a' in msg:
         x, y = msg['a']
         absolute.write(EV_ABS, ABS_X, clamp(x, 0, 65535))
@@ -166,6 +170,9 @@ def handle(msg):
         keys.syn()
     elif msg.get('x'):
         release_all()
+    else:
+        return {'applied': False, 'reason': 'heartbeat'}
+    return {'applied': True}
 
 
 def main():
@@ -195,13 +202,13 @@ def main():
             try:
                 msg = json.loads(line)
                 if isinstance(msg, dict):
-                    handle(msg)
+                    result = handle(msg)
                     if 's' in msg:
-                        acks.append(msg['s'])
+                        acks.append({'s': msg['s'], **result})
             except (ValueError, TypeError, KeyError):
                 continue
         if acks:
-            sys.stdout.write(''.join(json.dumps({'s': s}) + '\n' for s in acks))
+            sys.stdout.write(''.join(json.dumps(ack) + '\n' for ack in acks))
             sys.stdout.flush()
 
 
