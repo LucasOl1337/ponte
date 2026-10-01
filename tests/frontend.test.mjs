@@ -870,6 +870,20 @@ test('auto quality judges the link against what the PC can capture, not the requ
   assert.equal(old.window(7, 10), null, 'without the header the requested rate is still the yardstick');
 });
 
+test('auto quality opens where the last session settled, or at sharp without recent history', () => {
+  const adapterSource = source.slice(source.indexOf('const LIVE_LADDER ='), source.indexOf('\nfunction applyLiveProfile('));
+  const context = vm.createContext({ Math, Number, String });
+  vm.runInContext(`${adapterSource}\nglobalThis.start = liveStartRung;`, context);
+  const at = 1_800_000_000_000;
+  assert.equal(context.start('', at), 'sharp', 'no history opens readable');
+  assert.equal(context.start(`balanced|${at - 60000}`, at), 'balanced', 'a slow link from a minute ago is remembered');
+  assert.equal(context.start(`light|${at - 29 * 60000}`, at), 'light');
+  assert.equal(context.start(`light|${at - 31 * 60000}`, at), 'sharp', 'an old answer is forgotten');
+  assert.equal(context.start(`light|${at + 60000}`, at), 'sharp', 'a clock that went back is not trusted');
+  assert.equal(context.start('huge|1', at), 'sharp');
+  assert.equal(context.start('light', at), 'sharp', 'no time, no memory');
+});
+
 test('auto quality ignores partial windows', () => {
   const { adapter, clock } = adapterHarness();
   for (let i = 0; i < 20; i++) adapter.frame();
