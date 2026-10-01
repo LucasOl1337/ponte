@@ -79,3 +79,6 @@ Old ids keep their old path: a 16-hex mesh id and `self`/`ssh:ALIAS` for the fle
 | `DEVICE_NOT_PONTE` (409) | it is reachable only by SSH: use a terminal (`--agent ssh --host ALIAS`), not `?node=` |
 | `FLEET_MACHINE_NOT_FOUND` (404) | the fleet has no SSH machine for it |
 
+## Words
+
+Surfaces never show a code. `public/i18n.js` maps each one to the vocabulary of [CONTEXT.md](../CONTEXT.md#devices-adr-0002): `PonteI18n.deviceWord(group, code)` with the groups `kind`, `status`, `route`, `ponte` (route states), `adb`, `action` (the `can` keys plus `approve`, `deny`, `continue`) and `why`; an unknown code gives an empty string. `PonteI18n.deviceWords` is the table itself.

@@ -417,3 +417,22 @@ test('Status lines of the print dialog and the agent reply follow a language cha
  h.run("imageResult(t('Copiada no PC. Cole com Ctrl+V onde quiser.'))");h.i18n.setLanguage('en');await flush();
  assert.equal(h.el('#image-result').textContent,'Copied on the PC. Paste it with Ctrl+V wherever you like.');assert.equal(h.el('#agent-reply-status').textContent,'Sent to the agent.');
 });
+
+// ADR 0002, slice 3: every code /api/devices can send has words in both
+// languages, so no surface ever shows a raw code.
+test('device vocabulary: kinds, states, routes, actions and every why code read in English and Portuguese', async () => {
+ const {DEVICE_KINDS,CAPABILITIES}=await import('../backend/devices.mjs');
+ const source=await readFile(new URL('../backend/devices.mjs',import.meta.url),'utf8');
+ const body=source.slice(source.indexOf('function capabilities('),source.indexOf('// The pure part'));
+ const whys=[...new Set([...body.matchAll(/'([A-Z][A-Z_]{3,})'/g)].map(match=>match[1]))];
+ assert.ok(whys.length>=12,whys.join());
+ const h=harness();const word=h.i18n.deviceWord;
+ const groups={kind:DEVICE_KINDS,status:['online','offline','unknown'],route:['ponte','tailscale','ssh','adb'],ponte:['self','paired','available','known','pending','denied','expired','controlsMe'],adb:['device','unauthorized','offline'],action:[...CAPABILITIES,'approve','deny','continue'],why:whys};
+ const english={};
+ for(const [group,codes] of Object.entries(groups))for(const code of codes){const text=word(group,code);assert.ok(text,`${group}.${code}`);english[`${group}.${code}`]=text;}
+ assert.equal(word('why','NO_PONTE'),'Does not run Ponte.');assert.equal(word('kind','phone'),'Phone');assert.equal(word('status','unknown'),'not checked');
+ assert.equal(word('why','FUTURE_CODE'),'');assert.equal(word('nada','x'),'');assert.equal(word('why','toString'),'');
+ h.i18n.setLanguage('pt');
+ assert.equal(word('why','NO_PONTE'),'Não roda a Ponte.');assert.equal(word('kind','phone'),'Celular');assert.equal(word('ponte','pending'),'aguardando aprovação');assert.equal(word('action','mirror'),'Espelhar no PC');
+ for(const [group,codes] of Object.entries(groups))for(const code of codes){const key=h.i18n.deviceWords[group][code];assert.ok(Object.hasOwn(h.i18n.messages,key)||group==='route',`${group}.${code} has an English entry`);if(Object.hasOwn(h.i18n.messages,key)&&key!==h.i18n.messages[key])assert.notEqual(word(group,code),english[`${group}.${code}`],`${group}.${code} is translated`);}
+});
