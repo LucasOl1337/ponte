@@ -2,6 +2,28 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## Unreleased: readable screen at once (rodada nitidez)
+
+Only the page changes; no new APK is needed for it.
+
+- **Fix: every screen opened blurry for ~12 s.** Auto started each session at Light (0.35,
+  1204 px wide on a 3440 monitor) and climbed one rung per two 3 s windows, so Sharp came
+  12-13 s later. A workspace on another monitor (on a three-monitor PC, most of them), a
+  monitor switch or a return from the background is a new session, so it happened again
+  each time. Auto now opens at the rung the last session with this PC settled on, or at
+  Sharp without one from the last 30 min, and still steps down in the first window when
+  frames lag. Lab, 3440×1440, emulator Chrome behind a proxy that refuses `/api/rd` like
+  the alpha.24 APK: time to the first 3440 px frame 12.7 s → 0.6 s cold, 12.4-13.3 s →
+  0.3-0.4 s per workspace on another monitor, 12.5 s → 0.9 s back from the background; at
+  6 Mbit/s Sharp steps down after ~2 s and the next session opens at the remembered rung.
+- **Fix: a video socket that never opens no longer holds the screen for 9 s.** If the
+  WebSocket has not opened in 3 s the page goes to JPEG; one that opened still gets 9 s for
+  the encoder's first frame. Behind a proxy that holds the upgrade: 23.5 s → 3.8 s to a
+  readable frame. (The alpha.24 APK answers `/api/rd` with 404, which already fell back at
+  once: ~0.2 s.)
+- Lab: the fake `hyprctl` lists one workspace per extra monitor, so a workspace chip
+  follows it to another monitor as on a multi-monitor PC.
+
 ## 0.1.0-alpha.33 (2026-09-30)
 
 Picture quality on the phone and on the notebook. Three causes, each measured or seen in the

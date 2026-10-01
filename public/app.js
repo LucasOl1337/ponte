@@ -846,13 +846,23 @@ function isFullMonitorRegion(region, monitorWidth, monitorHeight) {
 // Adaptive quality. The PC paces frames at the requested rate and only slows
 // down when the phone cannot drain them, so the rate that actually arrives is
 // the link's honest capacity: ~49 Mbit/s for Sharp, ~7 for Balanced, ~2 for
-// Light on a 1440p monitor. Auto starts light, climbs while frames arrive on
-// time and steps down as soon as they lag, holding longer after each fall so
-// the picture does not flap on a mobile link. "On time" is against what the PC
-// can capture: grim scales on the CPU, so on a 3440×1440 monitor Balanced
-// takes ~140 ms a frame and can never reach its 10 fps even on a LAN. That is
-// not the link, and it must not keep Auto away from Sharp (18 ms a frame).
+// Light on a 1440p monitor. Auto climbs while frames arrive on time and steps
+// down as soon as they lag, holding longer after each fall so the picture does
+// not flap on a mobile link. "On time" is against what the PC can capture:
+// grim scales on the CPU, so on a 3440×1440 monitor Balanced takes ~140 ms a
+// frame and can never reach its 10 fps even on a LAN. That is not the link,
+// and it must not keep Auto away from Sharp (18 ms a frame).
 const LIVE_LADDER = ['light','balanced','sharp'];
+// Where Auto opens. Climbing from Light took ~12 s to reach Sharp, and every
+// monitor switch (a workspace on another monitor) or return from the
+// background is a new session: the picture was unreadable each time. A slow
+// link shows itself in the first 3 s window, so a session opens where the last
+// one on this PC settled, or at Sharp when there is none from the last 30 min.
+const LIVE_RUNG_TTL_MS = 30 * 60000;
+function liveStartRung(saved, at) {
+  const [rung, when] = String(saved || '').split('|');
+  return LIVE_LADDER.includes(rung) && at - Number(when) >= 0 && at - Number(when) < LIVE_RUNG_TTL_MS ? rung : 'sharp';
+}
 function createLiveAdapter({start = 'light', windowMs = 3000, climbAfter = 2, holdMs = 20000, maxHoldMs = 120000, now = Date.now} = {}) {
   let rung = Math.max(0, LIVE_LADDER.indexOf(start));
   let frames = 0, captureTotal = 0, captured = 0, windowStart = now(), healthy = 0, holdUntil = 0, hold = holdMs;
@@ -890,8 +900,11 @@ function createLiveAdapter({start = 'light', windowMs = 3000, climbAfter = 2, ho
     },
   };
 }
+const liveRungKey = () => targetNode ? `ponte-live-rung:${targetNode}` : 'ponte-live-rung';
+function newLiveAdapter() { return createLiveAdapter({ start: liveStartRung(savedPreference(liveRungKey()), Date.now()) }); }
 function applyLiveProfile(session, key) {
   const profile = LIVE_PROFILES[key];
+  if (session.adapter) savePreference(liveRungKey(), `${key}|${Date.now()}`);
   session.fps = profile.fps; session.scale = profile.scale; session.quality = profile.quality;
   session.profileLabel = session.adapter ? `${t('Automático')} · ${t(profile.label)}` : profile.label;
 }
@@ -1252,7 +1265,10 @@ async function runLiveSession(session) {
 // Touches still go through the desktop actions. JPEG stays the fallback: no
 // WebCodecs, a PC without the video, or another device holding it.
 const VIDEO_HEADER_BYTES = 16;
-const VIDEO_ACK_MS = 50, VIDEO_KEYFRAME_ASK_MS = 3000, VIDEO_FIRST_FRAME_MS = 9000, VIDEO_RETRIES = 3;
+// A socket that has not even opened in VIDEO_OPEN_MS is a link that does not
+// carry it (a proxy holding the upgrade): the JPEG frames should not wait the
+// full VIDEO_FIRST_FRAME_MS, which is for an encoder that is starting.
+const VIDEO_ACK_MS = 50, VIDEO_KEYFRAME_ASK_MS = 3000, VIDEO_OPEN_MS = 3000, VIDEO_FIRST_FRAME_MS = 9000, VIDEO_RETRIES = 3;
 let videoBlockedUntil = 0;
 const videoSupported = () => typeof VideoDecoder === 'function' && typeof EncodedVideoChunk === 'function' && typeof WebSocket === 'function';
 function videoSocketUrl() {
@@ -1281,7 +1297,7 @@ function showVideoCanvas(on) {
 function startVideoLive(session) {
   session.kind = 'video';
   session.controller = new AbortController();
-  const video = { socket: null, decoder: null, config: null, littleEndian: null, waitingKey: true, link: 'lan', fps: 60,
+  const video = { socket: null, opened: false, decoder: null, config: null, littleEndian: null, waitingKey: true, link: 'lan', fps: 60,
     ackSeq: 0, ackSent: 0, ackTimer: 0, lastAckAt: -Infinity, keyAskedAt: -Infinity, drawn: 0, bytes: 0, drops: 0, rtt: null, statsAt: performance.now(), retries: 0 };
   session.video = video;
   const current = () => sessionIsCurrent(session) && session.video === video;
@@ -1395,6 +1411,7 @@ function startVideoLive(session) {
     video.littleEndian = null; video.ackSeq = 0; video.ackSent = 0; video.waitingKey = true;
     socket.addEventListener('open', () => {
       if (video.socket !== socket) return;
+      video.opened = true;
       send({ t: 'hello', v: 1, token, maxFps: 60, caps: { ack: true, key: true }, monitor: session.monitor, input: false });
       send({ t: 'ping', c: Date.now() });
     });
@@ -1421,7 +1438,7 @@ function startVideoLive(session) {
     send({ t: 'ping', c: Date.now() });
     send({ t: 'stats', fps: Math.round(video.drawn / elapsed), kbps: Math.round(video.bytes * 8 / 1000 / elapsed), rtt: video.rtt, queue: video.decoder?.decodeQueueSize || 0, drops: video.drops });
     video.drawn = 0; video.bytes = 0; video.drops = 0;
-    if (!session.hasFrame && Date.now() - startedAt > VIDEO_FIRST_FRAME_MS) { fallBack('', 5 * 60000); return; }
+    if (!session.hasFrame && Date.now() - startedAt > (video.opened ? VIDEO_FIRST_FRAME_MS : VIDEO_OPEN_MS)) { fallBack('', 5 * 60000); return; }
     if (session.hasFrame && Date.now() - session.lastReceived > 6000 && screenMode === 'live') setScreenStatus('reconnecting', t("Aguardando novos quadros do monitor…"));
   }, 1000);
   connect();
@@ -1430,7 +1447,7 @@ function startJpegLive(session) {
   session.kind = 'jpeg';
   showVideoCanvas(false);
   const choice = LIVE_PROFILES[$('#live-quality').value] ? $('#live-quality').value : 'auto';
-  if (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) { session.adapter = createLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
+  if (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) { session.adapter = newLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
   else applyLiveProfile(session, choice);
   runLiveSession(session);
 }
@@ -1448,7 +1465,7 @@ function startLive() {
     return;
   }
   const session = {monitor,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false,adapter:null};
-  if (LIVE_PROFILES[choice].auto) { session.adapter = createLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
+  if (LIVE_PROFILES[choice].auto) { session.adapter = newLiveAdapter(); applyLiveProfile(session, session.adapter.profile); }
   else applyLiveProfile(session, choice);
   liveSession = session;
   runLiveSession(session);

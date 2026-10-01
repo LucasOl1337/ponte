@@ -17,7 +17,10 @@ if args[:1] == ['-j']:
     elif kind == 'devices': print(json.dumps({'mice': [{'name': 'ydotoold-virtual-device-1'}], 'keyboards': []}))
     elif kind == 'activewindow': print(json.dumps(active))
     elif kind == 'clients': print(json.dumps(clients))
-    elif kind == 'workspaces': print(json.dumps([{'id': 1, 'name': '1', 'monitor': m['name'], 'windows': 1}]))
+    # Each extra monitor shows its own workspace, so a workspace chip on the
+    # phone can follow a workspace to another monitor as on a multi-monitor PC.
+    elif kind == 'workspaces': print(json.dumps([{'id': 1, 'name': '1', 'monitor': m['name'], 'windows': 1}]
+                                               + [{'id': x['activeWorkspace']['id'], 'name': x['activeWorkspace']['name'], 'monitor': x['name'], 'windows': 1} for x in _lab.extra_monitors()]))
     else: print('[]')
 elif args[:1] == ['cursorpos']:
     c = _lab.load()['cursor']; print(f"{c['x']}, {c['y']}")
