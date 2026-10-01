@@ -36,5 +36,5 @@ tc qdisc add dev lo parent 1:2 handle 20: netem delay "$RD_LINK_BACK_DELAY"
 tc filter add dev lo parent 1: protocol ip prio 1 u32 match ip sport "$RD_LINK_PORT" 0xffff flowid 1:1
 for setting in $RD_LINK_SYSCTL; do sysctl -q -w "$setting"; done
 cd "$RD_LINK_ROOT"
-exec node tools/lab/rd-measure.mjs "$@"
+exec node "${RD_LINK_CLIENT:-tools/lab/rd-measure.mjs}" "$@"
 ' rd-link "${defaults[@]}" "$@"
