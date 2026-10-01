@@ -698,6 +698,9 @@ function navigate(page) {
   $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
   if (!nextScreen) closeScreenComposer();
   renderVisiblePage();
+  // Usage is applied on entry, not while the user is tapping the same row.
+  const keyBar = {dev:'dev',terminais:'term',tela:'screen'}[page];
+  if (keyBar) renderKeyBar(keyBar);
   window.scrollTo({top:0,behavior:'instant'});
   if (page === 'voz' && connected) loadAudio();
   reconcileLive();
@@ -2309,6 +2312,7 @@ function selectTerminal(id) {
   terminalSizeOptions(session?.cols || 40);
   terminalSessionOptions();
   keyBarUpdate('term', sessionContext(session), '');
+  renderKeyBar('term');
 }
 // Reading back in the session: a finger on the output, a fling still running
 // or a text selection keeps the text as it is until the next read, and new
@@ -3523,6 +3527,7 @@ function devSelect(id) {
   devPane = null; $('#dev-output').innerHTML = ''; devRenderSize(); $('#dev-live').hidden = true; keyBarState.dev.menu = 0;
   if (id) savePreference('ponte-dev-session', id);
   devRenderSessions();
+  renderKeyBar('dev');
 }
 async function devLoadSessions() {
   try {
@@ -3790,10 +3795,14 @@ function keyName(item, bar) { return t(bar === 'screen' && item.deskName ? item.
 // A numbered choice menu at the bottom of an agent's screen (Claude Code draws
 // "❯ 1. Yes", Codex "› 1. Yes"): how many options it offers, or 0.
 function keyMenuOptions(text) {
-  const lines = String(text || '').replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, '').split('\n').slice(-16);
+  // A pane taller than its content ends in blank rows: look at the last
+  // sixteen rows that hold something.
+  const lines = String(text || '').replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, '').replace(/\s+$/, '').split('\n').slice(-16);
   let pointer = false, highest = 0;
   for (const line of lines) {
     const match = /^[\s│|]*([❯›]\s*)?([1-9])[.)]\s+\S/.exec(line);
+    // A normal prompt below the choices means that menu is now history.
+    if (!match && /^[\s│|]*[>❯›](?:\s|$)/.test(line)) { pointer = false; highest = 0; }
     if (!match) continue;
     if (match[1]) pointer = true;
     highest = Math.max(highest, Number(match[2]));
@@ -3821,6 +3830,11 @@ function commandButton(command, index, editing) {
 function renderKeyBar(bar) {
   const root = keyBarElement(bar), state = keyBarState[bar];
   if (!root) return;
+  const oldInput = $('[data-key-command-input]', root);
+  const focused = oldInput && document.activeElement === oldInput;
+  const selection = focused ? [oldInput.selectionStart, oldInput.selectionEnd] : null;
+  if (oldInput) state.commandDraft = oldInput.value;
+  const sheetScroll = $('.key-sheet', root)?.scrollTop || 0;
   const ctx = state.ctx || (bar === 'screen' ? 'desk' : 'shell');
   const pins = new Set(keyPins(ctx)), commands = keyCommands();
   const tail = keyTailIds(bar, ctx, state.menu || 0);
@@ -3841,6 +3855,13 @@ function renderKeyBar(bar) {
     + `<section><h3>${escaped(t('Comandos salvos'))}</h3><div class="key-sheet-keys">${commands.map((command, index) => commandButton(command, index, state.pinning)).join('')}</div>`
     + `<div class="key-command-new"><input type="text" data-key-command-input maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${escaped(t('Novo comando, ex.: npm test'))}" aria-label="${escaped(t('Novo comando'))}"><button type="button" class="button small" data-key-command-save>${escaped(t('Salvar'))}</button></div></section></div>`;
   keyBarEnable(bar, state.ready);
+  const newInput = $('[data-key-command-input]', root);
+  if (newInput) {
+    newInput.value = state.commandDraft || '';
+    if (focused) { newInput.focus(); if (selection) newInput.setSelectionRange?.(...selection); }
+  }
+  const sheet = $('.key-sheet', root);
+  if (sheet) sheet.scrollTop = sheetScroll;
 }
 function keyBarEnable(bar, ready) {
   const root = keyBarElement(bar);
@@ -3867,13 +3888,18 @@ const keyPause = ms => new Promise(resolve => setTimeout(resolve, ms));
 // What one tap sends. A sequence goes one key at a time with a short gap: an
 // Escape followed within milliseconds by another key reads as Alt+key.
 async function keyBarSend(bar, bodies) {
+  const id = bar === 'dev' ? devId : bar === 'term' ? terminalId : '';
+  const requestToken = token, node = targetNode, page = currentPage, inputGeneration = remoteInputGeneration;
+  const sameTarget = () => connected && token === requestToken && targetNode === node && currentPage === page
+    && remoteInputGeneration === inputGeneration && id === (bar === 'dev' ? devId : bar === 'term' ? terminalId : '');
   for (let index = 0; index < bodies.length; index++) {
     if (index) await keyPause(KEY_SEQUENCE_GAP_MS);
+    if (!sameTarget()) return false;
     const body = bodies[index];
     let ok;
     if (bar === 'dev') ok = await devInput(body);
     else if (bar === 'term') { ok = !!(terminalId && await terminalMutation(`/terminals/${encodeURIComponent(terminalId)}/input`, body)); updateTerminalNavigation(); }
-    else ok = await new Promise(resolve => sendKeys(async () => resolve(await quietAction(body.text ? 'keyboard.text' : 'keyboard.key', body))));
+    else ok = await new Promise(resolve => sendKeys(async () => resolve(sameTarget() && await quietAction(body.text ? 'keyboard.text' : 'keyboard.key', body))));
     if (!ok) { if (bar === 'screen') toast(t("A tecla não chegou ao PC."), true); return false; }
   }
   return true;
@@ -3894,6 +3920,7 @@ function keySaveCommand(bar) {
   if (!command) return;
   const list = [command, ...keyCommands().filter(item => item !== command)].slice(0, KEY_COMMAND_LIMIT);
   savePreference('ponte-keys-commands', JSON.stringify(list));
+  input.value = '';
   for (const name of Object.keys(keyBarState)) renderKeyBar(name);
 }
 function keyBarClick(bar, event) {

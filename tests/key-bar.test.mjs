@@ -15,7 +15,7 @@ const shell = { id: 'fedcba9876543210fedcba98', title: 'Terminal 2', cols: 40, r
 const MENU = '⏺ Vou rodar os testes do projeto.\n╭──────╮\n Bash command\n   npm test\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don\'t ask again\n   3. No (esc)\n╰──────╯';
 const PROMPT = '╭──────╮\n│ > │\n╰──────╯\n  ? for shortcuts';
 
-function harness({ sessions = [claude, shell], screen = () => PROMPT, stored = {} } = {}) {
+function harness({ sessions = [claude, shell], screen = () => PROMPT, stored = {}, onFetch = () => {} } = {}) {
   const document = makeDocument(html), window = makeWindow();
   const saved = new Map([['ponte-pair-token', 'synthetic-test-token'], ...Object.entries(stored)]);
   const calls = [];
@@ -28,6 +28,7 @@ function harness({ sessions = [claude, shell], screen = () => PROMPT, stored = {
     setTimeout: (callback, ms) => { if (ms === 150) Promise.resolve().then(callback); return 1; }, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
     fetch: async (path, options = {}) => {
       calls.push({ path, method: options.method || 'GET', body: options.body });
+      onFetch(path, options);
       if (path === '/api/terminals' && (options.method || 'GET') === 'GET') return ok({ available: true, sessions: sessions.map(session => ({ ...session })), limit: 4 });
       if (path === '/api/terminals?projects=1') return ok({ projects: [] });
       if (/^\/api\/terminals\/[a-f0-9]{24}\?format=ansi/.test(path)) return ok({ ...claude, hash: `h${calls.length}`, text: screen(path), cursor: { x: 0, y: 0, visible: false }, alternate: false });
@@ -104,6 +105,9 @@ test('menu detection needs the selection pointer and two options, so a numbered 
   const h = harness();
   const options = text => h.run(`keyMenuOptions(${JSON.stringify(text)})`);
   assert.equal(options(MENU), 3);
+  assert.equal(options(`${MENU}\nDone\n${PROMPT}`), 0, 'choices in scrollback followed by a prompt are not an active menu');
+  assert.equal(options(`${MENU}\n› `), 0, 'a Codex prompt ends the old choice menu');
+  assert.equal(options(`${'\n'.repeat(30)}${MENU}${'\n'.repeat(20)}`), 3, 'a tall pane ends in blank rows, as tmux sends it');
   assert.equal(options('Select model\n › 1. gpt-5 (current)\n   2. gpt-5-mini\n   3. o3\n   4. o4-mini\n   5. other'), 4, 'Codex pointer; at most four answer keys');
   assert.equal(options('Plano:\n1. ler o código\n2. rodar os testes\n3. corrigir\n> '), 0);
   assert.equal(options('❯ 1. Yes'), 0);
@@ -168,7 +172,7 @@ test('pinned keys and saved commands come first, the most used ones rise, and th
   // Three taps on PgDn promote it, but only on the next context change.
   for (let i = 0; i < 3; i++) { h.el('#dev-keys [data-shortcut="pgdn"]').click(); await flush(); }
   assert.notEqual(ids(bar, '.key-tail')[1], 'pgdn', 'the row does not move under the finger');
-  h.run("renderKeyBar('dev')");
+  h.run("navigate('janelas'); navigate('dev')"); await flush();
   assert.deepEqual(ids(bar, '.key-tail').slice(0, 2), ['ctrl-l', 'pgdn']);
   assert.deepEqual(ids(bar, '.key-head'), ['enter', 'esc', 'ctrl-c']);
   // Deleting a saved command from the sheet.
@@ -176,6 +180,43 @@ test('pinned keys and saved commands come first, the most used ones rise, and th
   h.el('#dev-keys [data-key-pin]').click(); await flush();
   h.el('#dev-keys .key-sheet [data-key-command="0"]').click(); await flush();
   assert.deepEqual(JSON.parse(h.saved.get('ponte-keys-commands')), []);
+});
+
+test('a shortcut sequence stops if the session, node or page changes after its first key', async () => {
+  for (const bar of ['dev', 'term']) {
+    for (const change of [bar === 'dev' ? `devSelect('${claude.id}')` : `selectTerminal('${claude.id}')`, "targetNode = 'test-other-node'", "navigate('janelas')"]) {
+      let mutate = false, h;
+      h = harness({ sessions: [shell, claude], onFetch: path => {
+        if (mutate && path === `/api/terminals/${shell.id}/input`) { mutate = false; h.run(change); }
+      }});
+      await flush();
+      h.run(bar === 'dev' ? "navigate('dev')" : "navigate('terminais')"); await flush();
+      h.run(bar === 'dev' ? `devSelect('${shell.id}')` : `selectTerminal('${shell.id}')`); await flush();
+      const selector = bar === 'dev' ? '#dev-keys' : '#terminal-keys';
+      mutate = true;
+      h.el(`${selector} [data-shortcut="repeat"]`).click(); await flush();
+      assert.deepEqual(h.inputs(shell.id), [{key:'ArrowUp'}], `${bar}: ${change}`);
+      assert.deepEqual(h.inputs(claude.id), [], 'Enter never reaches the replacement session');
+      assert.equal(h.calls.filter(call => call.path.includes('/input')).length, 1);
+    }
+  }
+});
+
+test('a command draft and its focus survive a menu update, and saving clears only that draft', async () => {
+  const h = harness(); await flush();
+  h.run("navigate('dev')"); await flush();
+  h.el('#dev-keys [data-key-sheet]').click();
+  const input = h.el('#dev-keys [data-key-command-input]');
+  input.value = 'npm run build'; input.focus();
+  h.run(`keyBarUpdate('dev', 'agent', ${JSON.stringify(MENU)})`);
+  const rebuilt = h.el('#dev-keys [data-key-command-input]');
+  assert.equal(rebuilt.value, 'npm run build');
+  assert.equal(h.document.activeElement, rebuilt);
+  h.el('#terminal-keys [data-key-command-input]').value = 'other draft';
+  h.el('#dev-keys [data-key-command-save]').click();
+  assert.equal(h.el('#dev-keys [data-key-command-input]').value, '');
+  assert.equal(h.el('#terminal-keys [data-key-command-input]').value, 'other draft');
+  assert.deepEqual(JSON.parse(h.saved.get('ponte-keys-commands')), ['npm run build']);
 });
 
 test('the bar keys are disabled without a session and enabled with one', async () => {
