@@ -8,7 +8,7 @@ DailyWork shows up inside Ponte: today's context, a passive log and a review ste
 Server and pages; the APK does not change.
 
 - **DailyWork card.** The owner's `/api/state` now carries a `dailywork` block read from the local
-  DailyWork (`hoje:resumo` over loopback, descriptor `~/.config/DailyWork/api-ponte.json` or
+  DailyWork (`hoje:resumo` over loopback, descriptor `~/.config/dailywork/api-ponte.json` or
   `PONTE_DAILYWORK_DESCRIPTOR`). Without DailyWork it reports `indisponivel` and the actions answer
   `DAILYWORK_UNAVAILABLE`; nothing else in Ponte depends on it.
 - **Review before sending.** Requests that DailyWork prepares for third parties can be approved or

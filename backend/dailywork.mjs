@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { ApiError } from './process.mjs';
 
-export function createDailyWork({ descriptor = process.env.PONTE_DAILYWORK_DESCRIPTOR || path.join(os.homedir(), '.config/DailyWork/api-ponte.json') } = {}) {
+export function createDailyWork({ descriptor = process.env.PONTE_DAILYWORK_DESCRIPTOR || path.join(os.homedir(), '.config/dailywork/api-ponte.json') } = {}) {
   let cached = null, fetchedAt = 0, pending = null;
   async function call(operation, args = [], write = false) {
     let d;
