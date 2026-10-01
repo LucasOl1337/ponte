@@ -29,9 +29,24 @@ const steps = [
   ['B', 'campo B'],
   ['C', 'botão C'],
   ['A', 'campo A'],
+  // follow_mouse: a phone scroll over the canvas activates its window with no
+  // IC focused (Maestri measured: 8 of 51 clicks); the next tap restores it.
+  ['scroll:D1', 'rolagem pelo celular em cima do canvas (ativa por hover)'],
+  ['D2', 'canvas depois da rolagem (janela já ativa, IC volta)'],
+  ['D1', 'canvas de novo'],
+  ['scroll:B', 'rolagem em cima do campo B (volta pra janela dos campos)'],
+  ['B', 'campo B depois da rolagem'],
 ];
 console.log('passo | alvo | antes -> depois | janela mudou | regra antiga | regra nova');
-for (const [name, label] of steps) {
+for (const [step, label] of steps) {
+  if (step.startsWith('scroll:')) {
+    const [fx, fy] = at[step.slice(7)];
+    await call('/action', { type: 'mouse.scroll', monitor: monitor.name, x: Math.round(W * fx), y: Math.round(H * fy), dy: 3 });
+    const after = await call('/textinput');
+    console.log(`${label} | ${step} | -> ${after.context?.program || '-'} | - | - | -`);
+    continue;
+  }
+  const name = step;
   const [fx, fy] = at[name];
   const tap = await call('/action', { type: 'mouse.clickAt', monitor: monitor.name, x: Math.round(W * fx), y: Math.round(H * fy), button: 'left', textBaseline: true });
   const after = await call('/textinput');
