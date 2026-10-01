@@ -212,6 +212,21 @@ test('keys: physical code up and down, no client auto-repeat, everything prevent
   assert.deepEqual(h.sent('key').map(message => `${message.code}${message.down ? 'v' : '^'}`), ['Tabv', 'Tab^', 'F5v', 'F5^', 'MetaLeftv', 'MetaLeft^', 'ControlLeftv', 'KeyWv', 'KeyW^', 'ControlLeft^', 'KeyQv', 'KeyQ^']);
 });
 
+test('clicking the screen after choosing a device moves focus off the selector and sends keys', async () => {
+  const h = await harness().connect();
+  const select = h.el('#rd-node');
+  select.focus();
+  assert.equal(h.document.activeElement, select);
+  h.mouse('mousedown', h.stage, { clientX: 500, clientY: 294 });
+  assert.equal(h.document.activeElement, h.stage);
+  h.key('keydown', 'KeyZ', { target: select });
+  h.key('keyup', 'KeyZ', { target: select });
+  h.key('keydown', 'MetaLeft', { target: select });
+  h.key('keyup', 'MetaLeft', { target: select });
+  assert.deepEqual(h.sent('key').map(m => m.code), ['KeyZ', 'KeyZ', 'MetaLeft', 'MetaLeft']);
+  assert.equal(h.run('engaged'), true);
+});
+
 test('Ctrl+Alt+Shift alone releases the control; with another key held it is just a shortcut', async () => {
   const h = await harness().connect();
   assert.equal(h.run(`isReleaseChord(new Set(['ControlLeft','AltRight','ShiftLeft']))`), true);

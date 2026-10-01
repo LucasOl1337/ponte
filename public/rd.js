@@ -689,7 +689,12 @@ function showSwitch() {
 const inputAllows = kind => session?.input?.[kind] !== false;
 
 function engage(mayPrompt = false) {
-  if (engaged || !session) return;
+  if (!session) return;
+  // A stage click prevents default mouse handling, so a previously focused
+  // selector would otherwise keep every subsequent key (including Super).
+  document.activeElement?.blur?.();
+  $('#rd-stage').focus({ preventScroll: true });
+  if (engaged) return;
   engaged = true;
   document.body.classList.add('controlling');
   renderControl();
@@ -781,9 +786,7 @@ const localPressed = new Set();
 function keyEvent(event) {
   if (!engaged) { localKey(event); return; }
   if (!session || !inputAllows('keys')) return;
-  // Only an open selector in the bar keeps its keys; a focused bar button
-  // (Full screen was just clicked) must not swallow them.
-  if (event.target?.tagName === 'SELECT') return;
+  // While controlling, even a stale bar focus must not eat the remote keys.
   event.preventDefault();
   event.stopPropagation?.();
   const code = event.code;
@@ -1203,8 +1206,8 @@ function start() {
   $('#rd-mode-abs').addEventListener('click', () => setMode('abs'));
   $('#rd-mode-rel').addEventListener('click', () => setMode('rel'));
   $('#rd-fullscreen').addEventListener('click', enterFullscreen);
-  $('#rd-monitor').addEventListener('change', event => chooseMonitor(event.target.value));
-  $('#rd-node').addEventListener('change', event => chooseNode(event.target.value));
+  $('#rd-monitor').addEventListener('change', event => { event.target.blur(); chooseMonitor(event.target.value); });
+  $('#rd-node').addEventListener('change', event => { event.target.blur(); chooseNode(event.target.value); });
   $('#rd-retry').addEventListener('click', () => { reconnectAttempt = 0; connect(); });
   $('#rd-probe').hidden = !probeEnabled;
   $('#rd-probe').addEventListener('click', startProbe);
