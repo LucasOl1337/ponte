@@ -43,6 +43,12 @@ const ACK_WINDOW_MS = 10000, ACK_HISTORY_MAX = 4096, DELIVERED_WINDOW_MS = 2000;
 // burst of frames arriving together (the ack names the youngest).
 const BAD_SUSTAIN_MS = 500, DRAINING_MS = 75, IN_FLIGHT_EMERGENCY_MS = 1000;
 const SAMPLE_FRESH_MS = 2 * 60000, SAMPLE_HEADROOM = 1.25, SAMPLE_CLEARS_BACKOFF = 1.5, SAMPLE_MIN_BYTES = 20000, SAMPLE_MIN_MS = 50;
+// Opening. W3 is 1920 px: on a 3440 monitor the text a phone zooms into is as
+// soft as its Balanced JPEG, and a home Tailscale link (over 15 ms, plenty of
+// room) waited 30 s of calm before the first climb. In the first 20 s of a run
+// on the steps, before any fall, a keyframe that crossed with twice the room a
+// higher step needs, 2 s without a queue, climbs there at once.
+const OPEN_WINDOW_MS = 20000, OPEN_CALM_MS = 2000, OPEN_HEADROOM = 2;
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
@@ -64,7 +70,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   let openedAt = now(), openRtt = null;
   let lastRestartAt = -Infinity, lastDownAt = -Infinity, lastUpAt = -Infinity, upTo = null, atStepSince = now();
   let lastUncalmAt = now(), lastReportAt = -Infinity, badStreak = 0;
-  let lastKey = null;
+  let lastKey = null, opening = false;
   let stage = view;
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
@@ -124,6 +130,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
     const t = now();
     if (reason === 'down' && upTo !== null && step === upTo && t - lastUpAt <= FAILED_UP_MS) fail(upTo, t);
     if (reason === 'down' || reason === 'wan') lastDownAt = t;
+    if (reason === 'down') opening = false;
     if (reason === 'up') { lastUpAt = t; upTo = next; }
     if (reason === 'key') keyRestarts.push(t);
     if (next !== step || reason === 'wan') atStepSince = t;
@@ -138,7 +145,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
   // the way to what the link delivers; on the floor, stop sending instead.
   function congested(queue, emergency) {
     if (step > 0) return change('down', fitting(step, badSince?.at ?? null));
-    if (!shedding && (emergency || queue > QUEUE_SHED_MS)) { shedding = true; return { reason: 'shed', params: params() }; }
+    if (!shedding && (emergency || queue > QUEUE_SHED_MS)) { shedding = true; opening = false; return { reason: 'shed', params: params() }; }
     return null;
   }
 
@@ -199,7 +206,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       const t = now();
       openedAt = t; openRtt = finite(rtt); lastUncalmAt = t; lastRestartAt = t; atStepSince = t;
       mode = openRtt !== null && openRtt < LAN_RTT_MS ? 'lan' : 'wan';
-      step = INITIAL_STEP;
+      step = INITIAL_STEP; opening = mode === 'wan';
       return params();
     },
     // Every unit that left (seq as in its header), so keyframe bursts are
@@ -228,12 +235,16 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       for (const frame of arrived) acked.push({ at: t, bytes: frame.bytes });
       const frame = arrived.at(-1), age = t - frame.at;
       while (ages.length && (ages[0].at < t - ACK_WINDOW_MS || ages.length >= 1000)) ages.shift();
+      // The round trip the burst is measured against excludes its own age: on
+      // the first ack of a session that age was the base, the crossing came
+      // out as nothing and a 2.7 Mbps link measured 17.6.
+      const before = ackBase();
       ages.push({ at: t, value: age });
       const base = ackBase(), queue = age - base;
       // A keyframe that crossed the link in one burst measured its capacity.
       const burst = arrived.find(item => item.keyframe && item.bytes >= SAMPLE_MIN_BYTES);
       if (burst) {
-        sample = { at: t, kbps: burst.bytes * 8 / Math.max(SAMPLE_MIN_MS, t - burst.at - base) };
+        sample = { at: t, kbps: burst.bytes * 8 / Math.max(SAMPLE_MIN_MS, t - burst.at - before) };
         for (const [target] of backoff) if (sample.kbps >= SAMPLE_CLEARS_BACKOFF * WAN_STEPS[target].kbps) backoff.delete(target);
       }
       drained(t);
@@ -243,6 +254,8 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
         const piling = frame.at >= judgeFrom && !keyframeExcuse(t, 100) && queued(queue, t);
         if ((farSince === null || t - farSince < 5000) && !piling) return null;
         mode = 'wan';
+        // Only far, not queued: the link carried the LAN rate, so it may open fast too.
+        opening = !piling;
         return change('wan', Math.min(INITIAL_STEP, fitting(WAN_STEPS.length, piling ? badSince.at : null)));
       }
       if (shedding) return queue < QUEUE_BAD_MS || !inFlight.length ? change('key', 0) : null;
@@ -304,6 +317,12 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       if (stalled) return stalled;
       for (const [target] of backoff) if (step === target - 1 && t - atStepSince >= BACKOFF_RESET_MS) backoff.delete(target);
       if (step >= WAN_STEPS.length - 1 || t - lastReportAt > 2500) return null;
+      if (opening && t - atStepSince > OPEN_WINDOW_MS) opening = false;
+      if (opening && sample && sample.at >= lastRestartAt && t - lastRestartAt >= SETTLE_MS && t - lastUncalmAt >= OPEN_CALM_MS) {
+        let target = WAN_STEPS.findLastIndex(s => s.kbps <= sample.kbps / OPEN_HEADROOM);
+        while (target > step && (backoff.get(target)?.retryAt ?? 0) > t) target--;
+        if (target > step) { opening = false; return change('up', target); }
+      }
       if (t - lastUncalmAt < UP_CALM_MS || t - lastRestartAt < UP_CALM_MS) return null;
       if (t - lastDownAt < DOWN_QUIET_MS || t - lastUpAt < UP_EVERY_MS) return null;
       // A fresh capacity sample may skip steps; a step that failed waits its backoff.
