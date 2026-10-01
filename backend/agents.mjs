@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { readdir, readFile, readlink, lstat, open } from 'node:fs/promises';
 import { ApiError, runCommand } from './process.mjs';
 
@@ -288,6 +289,8 @@ export function createAgents(options = {}) {
   const privateInfo = new Map();
   const canvasCache = new Map();
   const summaries = new Map();
+  const fileTails = new Map();
+  const transcriptViews = new Map();
 
   async function smallFile(file, max = 64 * 1024) {
     const info = await lstat(file);
@@ -494,9 +497,33 @@ export function createAgents(options = {}) {
       const stat = await handle.stat();
       if (!stat.isFile()) return null;
       const length = Math.min(stat.size, bytes);
-      const buffer = Buffer.alloc(length);
-      const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
-      return { text: buffer.subarray(0, bytesRead).toString('utf8'), cut: stat.size > length, size: stat.size, mtimeMs: stat.mtimeMs };
+      const key = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      const previous = fileTails.get(file);
+      if (previous?.key === key && previous.buffer.length >= length) return { ...previous, text: previous.buffer.subarray(-length).toString('utf8'), cut: stat.size > length };
+      let buffer;
+      // JSONL grows at the end. Keep bytes (not decoded text) so a UTF-8
+      // character or partial JSON record split between writes is preserved.
+      let appendOnly = false;
+      if (file.endsWith('.jsonl') && previous && previous.ino === stat.ino && previous.dev === stat.dev && stat.size > previous.size && stat.size - previous.size < bytes && previous.buffer.length >= Math.min(previous.size, bytes)) {
+        // A truncate/rewrite can keep the same inode and final record. Verify
+        // the entire retained window, not just its last bytes, before reusing
+        // it. Work remains bounded by bytes even for a huge transcript.
+        const checkpoint = Buffer.alloc(previous.buffer.length);
+        const { bytesRead } = await handle.read(checkpoint,0,checkpoint.length,previous.size-checkpoint.length);
+        appendOnly = bytesRead === checkpoint.length && checkpoint.equals(previous.buffer);
+      }
+      if (appendOnly) {
+        const append = Buffer.alloc(stat.size - previous.size);
+        const { bytesRead } = await handle.read(append, 0, append.length, previous.size);
+        buffer = Buffer.concat([previous.buffer,append.subarray(0,bytesRead)]).subarray(-length);
+      } else {
+        buffer = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
+        buffer = buffer.subarray(0,bytesRead);
+      }
+      const result = { buffer, key, ino:stat.ino, dev:stat.dev, cut:stat.size > length, size:stat.size, mtimeMs:stat.mtimeMs };
+      fileTails.set(file,result);
+      return { ...result, text:buffer.toString('utf8') };
     } catch { return null; } finally { await handle?.close(); }
   }
   const tailLines = tail => { if (!tail) return []; const lines = tail.text.split('\n'); if (tail.cut) lines.shift(); return lines.filter(Boolean); };
@@ -674,7 +701,7 @@ export function createAgents(options = {}) {
       let written = transcript ? await mtime(transcript) : null;
       if (snapshot) { const other = await mtime(snapshot); if (other !== null && (written === null || other > written)) written = other; }
       if (transcript && written === null) transcript = snapshot = null;
-      privateInfo.set(id, { transcript, format, snapshot });
+      privateInfo.set(id, { transcript, format, snapshot, sessionId: session?.sessionId || null });
       const summary = transcript ? await summarize({ transcript, format, snapshot }) : null;
       if (transcript) summarized.add(transcript);
 
@@ -746,6 +773,9 @@ export function createAgents(options = {}) {
     for (const key of cpu.keys()) if (!seen.has(key)) { cpu.delete(key); codexFiles.delete(key); }
     for (const key of privateInfo.keys()) if (!items.some(item => item.id === key)) privateInfo.delete(key);
     for (const key of summaries.keys()) if (!summarized.has(key)) summaries.delete(key);
+    const liveFiles = new Set([...privateInfo.values()].flatMap(info => [info.transcript,info.snapshot]).filter(Boolean));
+    for (const key of fileTails.keys()) if (!liveFiles.has(key)) fileTails.delete(key);
+    for (const key of transcriptViews.keys()) if (!seen.has(key)) transcriptViews.delete(key);
     const order = { waiting: 0, working: 1, ready: 2, idle: 3, terminal: 4 };
     items.sort((a, b) => order[a.state] - order[b.state] || (b.since || 0) - (a.since || 0));
     // The numbers the phone shows: every agent someone talks to (automated
@@ -777,20 +807,71 @@ export function createAgents(options = {}) {
     return item;
   }
 
-  async function transcript(id) {
-    const item = await find(id, false);
+  async function transcript(id, { since = null, cached = false, fresh = false } = {}) {
+    const item = cached ? cache.items.find(item => item.id === id) : await find(id, fresh);
     const info = privateInfo.get(id);
-    if (!info?.transcript) return { id, available: false, messages: [], truncated: false, updatedAt: null };
+    if (!info?.transcript && !since) return { id,available:false,messages:[],truncated:false,updatedAt:null };
+    const stamps = await Promise.all([info?.transcript,info?.snapshot].map(async file => {
+      try { const stat = await lstat(file || ''); return stat.isFile() ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}` : '-'; } catch { return '-'; }
+    }));
+    const cursor = createHash('sha256').update(JSON.stringify([id,info?.transcript,info?.snapshot,stamps])).digest('hex').slice(0,32);
+    const base = { id,kind:item.kind,title:item.title,state:item.state,cursor,available:!!info?.transcript && stamps.some(stamp => stamp !== '-') };
+    if (since === cursor) return { ...base,unchanged:true,messages:[],updatedAt:null,truncated:false };
+    if (!base.available) return { ...base,reset:true,messages:[],truncated:false,updatedAt:null };
+    const history = transcriptViews.get(id) || [];
+    const prior = history.find(view => view.cursor === since);
+    const stored = history.find(view => view.cursor === cursor);
+    if (stored) return transcriptDelta(base,stored,prior);
     let lines, updatedAt, cut;
     if (info.format === 'jcode') ({ lines, updatedAt, cut } = await jcodeLines(info, TAIL_BYTES, MESSAGE_LIMIT));
     else {
       const tail = await readTail(info.transcript, TAIL_BYTES);
-      if (!tail) return { id, available: false, messages: [], truncated: false, updatedAt: null };
+      if (!tail) return { ...base,available:false,reset:true,messages:[],truncated:false,updatedAt:null };
       lines = tailLines(tail); updatedAt = tail.mtimeMs; cut = tail.cut;
     }
     const parsed = (MESSAGE_PARSERS[info.format] || (() => []))(lines);
     const result = lastMessages(parsed);
-    return { id, kind: item.kind, title: item.title, state: item.state, available: true, messages: result.messages, truncated: result.truncated || cut, updatedAt };
+    const view = { cursor,messages:result.messages,truncated:result.truncated || cut,updatedAt };
+    history.push(view);
+    if (history.length > 4) history.shift();
+    transcriptViews.set(id,history);
+    return transcriptDelta(base,view,prior);
+  }
+
+  function transcriptDelta(base, view, prior) {
+    let overlap = 0;
+    if (prior) {
+      for (let n = Math.min(prior.messages.length,view.messages.length); n > 0; n--) {
+        if (JSON.stringify(prior.messages.slice(-n)) === JSON.stringify(view.messages.slice(0,n))) { overlap = n; break; }
+      }
+    }
+    const reset = !prior || (prior.messages.length > 0 && overlap === 0);
+    return { ...base,available:true,reset,messages:reset ? view.messages : view.messages.slice(overlap),truncated:view.truncated,updatedAt:view.updatedAt };
+  }
+
+  async function transcriptRead(id,query = {}) {
+    // The open conversation only needs its own process and files, not a scan
+    // of every process on the PC. Verify pid start so a recycled pid cannot
+    // inherit the previous transcript, then use the cached path.
+    const item = cache?.items.find(item => item.id === id);
+    if (item && privateInfo.get(id)?.transcript && /^p-/.test(id)) {
+      const expected = Number(id.split('-')[2]);
+      let stat;
+      try { stat = parseStat(await readFile(path.join(procRoot,String(item.pid),'stat'),'utf8')); } catch {}
+      if (!stat || stat.start !== expected) throw new ApiError(404,'AGENT_NOT_FOUND');
+      const info = privateInfo.get(id);
+      if (info.format === 'jcode') {
+        const session = await jcodeSession(item.pid,item.startedAt);
+        if (!session || info.transcript !== path.join(jcodeDir,'sessions',`${session}.journal.jsonl`)) return transcript(id,{...query,fresh:true});
+      } else if (info.format === 'claude') {
+        const session = await claudeSession(item.pid,expected);
+        if ((session?.sessionId || null) !== info.sessionId) return transcript(id,{...query,fresh:true});
+      }
+      return transcript(id,{...query,cached:true});
+    }
+    // A new session may create its first transcript after the dialog opens.
+    // The list's short cache must not hide that file on the next request.
+    return transcript(id,{...query,fresh:!!item && !privateInfo.get(id)?.transcript});
   }
 
   // Answering an agent in a PC window focuses that window and types there, so
@@ -818,5 +899,5 @@ export function createAgents(options = {}) {
     return { ok: true, via: 'window' };
   }
 
-  return { list, transcript, reply, get lastScanMs() { return lastScanMs; } };
+  return { list, transcript:transcriptRead, reply, get lastScanMs() { return lastScanMs; } };
 }

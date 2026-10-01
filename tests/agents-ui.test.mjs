@@ -122,6 +122,65 @@ test('an older native shell that blocks /api/agents still lists PC terminal wind
   assert.equal(h.el('#agent-count').textContent, '');
 });
 
+test('live transcript aborts a pending JSON body even after response headers arrive',async()=>{
+  let bodySignal;
+  const id='p-50773-54394';
+  const h=harness((path,options)=>{
+    if(path==='/api/agents')return ok({items:agents});
+    if(path==='/api/terminals')return ok({available:true,sessions:[]});
+    if(path.startsWith(`/api/agents/${id}/transcript`))return {ok:true,json:()=>new Promise((resolve,reject)=>{
+      bodySignal=options.signal;
+      options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('body aborted'),{name:'AbortError'})),{once:true});
+    })};
+    return null;
+  });
+  await flush();h.run("navigate('terminais')");await flush();h.run(`openAgent('${id}')`);await flush();
+  assert.ok(bodySignal);
+  h.run('closeAgent()');await flush();
+  assert.equal(bodySignal.aborted,true);
+  assert.equal(h.run('agentTranscriptRequest'),null);
+});
+
+test('live transcript appends deltas, keeps unchanged text, resets on rotation and cancels on pause or close', async () => {
+  let turn=0, pending=null;
+  const id='p-50773-54394';
+  const h=harness((path,options)=>{
+    if(path==='/api/agents')return ok({items:agents});
+    if(path==='/api/terminals')return ok({available:true,sessions:[]});
+    if(path.startsWith(`/api/agents/${id}/transcript`)){
+      turn++;
+      if(turn===1)return ok({available:true,cursor:'a'.repeat(32),reset:true,messages:[{role:'assistant',text:'first'}]});
+      if(turn===2)return ok({available:true,cursor:'b'.repeat(32),reset:false,messages:[{role:'assistant',text:'second'}]});
+      if(turn===3)return ok({available:true,cursor:'b'.repeat(32),unchanged:true,messages:[]});
+      if(turn===4)return ok({available:true,cursor:'c'.repeat(32),reset:true,messages:[{role:'assistant',text:'rotated'}]});
+      return new Promise((resolve,reject)=>{pending={resolve,signal:options.signal};options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})),{once:true});});
+    }
+    return null;
+  });
+  await flush();h.run("navigate('terminais')");await flush();h.run(`openAgent('${id}')`);await flush();await flush();
+  assert.match(h.el('#agent-dialog-kind').textContent,/Live/);
+  await h.run(`readAgentTranscript('${id}')`);await flush();
+  assert.deepEqual(h.el('#agent-transcript').querySelectorAll('.agent-msg').map(e=>e.textContent),['Agentfirst','Agentsecond']);
+  assert.match(h.calls.at(-1).path,/since=a{32}&wait=10/);
+  await h.run(`readAgentTranscript('${id}')`);await flush();
+  assert.equal(h.el('#agent-transcript').querySelectorAll('.agent-msg').length,2);
+  await h.run(`readAgentTranscript('${id}')`);await flush();
+  assert.equal(h.el('#agent-transcript').textContent,'Agentrotated');
+  h.run(`readAgentTranscript('${id}')`);await flush();
+  const paused=pending;
+  h.run("window.dispatchEvent({type:'ponte-native-pause',detail:{}})");await flush();
+  assert.equal(paused.signal.aborted,true);
+  const count=h.calls.length;
+  await h.run(`readAgentTranscript('${id}')`);await flush();
+  assert.equal(h.calls.length,count,'paused app makes no read');
+  h.run("window.dispatchEvent({type:'ponte-native-resume'})");await flush();
+  assert.notEqual(pending,paused);
+  const resumed=pending;
+  h.run('closeAgent()');await flush();
+  assert.equal(resumed.signal.aborted,true);
+  assert.ok(h.calls.every(c=>!c.options.method || c.options.method==='GET'));
+});
+
 // Synthetic agents for the filter and notice checks: no real names, ids or paths.
 const sample = (id, state, extra = {}) => ({ id, kind: 'claude', title: `Sample ${id}`, cwd: '~/work/sample', state, waitingFor: null, since: minutesAgo(1), where: { type: 'none' }, headless: false, transcript: true, canReply: false, ...extra });
 

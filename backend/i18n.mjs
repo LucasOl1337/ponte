@@ -1,4 +1,8 @@
 export const messages = {
+  "INVALID_AGENT_QUERY": {
+    "en": "Invalid conversation cursor or wait time.",
+    "pt": "Cursor de conversa ou tempo de espera inválido."
+  },
   "TERMINAL_IN_COPY_MODE": {
     "en": "This terminal is in copy mode. Exit that mode in the PC terminal before sending input.",
     "pt": "Este terminal está no modo de cópia. Saia desse modo no terminal do PC antes de enviar comandos."

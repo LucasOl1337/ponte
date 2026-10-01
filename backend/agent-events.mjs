@@ -105,3 +105,135 @@ export function createAgentEvents(options = {}) {
 
   return { wait, replied: markReplied, close, get seq() { return seq; }, get waiting() { return waiters.size; }, get watching() { return !!timer || scanning; } };
 }
+
+const TRANSCRIPT_WAITER_LIMIT = 6;
+const TRANSCRIPT_MAX_WAIT_S = 10;
+
+// The existing transcript route can long-poll without a new APK endpoint.
+// One watcher per agent shares reads, but has no timer or lingering work once
+// the last request ends. Cursors and transcript payloads belong to read().
+export function createTranscriptEvents(options = {}) {
+  const read = options.read;
+  if (typeof read !== 'function') throw new TypeError('read must be a function');
+  const now = options.now || Date.now;
+  const setTimer = options.setTimer || setTimeout;
+  const clearTimer = options.clearTimer || clearTimeout;
+  const scanMs = options.scanMs ?? 1000;
+  const watchers = new Map();
+  const waiters = new Set();
+  let closed = false;
+
+  const unchanged = waiter => ({ ...(waiter.last || { cursor: waiter.since }), messages: [], unchanged: true });
+  const held = watcher => [...watcher.waiters].filter(waiter => waiter.held);
+
+  function release(watcher) {
+    if (watcher.waiters.size) return;
+    if (watcher.timer !== null) { clearTimer(watcher.timer); watcher.timer = null; }
+    // An uncancellable read may still be finishing. Keep its single-flight
+    // slot until it ends so a reconnect cannot start a parallel read.
+    if (!watcher.inflight && watchers.get(watcher.id) === watcher) watchers.delete(watcher.id);
+  }
+
+  function finish(waiter, result = unchanged(waiter), error = null) {
+    if (!waiters.delete(waiter)) return;
+    waiter.watcher.waiters.delete(waiter);
+    if (waiter.timer !== null) clearTimer(waiter.timer);
+    waiter.signal?.removeEventListener('abort', waiter.abort);
+    release(waiter.watcher);
+    if (error) waiter.reject(error);
+    else waiter.resolve(result);
+  }
+
+  // Requests with the same cursor share a read. A different cursor must ask
+  // read() again, since an unchanged payload need not contain any messages.
+  // All reads for an id, initial or periodic, use this same serialized slot.
+  async function readFor(watcher, since, active) {
+    while (watcher.inflight) {
+      const flight = watcher.inflight;
+      const result = await flight.promise;
+      if (flight.since === since && result !== null) return result;
+      if (!active()) return null;
+    }
+    if (!active()) return null;
+    const flight = { since, promise: null };
+    flight.promise = Promise.resolve().then(() => active() ? read(watcher.id, { since }) : null);
+    watcher.inflight = flight;
+    try {
+      return await flight.promise;
+    } finally {
+      if (watcher.inflight === flight) watcher.inflight = null;
+      release(watcher);
+    }
+  }
+
+  function schedule(watcher) {
+    if (closed || watcher.timer !== null || watcher.scanning || !held(watcher).length) return;
+    watcher.timer = setTimer(() => scan(watcher), scanMs);
+  }
+
+  async function scan(watcher) {
+    watcher.timer = null;
+    if (closed || !held(watcher).length) return;
+    watcher.scanning = true;
+    try {
+      for (const since of new Set(held(watcher).map(waiter => waiter.since))) {
+        const active = () => !closed && held(watcher).some(waiter => waiter.since === since);
+        const result = await readFor(watcher, since, active);
+        if (!result || !active()) continue;
+        for (const waiter of held(watcher)) if (waiter.since === since) waiter.last = result;
+        if (result.unchanged !== true) {
+          for (const waiter of held(watcher)) if (waiter.since === since) finish(waiter, result);
+        }
+      }
+    } catch (error) {
+      // A departed agent must stay a 404, not look like an unchanged poll.
+      for (const waiter of [...watcher.waiters]) finish(waiter, null, error);
+    } finally {
+      watcher.scanning = false;
+      release(watcher);
+      schedule(watcher);
+    }
+  }
+
+  async function initial(waiter, limitMs) {
+    const active = () => !closed && waiters.has(waiter);
+    try {
+      const result = await readFor(waiter.watcher, waiter.since, active);
+      if (!active()) return;
+      waiter.last = result;
+      if (waiter.since === null || result.unchanged !== true || !limitMs) return finish(waiter, result);
+      const remaining = waiter.deadline - now();
+      if (remaining <= 0) return finish(waiter, result);
+      waiter.held = true;
+      schedule(waiter.watcher);
+    } catch (error) { finish(waiter, null, error); }
+  }
+
+  function wait(id, { since = null, wait: seconds = 0, signal } = {}) {
+    const watcher = watchers.get(id) || { id, waiters: new Set(), timer: null, inflight: null, scanning: false };
+    const limitMs = Math.max(0, Math.min(TRANSCRIPT_MAX_WAIT_S, Math.floor(Number(seconds) || 0))) * 1000;
+    if (closed || signal?.aborted) return Promise.resolve({ cursor: since, messages: [], unchanged: true });
+    watchers.set(id, watcher);
+    return new Promise((resolve, reject) => {
+      const waiter = { watcher, since, signal, resolve, reject, timer: null, held: false, deadline: now() + limitMs };
+      waiter.abort = () => finish(waiter);
+      waiters.add(waiter);
+      watcher.waiters.add(waiter);
+      signal?.addEventListener('abort', waiter.abort, { once: true });
+      // Six open requests globally, even during the initial read. A reconnect
+      // frees the oldest rather than making the new phone request fail.
+      if (waiters.size > TRANSCRIPT_WAITER_LIMIT) finish(waiters.values().next().value);
+      if (since !== null && limitMs) waiter.timer = setTimer(() => finish(waiter), limitMs);
+      initial(waiter, limitMs);
+    });
+  }
+
+  function close() {
+    closed = true;
+    for (const waiter of [...waiters]) finish(waiter);
+    for (const watcher of watchers.values()) if (watcher.timer !== null) { clearTimer(watcher.timer); watcher.timer = null; }
+    watchers.clear();
+  }
+
+  return { wait, close, get waiting() { return waiters.size; }, get watching() { return !closed && [...watchers.values()].some(watcher => watcher.timer !== null || watcher.scanning || watcher.inflight); } };
+}

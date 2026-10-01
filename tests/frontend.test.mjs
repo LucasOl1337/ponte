@@ -276,7 +276,7 @@ test('the "you said" bubble and toasts leave on their own and on the first touch
 });
 
 test('Android permission dialog keeps the pending microphone request, while background closes it', () => {
-  const handlerSource = source.slice(source.indexOf("window.addEventListener('ponte-native-pause'"), source.indexOf("window.addEventListener('hashchange'"));
+  const handlerSource = source.slice(source.indexOf("window.addEventListener('ponte-native-pause', event =>"), source.indexOf("window.addEventListener('hashchange'"));
   let listener;
   const calls = [];
   const context = vm.createContext({
