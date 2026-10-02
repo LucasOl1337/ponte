@@ -623,7 +623,7 @@ test('the socket ceiling follows the capacity the link proved, never below the o
 // clock: frames leave at the step's fps and size, the link serves them at its
 // capacity, and the page acks the youngest arrival every 50 ms with the time
 // it landed, the way a real one does. A restart costs 450 ms with no picture.
-function session({ linkKbps, caps = { ack: true, key: true }, jitterMs = 0, reportsRx = true, seed = 11 }) {
+function session({ linkKbps, contentKbps = null, caps = { ack: true, key: true }, jitterMs = 0, reportsRx = true, seed = 11 }) {
   let clock = 0;
   const c = createRateControl({ now: () => clock, caps, maxFps: 60 });
   let free = 0, state = seed;
@@ -662,7 +662,11 @@ function session({ linkKbps, caps = { ack: true, key: true }, jitterMs = 0, repo
       while (clock < until) {
         if (blackout > 0) { clock += blackout; blackout = 0; continue; }
         const fps = params?.fps ?? 30, kbps = params?.kbps ?? 2500;
-        const bytes = Math.round(kbps * 125 / fps);
+        // The step is a ceiling, not a target: with constant quality the
+        // encoder makes what the scene needs. `contentKbps` is that scene.
+        const ceiling = kbps * 125 / fps;
+        const scene = contentKbps === null ? ceiling : contentKbps * 125 / fps * (0.3 + 1.4 * random());
+        const bytes = Math.max(200, Math.round(Math.min(ceiling, scene)));
         const key = seq === 0 || events.at(-1)?.at > clock - 60;
         const sendAt = clock;
         waiting.push({ seq: ++seq, rx: cross(sendAt, bytes) });
@@ -719,4 +723,29 @@ test('a page that reports no arrival time keeps the old behaviour exactly', () =
   const climbs = silent.events.filter(item => item.reason === 'up');
   assert.ok(climbs.length <= 1, `${climbs.length} climbs without arrival times`);
   assert.equal(silent.c.link.target, null, 'and the estimator never ran');
+});
+
+test('a still picture does not climb a ladder it is not using, and never falls off it', () => {
+  // The bug this guards against shipped once. On the real link, a desktop
+  // making 250 kbps climbed to the top of the ladder in 4 s steps because the
+  // gradient was flat, and then dived to the bottom step and started shedding,
+  // on a link carrying 28 Mbps, while the overuse detector read normal the
+  // whole time. Climbing a ceiling nobody is pressing against buys nothing and
+  // costs 450 ms of picture each time.
+  const still = session({ linkKbps: 28000, contentKbps: 250, jitterMs: 17 });
+  still.open(30);
+  still.run(200);
+  const reasons = still.events.map(item => item.reason);
+  assert.ok(!reasons.includes('shed'), `never shedding on a link with this much room: ${JSON.stringify(reasons)}`);
+  assert.ok(still.step >= INITIAL_STEP, `and never below the opening step: ${still.step}`);
+  assert.ok(still.events.length <= 4, `${still.events.length} restarts for a picture that is not moving: ${JSON.stringify(reasons)}`);
+});
+
+test('a picture that fills its ceiling still climbs on the gradient', () => {
+  // The other half: usage is a gate on the climb, not a ban. A scene pressing
+  // against the step is exactly when a higher ceiling buys sharpness.
+  const busy = session({ linkKbps: 28000, contentKbps: 20000, jitterMs: 17 });
+  busy.open(30);
+  busy.run(60);
+  assert.ok(busy.step > INITIAL_STEP, `step ${busy.step}, climbs ${JSON.stringify(busy.events.map(e => e.reason))}`);
 });

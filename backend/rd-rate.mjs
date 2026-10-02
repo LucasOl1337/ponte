@@ -90,7 +90,13 @@ const PROBE_BACKOFF_MAX_MS = 10 * 60000;
 // it is not even trying. Two seconds of it is permission to try the next step,
 // where the old stopwatch wanted 30 s without a complaint and then a minute
 // between steps: a queue threshold can report damage, never room.
-const CLIMB_CALM_MS = 2000;
+//
+// But only when the picture is actually pressing against the step. Since the
+// encoder went to constant quality with a capped peak, the step is a ceiling,
+// not a target: a still desktop makes 250 kbps whether the ceiling is 2500 or
+// 14000, and climbing then buys nothing and costs 450 ms without a picture.
+// Measured on the real link, that is what 21 climbs in 200 s looked like.
+const CLIMB_CALM_MS = 2000, CLIMB_USE = 0.7;
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
@@ -168,16 +174,20 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     const fresh = sample && now() - sample.at <= SAMPLE_FRESH_MS ? sample.kbps : null;
     // Coming down from a queue, what the link carried while the queue was
     // building is the measurement that matters, and the lower of it and the
-    // gradient's estimate is the one to trust: a link that just narrowed is
-    // still delivering the old rate out of its buffers, and an estimate that
-    // only fell to 85% of that would walk the ladder down one step at a time
-    // while the picture stayed broken. Otherwise there is no queue to measure
-    // against and the gradient's estimate is the better of the two, being a
-    // measurement under the traffic we are really sending rather than a
-    // keyframe burst timed against its own size.
+    // rate the gradient last saw the link break at is the one to trust: a link
+    // that just narrowed is still delivering the old rate out of its buffers.
+    //
+    // The gradient's *target* must never be used here, which cost a release to
+    // learn. It is a send rate, not a capacity: GCC clamps it to 1.5x what is
+    // being delivered, because there the encoder is told to produce exactly
+    // the target. Our encoder produces what the scene needs, so on a still
+    // desktop the target slid down to its own floor while the gradient read
+    // normal the whole way, and the ladder followed it to the bottom step and
+    // started shedding on a link carrying 28 Mbps. Only `capacity`, the rate
+    // measured at the moment the link actually broke, means capacity.
     const rates = since !== null
-      ? [deliveredKbps(since), bwe.target]
-      : [bwe.target ?? fresh];
+      ? [deliveredKbps(since), bwe.capacity]
+      : [bwe.capacity ?? fresh];
     const known = rates.filter(value => finite(value) !== null && value > 0);
     const rate = known.length ? Math.min(...known) : null;
     const fit = rate === null ? below - 1 : WAN_STEPS.findLastIndex(s => s.kbps <= 0.8 * rate);
@@ -448,7 +458,9 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
       // so within a few hundred ms instead of the second the old queue
       // threshold needed. This is the whole reason the ladder stops being a
       // stopwatch: 2 s a step instead of 30 s of calm plus a minute between.
-      if (bwe.calm !== null && bwe.calm >= CLIMB_CALM_MS && t - lastRestartAt >= SETTLE_MS) {
+      const using = deliveredKbps();
+      if (bwe.calm !== null && bwe.calm >= CLIMB_CALM_MS && t - lastRestartAt >= SETTLE_MS
+        && using !== null && using >= CLIMB_USE * WAN_STEPS[step].kbps) {
         const target = step + 1;
         if ((backoff.get(target)?.retryAt ?? 0) <= t) { opening = false; return change('up', target); }
       }

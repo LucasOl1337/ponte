@@ -166,3 +166,20 @@ test('acks out of order or from the same instant carry no gradient', () => {
   assert.equal(bwe.ack(900, 1010, 2000), null, 'older than the last');
   assert.equal(bwe.samples, 0);
 });
+
+test('the target is a send rate, not a capacity: on a link nobody is loading it slides to its floor while the capacity stays unknown', () => {
+  const clock = { t: 0 };
+  const bwe = createBwe({ startKbps: 2500, now: () => clock.t });
+  const link = makeLink({ kbps: 28000, baseMs: 14, jitterMs: 17 });
+  // A still desktop under constant quality: 250 kbps whatever the ceiling is.
+  const { trace } = run({ bwe, link, clock, kbps: 250, seconds: 20 });
+  assert.equal(trace.filter(item => item.verdict === 'overuse').length, 0, 'the link never broke');
+  assert.equal(bwe.capacity, null, 'so there is no capacity measurement, and none may be invented');
+  // GCC clamps the target to 1.5x what is being delivered, because in WebRTC
+  // the encoder is told to produce exactly the target. Ours produces what the
+  // scene needs, so the target tracks the scene down and says nothing at all
+  // about the 28 Mbps the link is carrying. Reading it as capacity is what
+  // sent the ladder to its bottom step in production.
+  assert.ok(bwe.target < 600, `the target followed the scene down to ${Math.round(bwe.target)} kbps`);
+  assert.ok(bwe.calm > 10000, `while the gradient read flat the whole way: ${Math.round(bwe.calm)} ms`);
+});

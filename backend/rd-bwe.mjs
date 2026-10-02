@@ -212,6 +212,9 @@ export function createBwe({ startKbps = 1000, now = () => performance.now() } = 
     fell(kbps) {
       if (typeof kbps !== 'number' || !Number.isFinite(kbps) || kbps <= 0) return;
       target = Math.max(MIN_TARGET_KBPS, Math.min(target, kbps));
+      // Only lowers a capacity the gradient actually measured. Inventing one
+      // from the ladder's own decision would close a loop: the step we fell to
+      // would become "what the link carries" and drive the next fall.
       if (capacity !== null) capacity = Math.min(capacity, kbps);
     },
 
