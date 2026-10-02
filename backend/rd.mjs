@@ -162,7 +162,8 @@ export function createRemoteDesktop({
   inputMode = env.PONTE_RD_INPUT === 'dry-run' ? 'dry-run' : env.PONTE_RD_INPUT === 'off' ? 'off' : 'uinput',
   inputLog = env.PONTE_RD_INPUT_LOG, mapping = env.PONTE_RD_ABS === 'output' ? 'output' : 'layout',
   kbps = Number(env.PONTE_RD_KBPS) || (captureMode === 'lab' ? 4000 : 12000), maxFps = Number(env.PONTE_RD_FPS) || 60,
-  python = 'python3', createInput = createRdInput, makeCapture = createCapture, makeControl = createRateControl, now = () => performance.now(), exists = commandExists, probe = probeRtt,
+  python = 'python3', createInput = createRdInput, makeCapture = createCapture, makeControl = createRateControl,
+  trace = env.PONTE_RD_TRACE === '1', now = () => performance.now(), exists = commandExists, probe = probeRtt,
   focusWatcher = createFocusWatcher({ env, log }), followSettleMs = FOLLOW_SETTLE_MS,
   // Which encoder is behind gpu-screen-recorder: it decides whether the
   // ceiling of a step can become a peak instead of a target. Asked once.
@@ -542,6 +543,14 @@ export function createRemoteDesktop({
         if (next) { this.metrics.restarts++; this.capture.restart(next); }
       }
       if (this.keyWanted && this.waitKey && !this.shedding) { this.apply(this.control.key()); if (this.keyWanted) return; }
+      // PONTE_RD_TRACE=1 puts one line a second in the journal with what the
+      // delay gradient is seeing. The session summary only tells the story
+      // after the fact, and a ladder that oscillates has to be watched live.
+      if (trace && this.control.mode === 'wan') {
+        const l = this.control.link;
+        const round = v => v === null || v === undefined ? '-' : Math.round(v);
+        log.info?.(`[rd] trace step ${this.control.step} ${this.shedding ? 'shed ' : ''}| alvo ${round(l.target)} cap ${round(l.capacity)} | sinal ${l.signal} tend ${l.trend.toFixed(4)} limiar ${l.threshold.toFixed(1)} calma ${round(l.calm)} | socket ${this.ws.bufferedAmount}`);
+      }
       this.apply(this.control.tick());
     }
 
