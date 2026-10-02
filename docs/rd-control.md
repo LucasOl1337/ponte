@@ -11,6 +11,31 @@ A página `rd.html` alterna entre o teclado e mouse deste aparelho e os do apare
 - Ao perder o foco da janela ou esconder a página, o controle é devolvido e as teclas remotas são soltas. Ctrl+X pega de novo.
 - Nas **Configurações**, Ctrl+X pode também entrar em tela cheia em vez de só alternar.
 
+## A tela acompanha o monitor em foco
+
+Um atalho como **Super+2** que abre um espaço de trabalho morando em outro monitor traz esse monitor pra tela remota. Quem decide é o aparelho mostrado: ele escuta o socket de eventos do Hyprland (`.socket2.sock`), e um `focusedmon` que aponta pra outro monitor vira uma troca de captura. A página só recebe o `ready` novo, com o nome e o tamanho do monitor que entrou.
+
+- **Ligado por padrão.** Desliga em Configurações → Monitor → *Acompanhar o monitor em foco*, por página. O `hello` leva `follow`, e `{"t":"follow","on":false}` muda no meio da sessão. Religar já pula pro monitor que está em foco agora.
+- **Escolher um monitor na lista não desliga o acompanhamento**, só muda a vista naquele momento: o próximo Super+N continua levando a tela junto.
+- **Passar por vários espaços de trabalho reinicia o encoder uma vez só.** Cada troca custa ~450 ms sem imagem, então só o monitor onde o foco para conta (`FOLLOW_SETTLE_MS`, 250 ms).
+- Uma conexão de eventos serve todas as sessões, abre com a primeira e fecha com a última. Sem Hyprland (sem assinatura de instância ou sem socket) o acompanhamento simplesmente não acontece, e o resto da sessão segue igual. Se o Hyprland reiniciar, a conexão volta sozinha.
+
+## Texto legível em monitor largo
+
+Fora da LAN a sessão anda numa escada de degraus (`backend/rd-rate.mjs`). Cada degrau tem um teto de largura em pixels e um **piso de legibilidade**: a fração mínima do monitor que sobrevive a esse teto.
+
+Só o teto quebrava a promessa do próprio código ("fps cai antes da largura: ler texto importa mais que movimento") em tela larga: 1920 de um monitor de 3440 é 56% da imagem, e texto a 56% não dá pra ler por mais quadros que cheguem. O limite de cada degrau é o maior entre os dois, então um monitor de 1080p vê exatamente os tetos de sempre e um ultrawide guarda pixel suficiente pra leitura.
+
+| Degrau | kbps | Teto | Piso | 1920 | 2560 | 3440 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 600 | 1280 | 50% | 1280 | 1280 | 1720 |
+| 1 | 1000 | 1920 | 75% | 1920 | 1920 | 2580 |
+| 2 | 1600 | 1920 | 100% | 1920 | nativo | nativo |
+| 3 (abertura) | 2500 | 1920 | 100% | 1920 | nativo | nativo |
+| 4 e 5 | 4000 e 6000 | nativo | 100% | nativo | nativo | nativo |
+
+O palco da página continua limitando por cima: mandar 3440 px pra uma janela de 1500 px gasta bytes que ninguém vê. Trocar de monitor relê o piso, porque ele é uma fração do monitor que está sendo mostrado.
+
 ## O limite do navegador
 
 | Tecla | Na janela | Em tela cheia (Keyboard Lock) |

@@ -516,3 +516,50 @@ test('a stage that grows lifts the width limit with one restart; the same limit 
   lan.c.open(4);
   assert.equal(lan.c.view({ width: 1800, height: 1000 }), null, 'the LAN is never scaled');
 });
+
+// A wide monitor must stay readable: scaling 3440 px down to 1920 is 56% of the
+// picture, and text at 56% cannot be read however many frames arrive.
+test('the readable floor: a step never blurs a wide monitor below its share, and a 1080p one keeps the ceilings it always had', () => {
+  assert.deepEqual(WAN_STEPS.map(s => s.floor), [0.5, 0.75, 1, 1, 1, 1]);
+
+  // 1920 monitor, every step down from the opening one: the limits it always had.
+  // Each fall needs the clock to move: restarts are rationed.
+  const limits = (screenWidth, target) => {
+    let clock = 0;
+    const c = createRateControl({ screen: screenWidth, now: () => clock });
+    c.open(40);
+    for (let guard = 0; c.step > target && guard < 20; guard++) { clock += 5000; c.drop(); }
+    assert.equal(c.step, target, `reached step ${target}`);
+    return c.params().maxWidth;
+  };
+  assert.deepEqual([0, 1, 2, 3].map(step => limits(1920, step)), [1280, 1920, 1920, 1920], 'unchanged for 1080p');
+  // Above the opening step the ceiling was already gone for everyone.
+  assert.deepEqual(WAN_STEPS.slice(4).map(s => s.width), [null, null]);
+
+  // 3440 ultrawide: the opening step shows it whole instead of 1920, and a
+  // limit as wide as the monitor is no scaling at all.
+  const ultra = control({ screen: 3440 });
+  assert.equal(ultra.c.open(40).maxWidth, 3440);
+  assert.equal(scaleBox({ width: 3440, height: 1440 }, 3440), null, 'captured at native size');
+
+  // 2560: the same, where it used to lose a quarter of its pixels.
+  assert.equal(control({ screen: 2560 }).c.open(40).maxWidth, 2560);
+  assert.equal(scaleBox({ width: 2560, height: 1440 }, 2560), null);
+
+  // The bottom steps still scale, but by a share of the monitor, not to 1280.
+  assert.deepEqual([0, 1].map(step => limits(3440, step)), [1720, 2580], 'half and three quarters of 3440, not 1280 and 1920');
+
+  // The stage still caps it: a 1500 px window is not worth 3440 px of picture.
+  const windowed = control({ screen: 3440, view: { width: 1500, height: 800 } });
+  assert.equal(windowed.c.open(40).maxWidth, 1500);
+});
+
+test('the readable floor follows the monitor being shown: switching screens re-reads it', () => {
+  const t = control({ screen: 1920 });
+  assert.equal(t.c.open(40).maxWidth, 1920);
+  // The focus moved to the ultrawide: the same step now means its whole width.
+  t.c.screen(3440);
+  assert.equal(t.c.params().maxWidth, 3440);
+  t.c.screen(1920);
+  assert.equal(t.c.params().maxWidth, 1920);
+});

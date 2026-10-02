@@ -12,6 +12,7 @@ const MODE_KEY = 'ponte-rd-mode';
 const CHORD_KEY = 'ponte-rd-chord';
 const FPS_KEY = 'ponte-rd-fps';
 const CLIPBOARD_KEY = 'ponte-rd-clipboard';
+const FOLLOW_KEY = 'ponte-rd-follow';
 const FPS_CHOICES = [60, 30, 15];
 // Controlling, the window title starts with this: a compositor rule (Hyprland
 // submap, docs/rd-control.md) can hand Super to the page only while it is set.
@@ -181,6 +182,10 @@ let fpsLimit = 60;
 try { const stored = Number(localStorage.getItem(FPS_KEY)); if (FPS_CHOICES.includes(stored)) fpsLimit = stored; } catch {}
 let clipboardOn = true;
 try { if (localStorage.getItem(CLIPBOARD_KEY) === 'off') clipboardOn = false; } catch {}
+// Super+N landing on another monitor brings that monitor here. On by default:
+// without it a workspace on another screen just disappears from view.
+let followOn = true;
+try { if (localStorage.getItem(FOLLOW_KEY) === 'off') followOn = false; } catch {}
 const linkLevels = [];          // the last few seconds' link levels, worst wins
 let firstFrameAt = 0;           // when this stream's first picture was drawn; no verdict before it
 let socket = null;
@@ -320,7 +325,7 @@ function connect() {
   socket = current;
   current.addEventListener('open', () => {
     if (socket !== current) return;
-    const hello = { t: 'hello', v: 1, token, maxFps: fpsLimit, caps: { ack: true, key: true } };
+    const hello = { t: 'hello', v: 1, token, maxFps: fpsLimit, caps: { ack: true, key: true }, follow: followOn };
     if (wantedMonitor) hello.monitor = wantedMonitor;
     const view = stageView();
     if (view) hello.view = view;
@@ -437,6 +442,9 @@ function ready(message) {
   overlay('');
   status('');
   if (message.width && message.height) setVideoSize(message.width, message.height);
+  // Not `wantedMonitor`: with nothing asked for, a reconnect lands on whatever
+  // has the focus then, which is the point of following.
+  if (typeof message.follow === 'boolean') followOn = message.follow;
   renderMonitors();
   renderNodes();
   renderMode();
@@ -1193,6 +1201,7 @@ function renderSettings() {
   $('#rd-fps').value = String(fpsLimit);
   $('#rd-clipboard').checked = clipboardOn;
   $('#rd-clipboard').disabled = session ? !inputAllows('clipboard') : false;
+  $('#rd-follow').checked = followOn;
 }
 function setChordAction(value) {
   chordAction = value === 'fullscreen' ? 'fullscreen' : 'window';
@@ -1209,6 +1218,13 @@ function setClipboard(on) {
   clipboardOn = !!on;
   try { localStorage.setItem(CLIPBOARD_KEY, clipboardOn ? 'on' : 'off'); } catch {}
   if (!clipboardOn) pendingClip = null;
+}
+// The target decides when the focus moves, so this only tells it; the switch
+// itself arrives as the next `ready`.
+function setFollow(on) {
+  followOn = !!on;
+  try { localStorage.setItem(FOLLOW_KEY, followOn ? 'on' : 'off'); } catch {}
+  if (session) send({ t: 'follow', on: followOn });
 }
 
 // ---- wiring -----------------------------------------------------------------------------------------
@@ -1252,6 +1268,7 @@ function start() {
   $('#rd-chord-action').addEventListener('change', event => setChordAction(event.target.value));
   $('#rd-fps').addEventListener('change', event => setFpsLimit(Number(event.target.value)));
   $('#rd-clipboard').addEventListener('change', event => setClipboard(event.target.checked));
+  $('#rd-follow').addEventListener('change', event => setFollow(event.target.checked));
   $('#rd-mode-abs').addEventListener('click', () => setMode('abs'));
   $('#rd-mode-rel').addEventListener('click', () => setMode('rel'));
   $('#rd-fullscreen').addEventListener('click', enterFullscreen);

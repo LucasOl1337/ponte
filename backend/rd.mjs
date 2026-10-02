@@ -9,6 +9,7 @@ import { spawn as spawnChild } from 'node:child_process';
 import { createCapture } from './rd-capture.mjs';
 import { createRdInput } from './rd-input.mjs';
 import { createRateControl, scaleBox } from './rd-rate.mjs';
+import { createFocusWatcher } from './hypr-focus.mjs';
 import { copyToClipboard } from './images.mjs';
 import { connect } from './ws.mjs';
 import { commandExists, runCommand } from './process.mjs';
@@ -17,6 +18,10 @@ export const RD_VERSION = 1;
 export const HEADER_BYTES = 16;
 export const MAX_CLIP_BYTES = 1024 * 1024;
 const HELLO_TIMEOUT_MS = 5000;
+// Changing monitor restarts the encoder (~450 ms without a picture), so walking
+// through workspaces must not restart it once per workspace: only where the
+// focus comes to rest counts.
+const FOLLOW_SETTLE_MS = 250;
 const AUTHED_MAX_MESSAGE = MAX_CLIP_BYTES + 64 * 1024; // a clip may be 1 MiB; before the hello only 64 KiB
 const epochNow = () => performance.timeOrigin + performance.now();
 const INPUT_REASONS = ['invalid_payload', 'ended', 'not_holder', 'view_only', 'input_unavailable', 'early_overflow', 'unknown_code', 'worker_disabled', 'stopped', 'duplicate_down', 'up_without_down', 'helper_noop', 'legacy_ack', 'stdin_error', 'spawn_error', 'helper_exit', 'stop_without_ack', 'stop_timeout', 'tracking_overflow'];
@@ -158,6 +163,7 @@ export function createRemoteDesktop({
   inputLog = env.PONTE_RD_INPUT_LOG, mapping = env.PONTE_RD_ABS === 'output' ? 'output' : 'layout',
   kbps = Number(env.PONTE_RD_KBPS) || (captureMode === 'lab' ? 4000 : 12000), maxFps = Number(env.PONTE_RD_FPS) || 60,
   python = 'python3', createInput = createRdInput, makeCapture = createCapture, now = () => performance.now(), exists = commandExists, probe = probeRtt,
+  focusWatcher = createFocusWatcher({ env, log }), followSettleMs = FOLLOW_SETTLE_MS,
 } = {}) {
   if (env.NODE_TEST_CONTEXT || process.env.NODE_TEST_CONTEXT) {
     if (inputMode === 'uinput') inputMode = 'dry-run';
@@ -317,6 +323,11 @@ export function createRemoteDesktop({
       this.keys = keys;
       this.fps = Math.max(1, Math.min(maxFps, Math.round(Number(hello.maxFps) || maxFps)));
       this.requestedMonitor = typeof hello.monitor === 'string' ? hello.monitor : null;
+      // Follow the focus: Super+N that lands on another monitor brings that
+      // monitor to the remote screen. Picking one by hand only moves the view;
+      // the next focus change still follows, which is what makes Super+N work
+      // every time. A page that says nothing gets it, and can turn it off.
+      this.follow = hello.follow !== false;
       this.adapt = createAdaptation({ fps: this.fps, kbps, now });
       // What the page can do beyond the first protocol version, and its stage size.
       const announced = hello.caps && typeof hello.caps === 'object' ? hello.caps : {};
@@ -356,11 +367,47 @@ export function createRemoteDesktop({
         this.lastClip = text;
         this.sendJson({ t: 'clip', text });
       });
+      this.stopFocus = focusWatcher?.watch?.(event => this.onFocusEvent(event));
       this.timer = setInterval(() => this.tick(), 1000);
       this.timer.unref?.();
     }
 
+    // Show another monitor: the encoder restarts and the next keyframe carries a
+    // fresh `ready`, which is how the page learns the new name and size.
+    showMonitor(target) {
+      this.input?.release();
+      this.input?.setMonitors(this.monitors);
+      this.monitor = target.name;
+      this.waitKey = true;
+      this.metrics.restarts++;
+      this.capture.restart(this.captureParams(target));
+    }
+
+    // The focus moved. Reread the layout (a monitor may have been added or its
+    // geometry changed) and follow it, unless this page asked not to.
+    async followFocus(name) {
+      if (this.ended || !this.follow || !this.capture) return;
+      try { this.monitors = await readMonitors(); } catch { return; }
+      if (this.ended || !this.follow) return;
+      const focused = (name && this.monitors.find(item => item.name === name)) || this.monitors.find(item => item.focused);
+      if (!focused || focused.name === this.monitor) return;
+      this.showMonitor(focused);
+    }
+
+    // Walking through workspaces fires one event per step; only the monitor the
+    // focus rests on is worth an encoder restart.
+    onFocusEvent(event) {
+      if (!this.follow || this.ended) return;
+      this.pendingFocus = event.monitor || null;
+      clearTimeout(this.followTimer);
+      this.followTimer = setTimeout(() => { this.followFocus(this.pendingFocus); }, followSettleMs);
+      this.followTimer.unref?.();
+    }
+
     captureParams(monitor) {
+      // The readable floor is a share of this monitor, so the rate control has
+      // to know which one it is before it answers.
+      this.control.screen(monitor?.width);
       const wan = this.control.params();
       const { fps, kbps: rate } = wan || this.adapt.current;
       return { monitor: monitor.name, width: monitor.width, height: monitor.height, fps, kbps: rate, keyint: wan ? wan.keyint : 1, scale: wan ? scaleBox(monitor, wan.maxWidth) : null };
@@ -453,7 +500,7 @@ export function createRemoteDesktop({
       this.announced = { monitor: params.monitor, codec: sps.codec, width: sps.width, height: sps.height };
       this.sendJson({
         t: 'ready', v: RD_VERSION, sessionId: this.id, node: nodeInfo(), monitors, monitor: params.monitor,
-        width: sps.width, height: sps.height, fps: params.fps, codec: sps.codec,
+        width: sps.width, height: sps.height, fps: params.fps, codec: sps.codec, follow: this.follow,
         input: { abs: input, rel: input, keys: input, clipboard: true },
       });
     }
@@ -536,12 +583,18 @@ export function createRemoteDesktop({
           try { this.monitors = await readMonitors(); } catch {}
           const target = this.monitors.find(item => item.name === m.name);
           if (!target) { this.sendJson({ t: 'error', code: 'INVALID_MONITOR' }); break; }
-          this.input?.release();
-          this.input?.setMonitors(this.monitors);
-          this.monitor = target.name;
-          this.waitKey = true;
-          this.metrics.restarts++;
-          this.capture.restart(this.captureParams(target));
+          // A hand-picked monitor cancels a focus change still settling, but
+          // leaves following on for the next one.
+          clearTimeout(this.followTimer);
+          this.showMonitor(target);
+          break;
+        }
+        case 'follow': {
+          if (typeof m.on !== 'boolean') break;
+          this.follow = m.on;
+          clearTimeout(this.followTimer);
+          // Turning it on catches up with wherever the focus is now.
+          if (this.follow) this.followFocus(null);
           break;
         }
         default: break;
@@ -559,6 +612,8 @@ export function createRemoteDesktop({
       this.ended = true;
       clearInterval(this.timer);
       clearTimeout(this.inputTimer);
+      clearTimeout(this.followTimer);
+      this.stopFocus?.();
       this.capture?.stop();
       const stopped = this.input?.stop();
       this.stopClipboard?.();

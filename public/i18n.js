@@ -447,6 +447,8 @@
   "30 por segundo": "30 per second",
   "15 por segundo (conexão fraca)": "15 per second (weak connection)",
   "A qualidade se ajusta sozinha à conexão; aqui fica só o teto. Mudar reconecta.": "Quality adapts to the connection by itself; this is only the ceiling. Changing it reconnects.",
+  "Acompanhar o monitor em foco": "Follow the focused monitor",
+  "Quando um atalho como Super+2 abre um espaço de trabalho que mora em outro monitor, a tela vai junto. Escolher um monitor na lista acima só muda a vista agora; o próximo Super+N continua acompanhando.": "When a shortcut like Super+2 opens a workspace that lives on another monitor, the screen goes with it. Picking a monitor in the list above only moves the view now; the next Super+N still follows.",
   "Área de transferência": "Clipboard",
   "Copiar e colar entre este aparelho e o da tela": "Copy and paste between this device and the one on the screen",
   "Detalhes técnicos": "Technical details",

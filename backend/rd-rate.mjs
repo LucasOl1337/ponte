@@ -16,13 +16,20 @@
 // A LAN answers in 1-10 ms; the notebook away from home was 22-28 ms at best.
 export const LAN_RTT_MS = 15;
 // fps falls before the width: reading text matters more than motion.
+//
+// `width` is a ceiling in pixels and `floor` the least of the monitor that may
+// survive it. A fixed ceiling alone breaks that promise on a wide screen: 1920
+// of a 3440 px monitor is 56% of the picture, and text at 56% is mush however
+// many frames per second arrive. The step's limit is therefore the larger of
+// the two, so a 1080p monitor sees the ceilings it always saw and a wide one
+// keeps enough pixels to be read.
 export const WAN_STEPS = [
-  { fps: 15, kbps: 600, width: 1280 },
-  { fps: 15, kbps: 1000, width: 1920 },
-  { fps: 20, kbps: 1600, width: 1920 },
-  { fps: 30, kbps: 2500, width: 1920 },
-  { fps: 30, kbps: 4000, width: null },
-  { fps: 30, kbps: 6000, width: null },
+  { fps: 15, kbps: 600, width: 1280, floor: 0.5 },
+  { fps: 15, kbps: 1000, width: 1920, floor: 0.75 },
+  { fps: 20, kbps: 1600, width: 1920, floor: 1 },
+  { fps: 30, kbps: 2500, width: 1920, floor: 1 },
+  { fps: 30, kbps: 4000, width: null, floor: 1 },
+  { fps: 30, kbps: 6000, width: null, floor: 1 },
 ];
 export const INITIAL_STEP = 3;
 // Keyframe interval (s) outside the LAN. TCP loses nothing, so a keyframe is
@@ -70,22 +77,31 @@ export function scaleBox(monitor, maxWidth) {
 // session applies with one encoder restart ('shed' instead means: stop sending
 // until the queue drains). params() is null in the LAN, where the session's
 // own adaptation keeps the encoder as before.
-export function createRateControl({ maxFps = 60, caps = {}, view = null, now = () => performance.now() } = {}) {
+export function createRateControl({ maxFps = 60, caps = {}, view = null, screen = null, now = () => performance.now() } = {}) {
   let mode = 'lan', step = INITIAL_STEP, shedding = false;
   let openedAt = now(), openRtt = null;
   let lastRestartAt = -Infinity, lastDownAt = -Infinity, lastUpAt = -Infinity, upTo = null, atStepSince = now();
   let lastUncalmAt = now(), uncalmSince = null, lastReportAt = -Infinity, badStreak = 0;
   let lastKey = null, opening = false;
   let probeAt = null, probeFailures = 0, probeRetryAt = -Infinity;
-  let stage = view;
+  let stage = view, screenWidth = finite(screen);
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
   // Ack path: frames sent and not acked yet, ages of the acked ones, acked bytes.
   let acking = false, firstAckAt = null, sentSeq = 0, ackedSeq = 0, keySeq = 0, badSince = null, farSince = null, judgeFrom = now(), sample = null;
   const inFlight = [], ages = [], acked = [];
 
+  // The step's own limit, never below what the monitor needs to stay readable.
+  // The page's stage still caps it: showing a 3440 px picture in a 1500 px
+  // window costs bytes nobody can see.
+  const stepWidth = () => {
+    const { width, floor } = WAN_STEPS[step];
+    if (!screenWidth) return width;
+    const readable = Math.ceil(screenWidth * floor);
+    return width ? Math.max(width, readable) : null;
+  };
   const widthLimit = () => {
-    const limits = [WAN_STEPS[step].width, finite(stage?.width)].filter(Boolean);
+    const limits = [stepWidth(), finite(stage?.width)].filter(Boolean);
     return limits.length ? Math.min(...limits) : null;
   };
   const params = () => mode === 'lan' ? null : {
@@ -385,6 +401,10 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, now = (
       if (mode !== 'wan' || widthLimit() === before) return null;
       return change('view', step);
     },
+    // Which monitor is being shown: its width sets the readable floor. The
+    // session restarts the encoder for the switch anyway, so this never asks
+    // for one of its own.
+    screen(width) { screenWidth = finite(width); },
     // The session dropped a delta because its own buffer is over the ceiling.
     drop() {
       if (mode !== 'wan' || now() - lastRestartAt < KEY_COALESCE_MS) return null;

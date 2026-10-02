@@ -108,12 +108,12 @@ test('the pairing hash is saved and stripped, and hello goes to /api/rd on the p
   assert.equal(h.socket.url, 'ws://127.0.0.1:8787/api/rd?node=feedfacecafebeef');
   h.socket.open();
   // caps and view go to every server: one that does not know them ignores them.
-  assert.deepEqual(h.socket.sent[0], { t: 'hello', v: 1, token: TOKEN, maxFps: 60, caps: { ack: true, key: true }, view: { width: 1000, height: 500 } });
+  assert.deepEqual(h.socket.sent[0], { t: 'hello', v: 1, token: TOKEN, maxFps: 60, caps: { ack: true, key: true }, follow: true, view: { width: 1000, height: 500 } });
   assert.equal(h.el('#rd-probe').hidden, false);
   const again = harness({ hash: '', search: '?monitor=LAB-2', stored: { 'ponte-pair-token': 'stored-token-0123456789abcdef0123456789' } });
   again.window.devicePixelRatio = 2;
   again.socket.open();
-  assert.deepEqual(again.socket.sent.at(-1), { t: 'hello', v: 1, token: 'stored-token-0123456789abcdef0123456789', maxFps: 60, caps: { ack: true, key: true }, monitor: 'LAB-2', view: { width: 2000, height: 1000 } });
+  assert.deepEqual(again.socket.sent.at(-1), { t: 'hello', v: 1, token: 'stored-token-0123456789abcdef0123456789', maxFps: 60, caps: { ack: true, key: true }, follow: true, monitor: 'LAB-2', view: { width: 2000, height: 1000 } });
   assert.equal(again.el('#rd-probe').hidden, true);
   const none = harness({ hash: '' });
   assert.equal(FakeSocket.all.length, 0);
