@@ -2,6 +2,41 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.47 (2026-10-02)
+
+The remote desktop stops paying for bytes nobody asked for: the step of the ladder became a ceiling
+on the peak instead of a target, and the encoder spends what the picture needs.
+Server and pages; the APK does not change (bump it so a cached WebView reloads).
+
+- **Constant quality with a capped peak, instead of CBR.** Measured on a real 1080p monitor, h264,
+  30 fps, 2 s keyint: at a 2500 ceiling, 1.43 Mbps with a 115 KB keyframe became 1.10 Mbps with a
+  131 KB one; at 6000, 2.84 Mbps became 1.13 Mbps for the same 201 KB keyframe. Below 1600 the
+  ceiling is what binds and the two are identical, so a bad link does not regress. The keyframe is
+  the frame that shows up after every restart, and CBR starved it the most.
+- **The keys are the encoder's, not the recorder's.** NVENC takes `rc=vbr;cq=…` and needs `b=0`,
+  VAAPI takes `rc_mode=QVBR;qp=…` and refuses it; `ICQ` and `AVBR` do not open the codec at all.
+  The vendor comes from `gpu-screen-recorder --info`, asked once; one with no recipe stays on CBR.
+  A run that dies in under 4 s without a single frame turns constant quality off for the rest of the
+  session: a softer keyframe beats a black screen.
+- **Two more steps at the top, 9 and 14 Mbps.** The home link measured 27.9 Mbps with 0% loss while
+  the ladder stopped at 6, so a session used 21% of what was there. A keyframe burst cannot measure
+  past its own bytes over the 50 ms ack floor, so the fast opening does not jump there; the one step
+  a minute climb does.
+- **The stage no longer restarts the encoder for a few pixels.** Dragging a window border changed the
+  stage width every frame and each one was a new encoder (8 restarts in one session, ~450 ms blind
+  each). The limit in force now moves only when the stage leaves a band around it: 6% wider, or 25%
+  narrower. In between the new stage rides along on the next restart.
+- **The socket ceiling follows the link, not the encoder.** On a 28 Mbps link carrying 2 Mbps, 100 ms
+  of the encoder was 31 KB, so a jitter spike threw a frame away with the whole link idle. A dropped
+  delta costs a keyframe and, outside the LAN, a whole new encoder.
+- **Drops show up in the journal**: how many, why, and how full the socket was against the ceiling in
+  force. 131 of one session's 176 restarts were keyframes asked for after a drop, and the log said
+  nothing about them.
+- Verified: `npm test` 577 pass, 0 fail, 1 skipped. On the real link, a session on the 3440x1440
+  monitor ran at 31.5 fps on 362 kbps with no drops and no view/key/probe restarts, against
+  1368-2056 kbps at 24-30 fps before; the encoder command line in production carries
+  `rc=vbr;cq=23;b=0;maxrate=4000k;bufsize=4000k`.
+
 ## 0.1.0-alpha.46 (2026-10-01)
 
 DailyWork shows up inside Ponte: today's context, a passive log and a review step before anything is sent.
