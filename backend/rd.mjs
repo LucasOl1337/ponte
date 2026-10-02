@@ -343,7 +343,7 @@ export function createRemoteDesktop({
       this.seq = 0; this.waitKey = true; this.keyWanted = false; this.announced = null; this.ended = false; this.shedding = false;
       this.linkSent = 'lan'; // what a page assumes until told
       this.failures = 0; this.lastUnitAt = now();
-      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, decisions: [], pesToSend: [], lastToSend: [], early: 0, dropReasons: {}, dropBuffered: [], dropCeiling: null };
+      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, decisions: [], pesToSend: [], lastToSend: [], early: 0, dropReasons: {}, dropBuffered: [], dropCeiling: null, linkTarget: null, linkCapacity: null };
     }
 
     async start() {
@@ -437,6 +437,9 @@ export function createRemoteDesktop({
       this.metrics.reasons[decision.reason] = (this.metrics.reasons[decision.reason] || 0) + 1;
       this.metrics.decisions.push({ at: epochNow(), reason: decision.reason, step: this.control.step });
       if (this.metrics.decisions.length > 50) this.metrics.decisions.shift();
+      const believed = this.control.link;
+      if (believed.target !== null) this.metrics.linkTarget = Math.round(believed.target);
+      if (believed.capacity !== null) this.metrics.linkCapacity = Math.round(believed.capacity);
       const monitor = this.monitors.find(m => m.name === this.monitor) || this.monitors[0];
       this.capture.restart(this.captureParams(monitor));
     }
@@ -586,7 +589,7 @@ export function createRemoteDesktop({
         case 'stats': this.adapt.stats(m); this.clientStats = m; this.apply(this.control.stats(m)); break;
         // Pages that announced caps.ack / caps.key: the last frame that arrived,
         // and a decoder that lost its reference and needs a keyframe.
-        case 'ack': this.apply(this.control.ack(m.seq)); break;
+        case 'ack': this.apply(this.control.ack(m.seq, num(m.rx) ? m.rx : null)); break;
         case 'keyframe': this.apply(this.control.key()); break;
         // The stage changed size (a window resized or put in full screen).
         case 'view':
@@ -649,8 +652,14 @@ export function createRemoteDesktop({
       // What the socket held when a frame was thrown away, against the ceiling
       // in force: a stalled link and a ceiling set too low look the same in the
       // restart count alone.
+      // What the delay gradient concluded: the capacity it estimates the link
+      // carries, and where it last saw the link break. A step that looks wrong
+      // in the restart count alone could be a bad ladder or a bad estimate.
+      const gradient = summary.linkTarget !== null
+        ? `, link ~${summary.linkTarget} kbps${summary.linkCapacity !== null ? ` (broke at ${summary.linkCapacity})` : ''}`
+        : '';
       const drops = summary.dropped ? `, drops ${summary.dropped}${dropWhy ? ` (${dropWhy})` : ''}, socket p50 ${kb(summary.dropBufferedP50)} p95 ${kb(summary.dropBufferedP95)} of ${kb(summary.dropCeiling)}` : '';
-      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}${drops}${steps ? `; ${steps}` : ''}`);
+      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms${gradient}, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}${drops}${steps ? `; ${steps}` : ''}`);
       this.endPromise = Promise.resolve(stopped).then(() => {
         const input = this.inputSummary();
         summary.input = input;
@@ -689,6 +698,7 @@ export function summarize(m) {
     fps: Math.round(m.frames / seconds * 10) / 10, kbps: Math.round(m.bytes * 8 / seconds / 1000),
     avgKeyBytes: m.keyframes ? Math.round(m.keyBytes / m.keyframes) : null, avgDeltaBytes: deltas ? Math.round((m.bytes - m.keyBytes) / deltas) : null,
     dropReasons: { ...m.dropReasons },
+    linkTarget: m.linkTarget, linkCapacity: m.linkCapacity,
     dropBufferedP50: percentile(m.dropBuffered, 0.5), dropBufferedP95: percentile(m.dropBuffered, 0.95),
     dropCeiling: m.dropCeiling,
     pesToSendP50: percentile(m.pesToSend, 0.5), pesToSendP95: percentile(m.pesToSend, 0.95),

@@ -220,6 +220,7 @@ let hardwareFailed = false;   // for the rest of the page's life
 const inflight = new Map();    // seq → { sendTime, recvAt }
 let catchingUp = false;       // the frames queued while configuring are being decoded
 let ackSeq = 0, ackSent = 0, ackTimer = 0, lastAckAt = -Infinity, keyframeAskedAt = -Infinity;
+let ackRx = 0;                 // when the acked frame arrived, by this page's clock
 let canvasContext = null;
 let sampler = null;
 let videoSize = { width: 0, height: 0 };
@@ -371,10 +372,15 @@ function sendView() {
 }
 window.addEventListener('resize', () => { clearTimeout(viewTimer); viewTimer = setTimeout(sendView, 600); });
 
-// On arrival, before decoding: the server reads the link's queue from it.
-function acknowledge(seq) {
+// On arrival, before decoding: the server reads the link's queue from it, and
+// from the gradient of the arrival times the capacity of the link itself. The
+// time goes out raw, in this page's clock, not corrected by clockOffset: the
+// server only ever subtracts one arrival from the next, so the offset between
+// the two clocks cancels on its own, and re-estimating it mid-session cannot
+// inject a step into a delay gradient that is being read in tenths of a ms.
+function acknowledge(seq, rx) {
   if (!(seq > ackSeq)) return;
-  ackSeq = seq;
+  ackSeq = seq; ackRx = rx;
   if (ackTimer) return;
   const wait = lastAckAt + ACK_EVERY_MS - performance.now();
   if (wait <= 0) sendAck(); else ackTimer = setTimeout(sendAck, wait);
@@ -384,7 +390,7 @@ function sendAck() {
   if (ackSeq === ackSent) return;
   lastAckAt = performance.now();
   ackSent = ackSeq;
-  send({ t: 'ack', seq: ackSeq });
+  send({ t: 'ack', seq: ackSeq, rx: ackRx });
 }
 
 // A delta was dropped: every frame up to the next keyframe is lost, and on a
@@ -527,8 +533,9 @@ function video(buffer) {
   const header = parseHeader(buffer, littleEndian);
   if (!header) return;
   bytesReceived += buffer.byteLength;
-  acknowledge(header.seq);
-  const chunk = { ...header, recvAt: nowEpoch() };
+  const recvAt = nowEpoch();
+  acknowledge(header.seq, recvAt);
+  const chunk = { ...header, recvAt };
   if (configuring) {
     if (chunk.key) queuedChunks = [chunk]; else if (queuedChunks.length && queuedChunks.length < MAX_CONFIGURE_QUEUE) queuedChunks.push(chunk); else { framesDropped++; askKeyframe(); }
     return;

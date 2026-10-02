@@ -1844,11 +1844,14 @@ function startVideoLive(session) {
     video.ackTimer = 0;
     if (video.ackSeq === video.ackSent) return;
     video.lastAckAt = performance.now(); video.ackSent = video.ackSeq;
-    send({ t: 'ack', seq: video.ackSeq });
+    send({ t: 'ack', seq: video.ackSeq, rx: video.ackRx });
   }
-  function acknowledge(seq) {
+  // The arrival time rides along in the page's own clock: the server reads the
+  // link's capacity from the gradient between consecutive arrivals, where the
+  // offset between the two clocks cancels.
+  function acknowledge(seq, rx) {
     if (!(seq > video.ackSeq)) return;
-    video.ackSeq = seq;
+    video.ackSeq = seq; video.ackRx = rx;
     if (video.ackTimer) return;
     const wait = video.lastAckAt + VIDEO_ACK_MS - performance.now();
     if (wait <= 0) sendAck(); else video.ackTimer = setTimeout(sendAck, wait);
@@ -1897,7 +1900,7 @@ function startVideoLive(session) {
     const chunk = parseVideoUnit(buffer, video.littleEndian);
     if (!chunk) return;
     video.bytes += buffer.byteLength;
-    acknowledge(chunk.seq);
+    acknowledge(chunk.seq, Date.now());
     const decoder = video.decoder;
     if (!decoder || decoder.state !== 'configured') { video.waitingKey = true; if (!chunk.key) { video.drops++; askKeyframe(); } return; }
     // A late frame is dropped until the next keyframe; outside the LAN frames arrive in bursts, so only a second of them is late.

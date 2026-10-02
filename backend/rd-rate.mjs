@@ -14,6 +14,8 @@
 // waits behind the video, so rtt − its floor is the queue) and the p95 of its
 // send → arrival latencies; the kbps it received is what the link delivers.
 // A LAN answers in 1-10 ms; the notebook away from home was 22-28 ms at best.
+import { createBwe } from './rd-bwe.mjs';
+
 export const LAN_RTT_MS = 15;
 // fps falls before the width: reading text matters more than motion.
 //
@@ -84,6 +86,12 @@ const VIEW_GROW = 1.06, VIEW_SHRINK = 0.75;
 const RECOVERY_SAMPLE_MS = SAMPLE_FRESH_MS;
 const PROBE_BACKOFF_MAX_MS = 10 * 60000;
 
+// A flat delay gradient at the rate we are already sending is the link saying
+// it is not even trying. Two seconds of it is permission to try the next step,
+// where the old stopwatch wanted 30 s without a complaint and then a minute
+// between steps: a queue threshold can report damage, never room.
+const CLIMB_CALM_MS = 2000;
+
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 // The -s box for a width limit: the monitor's aspect, even sizes, null when
@@ -109,6 +117,10 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
   let stage = view, screenWidth = finite(screen), appliedWidth = null;
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
+  // Delay-gradient congestion control over the ack stream. It answers the two
+  // questions the ladder used to guess at: is there room above this step, and
+  // what does the link actually carry when it runs out.
+  const bwe = createBwe({ startKbps: WAN_STEPS[INITIAL_STEP].kbps, now });
   // Ack path: frames sent and not acked yet, ages of the acked ones, acked bytes.
   let acking = false, firstAckAt = null, sentSeq = 0, ackedSeq = 0, keySeq = 0, badSince = null, farSince = null, judgeFrom = now(), sample = null;
   const inFlight = [], ages = [], acked = [];
@@ -154,7 +166,20 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
   // a standing queue a fresh keyframe burst measures it, or it is one step.
   const fitting = (below = step, since = null) => {
     const fresh = sample && now() - sample.at <= SAMPLE_FRESH_MS ? sample.kbps : null;
-    const rate = since !== null ? deliveredKbps(since) : fresh;
+    // Coming down from a queue, what the link carried while the queue was
+    // building is the measurement that matters, and the lower of it and the
+    // gradient's estimate is the one to trust: a link that just narrowed is
+    // still delivering the old rate out of its buffers, and an estimate that
+    // only fell to 85% of that would walk the ladder down one step at a time
+    // while the picture stayed broken. Otherwise there is no queue to measure
+    // against and the gradient's estimate is the better of the two, being a
+    // measurement under the traffic we are really sending rather than a
+    // keyframe burst timed against its own size.
+    const rates = since !== null
+      ? [deliveredKbps(since), bwe.target]
+      : [bwe.target ?? fresh];
+    const known = rates.filter(value => finite(value) !== null && value > 0);
+    const rate = known.length ? Math.min(...known) : null;
     const fit = rate === null ? below - 1 : WAN_STEPS.findLastIndex(s => s.kbps <= 0.8 * rate);
     return Math.max(0, Math.min(below - 1, fit));
   };
@@ -187,8 +212,10 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     if (reason === 'up') { lastUpAt = t; upTo = next; }
     if (reason === 'key') keyRestarts.push(t);
     if (next !== step || reason === 'wan') atStepSince = t;
+    if (reason === 'down' || reason === 'wan') bwe.fell(WAN_STEPS[next].kbps);
     step = next; lastRestartAt = t; badStreak = 0; shedding = false; lastUncalmAt = t;
     appliedWidth = widthLimit();
+    bwe.restart();
     // Frames of the old run still queued say nothing about the new one, nor
     // do the ones sent behind them: judge again once they have drained.
     badSince = null; uncalmSince = null; judgeFrom = inFlight.length ? Infinity : t;
@@ -197,8 +224,8 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
 
   // Too much queued (or in flight for too long): a step down at once, all
   // the way to what the link delivers; on the floor, stop sending instead.
-  function congested(queue, emergency) {
-    if (step > 0) return change('down', fitting(step, badSince?.at ?? null));
+  function congested(queue, emergency, since = badSince?.at ?? null) {
+    if (step > 0) return change('down', fitting(step, since));
     if (!shedding && (emergency || queue > QUEUE_SHED_MS)) { shedding = true; opening = false; return { reason: 'shed', params: params() }; }
     return null;
   }
@@ -229,7 +256,9 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     let bytes = 0;
     for (const frame of inFlight) if (frame.at >= lastRestartAt) bytes += frame.bytes;
     const allowance = WAN_STEPS[step].kbps * 125 + (lastKey && lastKey.at >= lastRestartAt ? lastKey.bytes : 0);
-    if (late > IN_FLIGHT_EMERGENCY_MS || bytes > allowance) return congested(late, true);
+    if (late > IN_FLIGHT_EMERGENCY_MS || bytes > allowance) {
+      return congested(late, true, bwe.risingSince ?? badSince?.at ?? oldest.at);
+    }
     return null;
   }
 
@@ -254,6 +283,10 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     get step() { return step; },
     get shedding() { return shedding; },
     get acking() { return acking; },
+    // What the gradient currently believes, for the session journal.
+    get link() {
+      return { target: bwe.target, signal: bwe.signal, trend: bwe.trend, threshold: bwe.threshold, calm: bwe.calm, capacity: bwe.capacity, risingSince: bwe.risingSince };
+    },
     params,
     // The round trip measured before the first frame, on an empty queue.
     open(rtt) {
@@ -262,6 +295,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
       mode = openRtt !== null && openRtt < LAN_RTT_MS ? 'lan' : 'wan';
       step = INITIAL_STEP; opening = mode === 'wan';
       appliedWidth = widthLimit();
+      bwe.restart();
       return params();
     },
     // Every unit that left (seq as in its header), so keyframe bursts are
@@ -278,8 +312,9 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
       drained(t);
       return emergency(t);
     },
-    // The page received every frame up to `seq`.
-    ack(seq) {
+    // The page received every frame up to `seq`, and (when it reports one) at
+    // `rx` on its own clock.
+    ack(seq, rx = null) {
       if (!caps.ack || !Number.isInteger(seq) || seq <= ackedSeq || seq > sentSeq || !inFlight.length) return null;
       const index = seq - inFlight[0].seq;
       if (index < 0 || index >= inFlight.length || inFlight[index].seq !== seq) return null;
@@ -296,6 +331,14 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
       const before = ackBase();
       ages.push({ at: t, value: age });
       const base = ackBase(), queue = age - base;
+      // The gradient of the arrival times. Both deltas are differences inside
+      // one clock, so the offset between the server's and the page's cancels
+      // and neither has to be corrected. A keyframe's own bytes take far
+      // longer to cross than a delta's, so its sample is a queue that is not
+      // congestion: break the chain instead of feeding it.
+      const verdict = mode === 'wan' && !keyframeExcuse(t, 100) && frame.at >= judgeFrom
+        ? bwe.ack(frame.at, finite(rx), deliveredKbps())
+        : (bwe.gap(), null);
       // A keyframe that crossed the link in one burst measured its capacity.
       const burst = arrived.find(item => item.keyframe && item.bytes >= SAMPLE_MIN_BYTES);
       if (burst) {
@@ -334,6 +377,11 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
         if (queue > QUEUE_BAD_MS || t - uncalmSince >= BAD_SUSTAIN_MS) lastUncalmAt = t;
       } else uncalmSince = null;
       if (queue > QUEUE_EMERGENCY_MS || queued(queue, t)) return congested(queue, queue > QUEUE_EMERGENCY_MS);
+      // The gradient turned up before the queue was deep enough for any
+      // threshold to call it. On a link carrying 10% less than we are asking
+      // for, the old path needed 150 ms of queue held for half a second, and
+      // every frame until then was late.
+      if (verdict === 'overuse') return congested(queue, false, bwe.risingSince ?? badSince?.at ?? null);
       return emergency(t);
     },
     stats(report = {}) {
@@ -393,6 +441,16 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
         let target = WAN_STEPS.findLastIndex(s => s.kbps <= sample.kbps / OPEN_HEADROOM);
         while (target > step && (backoff.get(target)?.retryAt ?? 0) > t) target--;
         if (target > step) { opening = false; return change('up', target); }
+      }
+      // The gradient has been flat at this rate for long enough: the link is
+      // not even trying, so try the next step. A step that failed before still
+      // waits out its backoff, and if this one is too much the gradient says
+      // so within a few hundred ms instead of the second the old queue
+      // threshold needed. This is the whole reason the ladder stops being a
+      // stopwatch: 2 s a step instead of 30 s of calm plus a minute between.
+      if (bwe.calm !== null && bwe.calm >= CLIMB_CALM_MS && t - lastRestartAt >= SETTLE_MS) {
+        const target = step + 1;
+        if ((backoff.get(target)?.retryAt ?? 0) <= t) { opening = false; return change('up', target); }
       }
       if (t - lastUncalmAt < UP_CALM_MS || t - lastRestartAt < UP_CALM_MS) return null;
       if (t - lastDownAt < DOWN_QUIET_MS || t - lastUpAt < UP_EVERY_MS) return null;

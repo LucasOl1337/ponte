@@ -649,14 +649,24 @@ test('acks: the last frame that arrived, on arrival, at most every 50 ms; a drop
   const now = 1_700_000_000_000 + 1_000_000;
   const unit = (key, seq) => { const buffer = videoMessage({ key, data: Buffer.from([0, 0, 0, 1, key ? 0x65 : 0x41, seq]) }, seq, now - 5); return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.length); };
   h.socket.message(unit(true, 1));
-  assert.deepEqual(h.sent('ack'), [{ t: 'ack', seq: 1 }], 'the first one goes at once');
+  // The ack carries when the frame landed, in the page's own clock: the server
+  // reads the link's capacity from the gradient between consecutive arrivals,
+  // where the offset between the two clocks cancels.
+  assert.equal(h.sent('ack').length, 1, 'the first one goes at once');
+  const [opened] = h.sent('ack');
+  assert.equal(opened.seq, 1);
+  assert.ok(Number.isFinite(opened.rx), `an arrival time rides along: ${JSON.stringify(opened)}`);
   h.advance(10); h.socket.message(unit(false, 2));
   h.advance(10); h.socket.message(unit(false, 3));
   assert.equal(h.sent('ack').length, 1, 'batched');
   const timer = h.timer(40); // armed by the second frame, 10 ms after the first ack
   assert.ok(timer, 'sent when 50 ms have passed since the last one');
   h.advance(30); timer.callback();
-  assert.deepEqual(h.sent('ack').at(-1), { t: 'ack', seq: 3 });
+  const batched = h.sent('ack').at(-1);
+  assert.equal(batched.seq, 3);
+  // Frame 3 landed 20 ms after frame 1, and the ack went 30 ms later still:
+  // the time reported is that frame's arrival, not the ack's departure.
+  assert.equal(batched.rx - opened.rx, 20, JSON.stringify(batched));
   h.socket.message(unit(false, 2));
   h.advance(100); h.socket.message(unit(false, 2));
   assert.equal(h.sent('ack').length, 2, 'never an older seq');
@@ -683,7 +693,10 @@ test('acks: the last frame that arrived, on arrival, at most every 50 ms; a drop
   h.timer(500).callback();
   await h.connect();
   h.advance(100); h.socket.message(unit(true, 1));
-  assert.deepEqual(h.sent('ack'), [{ t: 'ack', seq: 1 }]);
+  const reopened = h.sent('ack');
+  assert.equal(reopened.length, 1);
+  assert.equal(reopened[0].seq, 1);
+  assert.ok(Number.isFinite(reopened[0].rx));
 });
 
 test('frames that arrive while the decoder is being set up go in as one burst, and live frames wait for it instead of breaking the stream', async () => {

@@ -618,3 +618,105 @@ test('the socket ceiling follows the capacity the link proved, never below the o
   assert.ok(ceiling > floor, `a measured link holds more than the floor, got ${ceiling}`);
   assert.ok(ceiling <= 30000 * 125 * 0.2, 'and never more than a fifth of a second of it');
 });
+
+// A whole session over a link with one queue, driven frame by frame on a fake
+// clock: frames leave at the step's fps and size, the link serves them at its
+// capacity, and the page acks the youngest arrival every 50 ms with the time
+// it landed, the way a real one does. A restart costs 450 ms with no picture.
+function session({ linkKbps, caps = { ack: true, key: true }, jitterMs = 0, reportsRx = true, seed = 11 }) {
+  let clock = 0;
+  const c = createRateControl({ now: () => clock, caps, maxFps: 60 });
+  let free = 0, state = seed;
+  const random = () => (state = (state * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const cross = (at, bytes) => {
+    const start = Math.max(at, free);
+    free = start + bytes * 8 / linkKbps;
+    return free + 14 + (jitterMs ? (random() - 0.5) * 2 * jitterMs : 0);
+  };
+  let params = null, seq = 0, blackout = 0, nextAckAt = 0, nextTickAt = 1000;
+  const events = [];
+  const waiting = [];                // frames crossing the link
+  const apply = decision => {
+    if (!decision) return;
+    events.push({ at: Math.round(clock), reason: decision.reason, step: c.step });
+    if (decision.params) params = decision.params;
+    if (decision.reason !== 'shed') blackout = 450;
+  };
+  // Everything the page would have told us by `until`, in order.
+  const drain = until => {
+    while (waiting.length && waiting[0].rx <= until) {
+      const landed = waiting.shift();
+      if (landed.rx < nextAckAt) continue;         // the page coalesces its acks
+      nextAckAt = landed.rx + 50;
+      clock = landed.rx + 7;                      // the ack takes the way home
+      apply(c.ack(landed.seq, reportsRx ? landed.rx : null));
+    }
+  };
+  return {
+    c, events,
+    get step() { return c.step; },
+    set capacity(value) { linkKbps = value; },
+    open(rtt) { params = c.open(rtt); events.push({ at: 0, reason: 'open', step: c.step }); },
+    run(seconds) {
+      const until = clock + seconds * 1000;
+      while (clock < until) {
+        if (blackout > 0) { clock += blackout; blackout = 0; continue; }
+        const fps = params?.fps ?? 30, kbps = params?.kbps ?? 2500;
+        const bytes = Math.round(kbps * 125 / fps);
+        const key = seq === 0 || events.at(-1)?.at > clock - 60;
+        const sendAt = clock;
+        waiting.push({ seq: ++seq, rx: cross(sendAt, bytes) });
+        apply(c.sent(bytes, key, seq));
+        drain(sendAt);
+        clock = Math.max(clock, sendAt) + 1000 / fps;
+        if (clock >= nextTickAt) { nextTickAt = clock + 1000; apply(c.tick()); }
+      }
+      return this;
+    },
+  };
+}
+
+test('a page that reports arrival times climbs the ladder on the gradient, not on the stopwatch', () => {
+  const roomy = session({ linkKbps: 20000 });
+  roomy.open(30);
+  roomy.run(40);
+  const climbs = roomy.events.filter(item => item.reason === 'up');
+  // The stopwatch allowed one step per minute after 30 s of calm: four steps
+  // from the opening one would have taken past four minutes. The gradient is
+  // flat the whole way, so it says so every two seconds.
+  assert.ok(roomy.step >= INITIAL_STEP + 3,
+    `step ${roomy.step} in 40 s, climbs ${JSON.stringify(climbs.map(item => item.at))}`);
+  assert.ok(climbs.length >= 3, `${climbs.length} climbs`);
+  assert.equal(roomy.events.filter(item => item.reason === 'down').length, 0, 'and nothing to come down from');
+});
+
+test('the same session on a narrow link settles instead of climbing, and does not thrash', () => {
+  const tight = session({ linkKbps: 1200 });
+  tight.open(30);
+  tight.run(40);
+  assert.ok(tight.step <= 1, `settled at step ${tight.step} on a 1.2 Mbps link`);
+  const restarts = tight.events.filter(item => item.reason === 'up' || item.reason === 'down').length;
+  assert.ok(restarts <= 8, `${restarts} restarts in 40 s: ${JSON.stringify(tight.events.map(e => e.reason))}`);
+});
+
+test('a link that narrows mid-session comes down on the gradient', () => {
+  const s = session({ linkKbps: 20000 });
+  s.open(30);
+  s.run(30);
+  const high = s.step;
+  assert.ok(high > INITIAL_STEP, `climbed to ${high} first`);
+  s.capacity = 900;
+  s.run(15);
+  assert.ok(s.step < high, `came down from ${high} to ${s.step}`);
+});
+
+test('a page that reports no arrival time keeps the old behaviour exactly', () => {
+  const silent = session({ linkKbps: 20000, reportsRx: false });
+  silent.open(30);
+  silent.run(40);
+  // No gradient, so no fast climb: the stopwatch still wants 30 s of calm and
+  // a minute between steps, and the keyframe sample is what measures room.
+  const climbs = silent.events.filter(item => item.reason === 'up');
+  assert.ok(climbs.length <= 1, `${climbs.length} climbs without arrival times`);
+  assert.equal(silent.c.link.target, null, 'and the estimator never ran');
+});
