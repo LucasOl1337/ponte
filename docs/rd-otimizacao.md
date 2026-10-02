@@ -149,6 +149,53 @@ mapa de QP por macrobloco (`NV_ENC_PIC_PARAMS`), que é dar mais bits para a
 região com texto e menos para o resto. Aí sim "transmitir os dados corretos" vira
 literal. Antes disso, é esforço grande para ganho que o capped CQ já captura.
 
+## O que já foi feito (2026-10-02)
+
+- **Dois degraus no topo da escada**, 9 e 14 Mbps. A escada parava em 6 num link
+  de 28. Em CBR o keyframe melhora junto com o bitrate, e é ele que aparece
+  depois de cada reinício.
+- **Histerese no palco.** O limite só muda quando o palco sai de uma faixa em
+  volta dele (6% pra cima, 25% pra baixo). Mata os 8 reinícios de `view` por
+  sessão; dentro da faixa o palco novo pega carona no próximo reinício.
+- **Teto do socket pela capacidade medida do link**, não pelo bitrate do
+  encoder. Quando existe medida, um link folgado segura um pico de jitter em vez
+  de jogar o quadro fora. Sem medida, continua o piso de 128 KB de sempre.
+- **Os descartes passaram a aparecer no journal**: quantos, por qual motivo e
+  quanto o socket tinha contra o teto em vigor.
+
+Um limite que apareceu medindo: **uma rajada de keyframe não mede capacidade
+além dos próprios bytes sobre o piso de 50 ms do ack**. Um keyframe de 110 KB
+mede no máximo ~17 Mbps, e um de 15 KB (o que o CBR faz a 2500 kbps num monitor
+largo) fica abaixo do limiar de 20 KB e não gera amostra nenhuma. Por isso a
+abertura rápida não alcança os degraus novos e a subida real é de um degrau por
+minuto. Medir banda sem encher o link não dá, e encher o link é o que a escada
+existe para evitar.
+
+Isso também explica a degradação que ficava: pedidos repetidos de keyframe
+derrubam a escada (`KEYS_PER_MINUTE`, 3 por minuto, desce um degrau), porque a
+regra presume que o link não aguenta. Numa sessão com 60 ms de round trip isso
+levou até W0, 265 kbps, com o link carregando 28 Mbps. Para corrigir essa regra
+falta saber se o socket estava cheio ou vazio na hora do descarte, que é
+exatamente o dado que a instrumentação nova passou a registrar. Sem ele, mexer
+na regra é apostar.
+
+## O que ficou de fora, e por quê
+
+- **Pipeline GStreamer** (capped CQ, bitrate e keyframe ao vivo): o único
+  elemento de captura disponível é `pipewiresrc`, que precisa de uma sessão
+  ScreenCast do portal. A primeira abre um seletor de tela que só o dono pode
+  aprovar; depois dela o `restore_token` dispensa o diálogo. É o item de maior
+  retorno e está parado nessa autorização.
+- **AV1**: ganho de 17% nos bits, mas o demuxer de TS e o `parseSps` de
+  `backend/rd-capture.mjs` são de H.264 (NAL, SPS, `avc1.*`); AV1 é OBU e
+  `av01.*`, outro tipo de stream no PMT. É reescrita de verdade, e antes dela
+  importa saber se o Chrome do notebook decodifica em hardware: AV1 3440x1440
+  em software é pior que H.264 em hardware.
+- **Buffer de jitter no cliente**: troca latência por cadência. A latência hoje
+  é 14 ms e o jitter tem mdev de 16 ms com pico raro de 102. Em controle remoto
+  a latência de entrada é mais perceptível que o jitter de vídeo, então o custo
+  não se paga.
+
 ## Ordem que compensa
 
 1. **Capped CQ em vez de CBR.** Metade da banda, keyframe de 0,959 para 0,992.

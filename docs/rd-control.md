@@ -32,9 +32,48 @@ Só o teto quebrava a promessa do próprio código ("fps cai antes da largura: l
 | 1 | 1000 | 1920 | 75% | 1920 | 1920 | 2580 |
 | 2 | 1600 | 1920 | 100% | 1920 | nativo | nativo |
 | 3 (abertura) | 2500 | 1920 | 100% | 1920 | nativo | nativo |
-| 4 e 5 | 4000 e 6000 | nativo | 100% | nativo | nativo | nativo |
+| 4 a 7 | 4000, 6000, 9000 e 14000 | nativo | 100% | nativo | nativo | nativo |
 
-O palco da página continua limitando por cima: mandar 3440 px pra uma janela de 1500 px gasta bytes que ninguém vê. Trocar de monitor relê o piso, porque ele é uma fração do monitor que está sendo mostrado.
+Os dois últimos degraus existem porque o link de casa mediu 27,9 Mbps com 0% de
+perda e a escada parava em 6: uma sessão usava 21% do que havia. Em CBR o
+keyframe melhora junto com o bitrate (SSIM 0,959 a 2500 kbps contra 0,986 a
+6000), e é ele que aparece depois de cada reinício. Uma rajada de keyframe não
+mede mais que os próprios bytes sobre o piso de 50 ms do ack, então a abertura
+rápida não pula pra esses degraus: chega lá pela subida de um degrau por minuto.
+
+O palco da página continua limitando por cima: mandar 3440 px pra uma janela de
+1500 px gasta bytes que ninguém vê. Trocar de monitor relê o piso, porque ele é
+uma fração do monitor que está sendo mostrado.
+
+## O palco não reinicia o encoder por alguns pixels
+
+Arrastar a borda da janela mudava a largura do palco a cada quadro, e cada
+largura nova era um encoder novo: 8 reinícios numa sessão, a ~450 ms sem imagem
+cada. O limite em vigor só muda quando o palco sai de uma faixa em volta dele,
+6% pra cima (acima disso a imagem esticaria de forma visível) ou 25% pra baixo
+(abaixo disso os bytes economizados pagam o reinício). Dentro da faixa, o palco
+novo pega carona no próximo reinício, qualquer que seja o motivo dele.
+
+## Por que um quadro é descartado
+
+O servidor joga um delta fora quando o socket tem bytes demais esperando, e um
+delta descartado quebra todos os quadros até o keyframe seguinte, que fora da
+LAN custa um encoder novo. O teto segue a capacidade que o link provou carregar,
+não o bitrate do encoder: num link de 28 Mbps carregando 2 Mbps, 100 ms do
+encoder eram 31 KB, e um pico de jitter de 100 ms descartava o quadro com o link
+inteiro livre. Sem medida de capacidade o teto é o piso de sempre, 128 KB.
+
+O fechamento da sessão agora diz quantos quadros foram descartados, por quê e
+quanto o socket tinha no momento do corte, contra o teto que valia:
+
+```
+drops 131 (over_ceiling 120, wait_key 11), socket p50 180 KB p95 480 KB of 128 KB
+```
+
+Isso separa duas coisas que a contagem de reinícios mostrava igual: um link que
+travou de verdade (socket bem acima do teto) e um teto baixo demais (socket
+raspando o teto com o link folgado). Numa sessão, 131 dos 176 reinícios eram
+keyframes pedidos depois de um descarte, e o journal não dizia nada sobre eles.
 
 ## O limite do navegador
 

@@ -23,6 +23,10 @@ export const LAN_RTT_MS = 15;
 // many frames per second arrive. The step's limit is therefore the larger of
 // the two, so a 1080p monitor sees the ceilings it always saw and a wide one
 // keeps enough pixels to be read.
+// Os dois degraus do topo existem porque o link de casa mediu 27,9 Mbps com 0%
+// de perda e a escada parava em 6: uma sessão usava 21% do que havia. Em CBR o
+// keyframe melhora junto com o bitrate (SSIM 0,959 a 2500 kbps contra 0,986 a
+// 6000 na mesma cena), e é ele que aparece depois de cada reinício.
 export const WAN_STEPS = [
   { fps: 15, kbps: 600, width: 1280, floor: 0.5 },
   { fps: 15, kbps: 1000, width: 1920, floor: 0.75 },
@@ -30,6 +34,8 @@ export const WAN_STEPS = [
   { fps: 30, kbps: 2500, width: 1920, floor: 1 },
   { fps: 30, kbps: 4000, width: null, floor: 1 },
   { fps: 30, kbps: 6000, width: null, floor: 1 },
+  { fps: 30, kbps: 9000, width: null, floor: 1 },
+  { fps: 60, kbps: 14000, width: null, floor: 1 },
 ];
 export const INITIAL_STEP = 3;
 // Keyframe interval (s) outside the LAN. TCP loses nothing, so a keyframe is
@@ -44,6 +50,16 @@ const P95_WINDOW_MS = 5000;      // the page's latency window
 const UP_CALM_MS = 30000, UP_EVERY_MS = 60000, DOWN_QUIET_MS = 60000;
 const FAILED_UP_MS = 20000, BACKOFF_MAX_MS = 8 * 60000, BACKOFF_RESET_MS = 10 * 60000;
 const KEY_COALESCE_MS = 2000, IMPLICIT_KEY_GRACE_MS = 2000, KEYS_PER_MINUTE = 3;
+// How many bytes are worth holding in the socket before a delta is dropped.
+// Dropping one costs a keyframe and, outside the LAN, a whole new encoder: 450
+// ms without a picture, and in CBR the keyframe that comes back is the softest
+// frame of the run (SSIM 0.959 against 0.998 in regime). Holding is the better
+// trade until the wait in the queue would hurt more than the freeze, and what
+// sets that point is the link's capacity, not the encoder's bitrate: on a 28
+// Mbps link carrying 2 Mbps, 100 ms of the encoder was 31 KB, so a 100 ms
+// jitter spike threw the frame away with the whole link standing idle. 131 of
+// one session's 176 restarts came from these drops.
+const BUFFER_MS = 150, BUFFER_FLOOR = 128 * 1024;
 // Acks.
 const ACK_WINDOW_MS = 10000, ACK_HISTORY_MAX = 4096, DELIVERED_WINDOW_MS = 2000;
 // A queue counts as draining only when it fell by more than the spread of one
@@ -56,6 +72,12 @@ const SAMPLE_FRESH_MS = 2 * 60000, SAMPLE_HEADROOM = 1.25, SAMPLE_CLEARS_BACKOFF
 // on the steps, before any fall, a keyframe that crossed with twice the room a
 // higher step needs, 2 s without a queue, climbs there at once.
 const OPEN_WINDOW_MS = 20000, OPEN_CALM_MS = 2000, OPEN_HEADROOM = 2;
+// The stage changes size at every drag of a window border, and each new width
+// used to be a new encoder (8 restarts in one session). The limit in force only
+// moves when the stage leaves a band around it: grown enough that the picture
+// would stretch visibly, or shrunk enough that the saved bytes pay the restart.
+// In between, the new stage rides along on the next restart, whatever its reason.
+const VIEW_GROW = 1.06, VIEW_SHRINK = 0.75;
 // After a fall, calm only proves the current step fits. Its old keyframe
 // cannot tell whether the link recovered. Refresh it within the same restart
 // budget before climbing, and require the same headroom as the fast opening.
@@ -84,7 +106,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
   let lastUncalmAt = now(), uncalmSince = null, lastReportAt = -Infinity, badStreak = 0;
   let lastKey = null, opening = false;
   let probeAt = null, probeFailures = 0, probeRetryAt = -Infinity;
-  let stage = view, screenWidth = finite(screen);
+  let stage = view, screenWidth = finite(screen), appliedWidth = null;
   const rtts = [], p95s = [], delivered = [], keyRestarts = [];
   const backoff = new Map(); // step → { failures, retryAt }
   // Ack path: frames sent and not acked yet, ages of the acked ones, acked bytes.
@@ -117,6 +139,13 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     const from = since !== null && t - since >= 300 ? Math.max(since, t - DELIVERED_WINDOW_MS) : Math.max(firstAckAt, t - DELIVERED_WINDOW_MS);
     if (t - from < 300) return null;
     return acked.reduce((sum, item) => sum + (item.at > from ? item.bytes : 0), 0) * 8 / (t - from);
+  };
+  // What the link proved it carries, in kbps: what it delivered, or the last
+  // keyframe burst that crossed it. Null before either exists.
+  const linkKbps = () => {
+    const fresh = sample && now() - sample.at <= SAMPLE_FRESH_MS ? sample.kbps : null;
+    const best = Math.max(deliveredKbps() ?? 0, fresh ?? 0);
+    return best > 0 ? best : null;
   };
   // The highest step that 80% of the link's capacity carries, below the current
   // one. What was delivered is the capacity only while a queue stood (since):
@@ -159,6 +188,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     if (reason === 'key') keyRestarts.push(t);
     if (next !== step || reason === 'wan') atStepSince = t;
     step = next; lastRestartAt = t; badStreak = 0; shedding = false; lastUncalmAt = t;
+    appliedWidth = widthLimit();
     // Frames of the old run still queued say nothing about the new one, nor
     // do the ones sent behind them: judge again once they have drained.
     badSince = null; uncalmSince = null; judgeFrom = inFlight.length ? Infinity : t;
@@ -231,6 +261,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
       openedAt = t; openRtt = finite(rtt); lastUncalmAt = t; lastRestartAt = t; atStepSince = t;
       mode = openRtt !== null && openRtt < LAN_RTT_MS ? 'lan' : 'wan';
       step = INITIAL_STEP; opening = mode === 'wan';
+      appliedWidth = widthLimit();
       return params();
     },
     // Every unit that left (seq as in its header), so keyframe bursts are
@@ -394,17 +425,30 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
       return change('up', target);
     },
     key: keyRequest,
-    // The page's stage changed size: a new width limit is a new run.
+    // The page's stage changed size. Only a limit outside the band around the
+    // one in force is worth an encoder of its own; the rest rides along later.
     view(next) {
-      const before = widthLimit();
       stage = next;
-      if (mode !== 'wan' || widthLimit() === before) return null;
+      if (mode !== 'wan') return null;
+      const want = widthLimit();
+      if (want === appliedWidth) return null;
+      if (want !== null && appliedWidth !== null
+        && want < appliedWidth * VIEW_GROW && want > appliedWidth * VIEW_SHRINK) return null;
       return change('view', step);
+    },
+    // Bytes worth keeping in the socket before a delta is dropped. `encoderKbps`
+    // is what the running encoder was told to make, the only rate the LAN has.
+    ceiling(encoderKbps = WAN_STEPS[step].kbps) {
+      const rate = encoderKbps > 0 ? encoderKbps : WAN_STEPS[step].kbps;
+      if (mode !== 'wan') return Math.max(BUFFER_FLOOR, rate * 125 / 10);
+      return Math.max(BUFFER_FLOOR, Math.round((linkKbps() ?? rate) * 125 * BUFFER_MS / 1000));
     },
     // Which monitor is being shown: its width sets the readable floor. The
     // session restarts the encoder for the switch anyway, so this never asks
     // for one of its own.
-    screen(width) { screenWidth = finite(width); },
+    // The session only asks this while building the parameters of a restart, so
+    // the limit it produces is the one about to run.
+    screen(width) { screenWidth = finite(width); appliedWidth = widthLimit(); },
     // The session dropped a delta because its own buffer is over the ceiling.
     drop() {
       if (mode !== 'wan' || now() - lastRestartAt < KEY_COALESCE_MS) return null;

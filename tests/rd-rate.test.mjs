@@ -330,7 +330,7 @@ test('acks: recovery measures a fresh keyframe before climbing, never trusting t
   assert.equal(ups[1]?.step, 4, JSON.stringify(events));
   assert.ok(ups[1].at - ups[0].at >= 60000);
   assert.ok(ups[0].at - probe.at >= 60000, 'probe and climb share the minute restart budget');
-  assert.equal(c.step, 5);
+  assert.equal(c.step, 7);
 });
 
 test('acks: isolated coalescing jitter does not starve calm, but a sustained small queue does', () => {
@@ -373,7 +373,7 @@ test('acks: probes with no room back off 2, 4, 8 minutes, capped at 10, not a pa
 test('acks: useful recovery probe keeps the previous 2 to 20 Mbps climb times', () => {
   const { events } = simulate({ seconds: 300, capacity: t => t < 15000 ? 20000 : t < 45000 ? 2000 : 20000 });
   assert.deepEqual(events.filter(e => e.reason === 'up').map(e => [e.at, e.step]),
-    [[3000, 5], [139000, 2], [199000, 4], [259000, 5]]);
+    [[3000, 5], [139000, 2], [199000, 4], [259000, 7]]);
 });
 
 test('acks: up and down clear probe backoff for the new step', () => {
@@ -395,7 +395,7 @@ test('acks: no recovery probe on stable LAN, roomy WAN or the highest step', () 
 });
 
 test('acks: tiny recovery keys allow only one-step trials, with backoff on a tight link', () => {
-  const roomy = simulate({ seconds: 420, keyBytes: 19000, capacity: t => t < 8000 ? 1200 : 30000 });
+  const roomy = simulate({ seconds: 700, keyBytes: 19000, capacity: t => t < 8000 ? 1200 : 30000 });
   const ups = roomy.events.filter(e => e.reason === 'up');
   const down = roomy.events.find(e => e.reason === 'down');
   assert.ok(down && ups.length, JSON.stringify(roomy.events));
@@ -415,7 +415,10 @@ test('acks: opening on a roomy link climbs as soon as its first keyframe crossed
   const roomy = simulate({ seconds: 20, capacity: () => 30000 });
   const up = roomy.events.find(e => e.reason === 'up');
   assert.ok(up && up.at <= 4000, JSON.stringify(roomy.events));
-  assert.equal(up.step, WAN_STEPS.length - 1, 'straight to the native width');
+  // What matters is landing on a step with no width ceiling: one keyframe burst
+  // measures less than the whole link, so it need not be the very top.
+  assert.equal(WAN_STEPS[up.step].width, null, 'straight to the native width');
+  assert.ok(up.step >= 5, JSON.stringify(roomy.events));
   assert.deepEqual(roomy.events.filter(e => e.reason === 'down'), []);
   // The first keyframe of 2.5 Mbps on 2.7 Mbps measures ~2.7, not the 17.6 its own age as the base made of it.
   const tight = simulate({ seconds: 25, capacity: () => 2700 });
@@ -424,7 +427,10 @@ test('acks: opening on a roomy link climbs as soon as its first keyframe crossed
   const far = simulate({ seconds: 15, capacity: () => 100000, oneWay: 12, open: 4 });
   const reasons = far.events.map(e => `${e.reason}:${e.step}`);
   assert.equal(reasons[0], `wan:${INITIAL_STEP}`, JSON.stringify(far.events));
-  assert.equal(reasons[1], `up:${WAN_STEPS.length - 1}`, JSON.stringify(far.events));
+  // A keyframe burst cannot measure more than its own bytes over the 50 ms ack
+  // floor (110 KB → ~17 Mbps), so the fast opening lands on the highest step
+  // that fits half of that, not on the top of the ladder.
+  assert.equal(reasons[1], 'up:5', JSON.stringify(far.events));
   assert.ok(far.events[1].at - far.events[0].at <= 4500, JSON.stringify(far.events));
 });
 
@@ -520,7 +526,7 @@ test('a stage that grows lifts the width limit with one restart; the same limit 
 // A wide monitor must stay readable: scaling 3440 px down to 1920 is 56% of the
 // picture, and text at 56% cannot be read however many frames arrive.
 test('the readable floor: a step never blurs a wide monitor below its share, and a 1080p one keeps the ceilings it always had', () => {
-  assert.deepEqual(WAN_STEPS.map(s => s.floor), [0.5, 0.75, 1, 1, 1, 1]);
+  assert.deepEqual(WAN_STEPS.map(s => s.floor), [0.5, 0.75, 1, 1, 1, 1, 1, 1]);
 
   // 1920 monitor, every step down from the opening one: the limits it always had.
   // Each fall needs the clock to move: restarts are rationed.
@@ -534,7 +540,7 @@ test('the readable floor: a step never blurs a wide monitor below its share, and
   };
   assert.deepEqual([0, 1, 2, 3].map(step => limits(1920, step)), [1280, 1920, 1920, 1920], 'unchanged for 1080p');
   // Above the opening step the ceiling was already gone for everyone.
-  assert.deepEqual(WAN_STEPS.slice(4).map(s => s.width), [null, null]);
+  assert.deepEqual(WAN_STEPS.slice(4).map(s => s.width), [null, null, null, null]);
 
   // 3440 ultrawide: the opening step shows it whole instead of 1920, and a
   // limit as wide as the monitor is no scaling at all.
@@ -562,4 +568,53 @@ test('the readable floor follows the monitor being shown: switching screens re-r
   assert.equal(t.c.params().maxWidth, 3440);
   t.c.screen(1920);
   assert.equal(t.c.params().maxWidth, 1920);
+});
+
+// The stage moves with every drag of a window border. Restarting the encoder
+// for each pixel cost 8 runs in one session, each ~450 ms without a picture.
+test('the stage only restarts the encoder when it leaves the band around the limit in force', () => {
+  const t = control({ caps: { ack: true, key: true }, view: { width: 1500, height: 800 }, screen: 3440 });
+  assert.equal(t.c.open(40).maxWidth, 1500);
+
+  assert.equal(t.c.view({ width: 1540, height: 820 }), null, 'grew under 6%: rides along later');
+  assert.equal(t.c.view({ width: 1300, height: 700 }), null, 'shrank under a quarter: not worth a run');
+  // No restart happened, so the limit in force is still the one from the open.
+  const grown = t.c.view({ width: 1700, height: 900 });
+  assert.equal(grown?.reason, 'view', 'over 6% wider stretches the picture visibly');
+  assert.equal(grown.params.maxWidth, 1700);
+
+  const shrunk = t.c.view({ width: 1100, height: 600 });
+  assert.equal(shrunk?.reason, 'view', 'a third narrower pays its own restart');
+  assert.equal(shrunk.params.maxWidth, 1100);
+
+  // A stage held inside the band is still the one that counts on the next
+  // restart, whatever its reason.
+  assert.equal(t.c.view({ width: 1130, height: 620 }), null);
+  t.pass(3000);
+  assert.equal(t.c.drop()?.params.maxWidth, 1130, 'the held stage rides along');
+});
+
+// Dropping a delta costs a keyframe and, outside the LAN, a whole new encoder.
+test('the socket ceiling follows the capacity the link proved, never below the old floor', () => {
+  const floor = 128 * 1024;
+  const lan = control();
+  lan.c.open(4);
+  assert.equal(lan.c.ceiling(12000), 12000 * 125 / 10, 'the LAN keeps a tenth of a second of the encoder');
+  assert.equal(lan.c.ceiling(600), floor, 'never under the old floor');
+
+  // On the steps with nothing measured yet, the floor stands.
+  const fresh = control({ caps: { ack: true, key: true } });
+  fresh.c.open(40);
+  assert.equal(fresh.c.ceiling(2500), floor);
+
+  // A keyframe burst that measured a roomy link buys room to hold a jitter
+  // spike instead of throwing the picture away.
+  const roomy = control({ caps: { ack: true, key: true } });
+  roomy.c.open(40);
+  roomy.c.sent(140000, true, 1);
+  roomy.pass(60);
+  roomy.c.ack(1);
+  const ceiling = roomy.c.ceiling(2500);
+  assert.ok(ceiling > floor, `a measured link holds more than the floor, got ${ceiling}`);
+  assert.ok(ceiling <= 30000 * 125 * 0.2, 'and never more than a fifth of a second of it');
 });

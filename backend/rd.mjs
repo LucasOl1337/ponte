@@ -340,7 +340,7 @@ export function createRemoteDesktop({
       this.seq = 0; this.waitKey = true; this.keyWanted = false; this.announced = null; this.ended = false; this.shedding = false;
       this.linkSent = 'lan'; // what a page assumes until told
       this.failures = 0; this.lastUnitAt = now();
-      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, decisions: [], pesToSend: [], lastToSend: [], early: 0 };
+      this.metrics = { startedAt: epochNow(), frames: 0, keyframes: 0, bytes: 0, keyBytes: 0, dropped: 0, restarts: 0, reasons: {}, decisions: [], pesToSend: [], lastToSend: [], early: 0, dropReasons: {}, dropBuffered: [], dropCeiling: null };
     }
 
     async start() {
@@ -449,7 +449,7 @@ export function createRemoteDesktop({
       }
       // Shedding: the lowest step still overflows the link; nothing goes out
       // until its queue drains and a new run starts with a keyframe.
-      if (this.shedding) { this.waitKey = true; this.metrics.dropped++; return; }
+      if (this.shedding) { this.waitKey = true; this.metrics.dropped++; this.note('shedding', this.ws.bufferedAmount, 0); return; }
       const buffered = this.ws.bufferedAmount;
       const bytesPerSecond = params.kbps * 125;
       // A keyframe can be larger than the ceiling on its own (1080p at 12 Mbps:
@@ -458,15 +458,20 @@ export function createRemoteDesktop({
       // to a second, the ceiling leaves room for that keyframe's own bytes, and
       // only the last keyframe's.
       const keyRoom = this.lastKey && now() - this.lastKey.at <= 1000 ? this.lastKey.bytes : 0;
+      let ceiling = 0;
       if (unit.keyframe) {
         // A whole second queued: on the LAN even a keyframe would be late and
         // the next one is a second away. Outside the LAN the next one may be
         // minutes away, and what is queued belongs to the run before.
-        if (buffered > bytesPerSecond && this.control.mode === 'lan') { this.drop(true); return; }
+        if (buffered > bytesPerSecond && this.control.mode === 'lan') { this.note('lan_keyframe', buffered, bytesPerSecond); this.drop(true); return; }
         this.waitKey = false; this.keyWanted = false;
-      } else if (this.waitKey || buffered > Math.max(128 * 1024, bytesPerSecond / 10) + keyRoom) {
-        // One missing delta breaks every frame up to the next keyframe.
+      } else if (this.waitKey || buffered > (ceiling = this.control.ceiling(params.kbps)) + keyRoom) {
+        // One missing delta breaks every frame up to the next keyframe, and
+        // outside the LAN that costs a whole new encoder. The ceiling follows
+        // what the link proved it carries, so a link with room to spare holds
+        // a jitter spike instead of throwing the picture away.
         const over = !this.waitKey;
+        this.note(over ? 'over_ceiling' : 'wait_key', buffered, ceiling + keyRoom);
         this.waitKey = true; this.drop(over); return;
       }
       const sentAt = epochNow();
@@ -481,6 +486,17 @@ export function createRemoteDesktop({
       const sentPerf = now();
       if (m.pesToSend.length < 20000) { m.pesToSend.push(sentPerf - unit.firstAt); m.lastToSend.push(sentPerf - unit.lastAt); }
       this.apply(decision);
+    }
+
+    // Why a frame was thrown away and how full the socket was when it happened.
+    // Without this the journal only showed the consequence: 131 of one
+    // session's 176 restarts were keyframes asked for after a drop, with
+    // nothing to say whether the link had stalled or the ceiling was too low.
+    note(reason, buffered, ceiling) {
+      const m = this.metrics;
+      m.dropReasons[reason] = (m.dropReasons[reason] || 0) + 1;
+      if (m.dropBuffered.length < 2000) m.dropBuffered.push(buffered);
+      if (ceiling) m.dropCeiling = ceiling;
     }
 
     // Outside the LAN the next natural keyframe can be minutes away: a delta
@@ -625,7 +641,13 @@ export function createRemoteDesktop({
       const link = `${this.control.mode === 'lan' ? 'LAN' : `WAN step ${this.control.step}`}${this.control.acking ? ' (page acks)' : ''}`;
       const started = this.metrics.startedAt;
       const steps = this.metrics.decisions.slice(-10).map(d => `${d.reason} ${((d.at - started) / 1000).toFixed(1)} s${d.step !== undefined ? ` W${d.step}` : ''}`).join(', ');
-      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}${steps ? `; ${steps}` : ''}`);
+      const kb = bytes => bytes === null ? '–' : `${Math.round(bytes / 1024)} KB`;
+      const dropWhy = Object.entries(summary.dropReasons).map(([key, count]) => `${key} ${count}`).join(', ');
+      // What the socket held when a frame was thrown away, against the ceiling
+      // in force: a stalled link and a ceiling set too low look the same in the
+      // restart count alone.
+      const drops = summary.dropped ? `, drops ${summary.dropped}${dropWhy ? ` (${dropWhy})` : ''}, socket p50 ${kb(summary.dropBufferedP50)} p95 ${kb(summary.dropBufferedP95)} of ${kb(summary.dropCeiling)}` : '';
+      log.info?.(`[rd] session ${reason}: ${summary.frames} frames, ${summary.fps} fps, ${summary.kbps} kbps, pes→send p50 ${summary.pesToSendP50} ms, ${link}, open rtt ${this.openRtt === null ? '–' : Math.round(this.openRtt)} ms, restarts ${summary.restarts}${reasons ? ` (${reasons})` : ''}${drops}${steps ? `; ${steps}` : ''}`);
       this.endPromise = Promise.resolve(stopped).then(() => {
         const input = this.inputSummary();
         summary.input = input;
@@ -663,6 +685,9 @@ export function summarize(m) {
     seconds: Math.round(seconds * 10) / 10, frames: m.frames, keyframes: m.keyframes, dropped: m.dropped, restarts: m.restarts,
     fps: Math.round(m.frames / seconds * 10) / 10, kbps: Math.round(m.bytes * 8 / seconds / 1000),
     avgKeyBytes: m.keyframes ? Math.round(m.keyBytes / m.keyframes) : null, avgDeltaBytes: deltas ? Math.round((m.bytes - m.keyBytes) / deltas) : null,
+    dropReasons: { ...m.dropReasons },
+    dropBufferedP50: percentile(m.dropBuffered, 0.5), dropBufferedP95: percentile(m.dropBuffered, 0.95),
+    dropCeiling: m.dropCeiling,
     pesToSendP50: percentile(m.pesToSend, 0.5), pesToSendP95: percentile(m.pesToSend, 0.95),
     lastPacketToSendP50: percentile(m.lastToSend, 0.5), lastPacketToSendP95: percentile(m.lastToSend, 0.95),
     earlyShare: m.frames ? Math.round(m.early / m.frames * 1000) / 1000 : null,
