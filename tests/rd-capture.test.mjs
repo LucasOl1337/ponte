@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
-import { TsDemuxer, nalUnits, stripFiller, parseSps, captureCommand, createCapture, readBand, BAND } from '../backend/rd-capture.mjs';
+import { EventEmitter } from 'node:events';
+import { TsDemuxer, nalUnits, stripFiller, parseSps, captureCommand, captureVendor, createCapture, readBand, BAND, CAPPED_CQ, WAN_QUALITY } from '../backend/rd-capture.mjs';
 
 const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
 const ffmpeg = (args, input) => {
@@ -140,4 +141,84 @@ test('createCapture runs the lab encoder, restarts it with new parameters and op
   assert.equal(second[0].keyframe, true);
   assert.ok(units[0].keyframe);
   assert.equal(capture.running, false);
+});
+
+// The step of the ladder becomes a ceiling on the peak instead of a target, so
+// the encoder spends what the picture needs and the keyframe stops being the
+// frame the rate control starves. The keys belong to the encoder, not to
+// gpu-screen-recorder, and they differ between vendors.
+test('capped CQ: each vendor gets its own rate-control keys, and an unknown one stays on CBR', () => {
+  const opts = args => {
+    const at = args.indexOf('-ffmpeg-video-opts');
+    return at < 0 ? null : args[at + 1];
+  };
+  const of = extra => opts(captureCommand({ monitor: 'DP-2', kbps: 2500, ...extra })[1]);
+
+  assert.equal(of({ quality: 23, vendor: 'nvidia' }), 'rc=vbr;cq=23;b=0;maxrate=2500k;bufsize=2500k');
+  // VAAPI refuses b=0 and does not know rc/cq; QVBR is its capped CQ.
+  assert.equal(of({ quality: 23, vendor: 'amd' }), 'rc_mode=QVBR;qp=23;maxrate=2500k;bufsize=2500k');
+  assert.equal(of({ quality: 23, vendor: 'intel' }), of({ quality: 23, vendor: 'amd' }));
+
+  assert.equal(of({}), null, 'no quality: CBR as before');
+  assert.equal(of({ quality: 23 }), null, 'no vendor: CBR as before');
+  assert.equal(of({ quality: 23, vendor: 'matrox' }), null, 'a vendor with no recipe: CBR as before');
+
+  // The ceiling in -q is still the step's, and the peak follows it.
+  const high = captureCommand({ monitor: 'DP-2', kbps: 6000, quality: WAN_QUALITY, vendor: 'nvidia' })[1];
+  assert.equal(high[high.indexOf('-q') + 1], '6000');
+  assert.match(opts(high), /maxrate=6000k;bufsize=6000k/);
+  assert.match(opts(high), new RegExp(`cq=${WAN_QUALITY}\\b`));
+  assert.ok(Object.keys(CAPPED_CQ).includes('nvidia'));
+});
+
+test('captureVendor reads the encoder gpu-screen-recorder reports, once, and ignores one with no recipe', () => {
+  let calls = 0;
+  const fake = out => (command, args) => {
+    calls++;
+    assert.equal(command, 'gpu-screen-recorder');
+    assert.deepEqual(args, ['--info']);
+    return { stdout: out };
+  };
+  assert.equal(captureVendor({ spawn: fake('display_server|wayland\nvendor|nvidia\nsection=video_codecs\n'), reset: true }), 'nvidia');
+  assert.equal(calls, 1);
+  assert.equal(captureVendor({ spawn: fake('vendor|amd\n') }), 'nvidia', 'cached: the program runs once');
+  assert.equal(calls, 1);
+
+  assert.equal(captureVendor({ spawn: fake('vendor|amd\n'), reset: true }), 'amd');
+  assert.equal(captureVendor({ spawn: fake('vendor|matrox\n'), reset: true }), null, 'no recipe, no capped CQ');
+  assert.equal(captureVendor({ spawn: fake('nothing useful\n'), reset: true }), null);
+  assert.equal(captureVendor({ spawn: () => { throw new Error('no such program'); }, reset: true }), null);
+});
+
+// A wrong key does not degrade the picture, it stops the encoder from opening
+// at all ("Could not open video codec: Invalid argument"), so a session would
+// show nothing. A softer keyframe beats no picture.
+test('createCapture drops constant quality after a run that died without a frame, and keeps it off', async () => {
+  const runs = [];
+  const errors = [];
+  const spawn = (command, args) => {
+    const child = new EventEmitter();
+    child.stderr = new EventEmitter();
+    runs.push({ command, capped: args.includes('-ffmpeg-video-opts') });
+    child.kill = () => {};
+    // Dies at once without ever producing a unit, like a refused codec.
+    setTimeout(() => { child.stderr.emit('data', 'gsr error: Could not open video codec: Invalid argument\n'); child.emit('close', 1, null); }, 5);
+    return child;
+  };
+  const capture = createCapture({ spawn, onUnit: () => {}, log: { error: message => errors.push(message) } });
+  capture.start({ monitor: 'DP-2', kbps: 2500, fps: 30, keyint: 2, quality: 23, vendor: 'nvidia' });
+  while (runs.length < 2) await new Promise(r => setTimeout(r, 10));
+  await new Promise(r => setTimeout(r, 30));
+
+  assert.equal(runs[0].capped, true, 'the first run asked for constant quality');
+  assert.equal(runs[1].capped, false, 'the retry is plain CBR');
+  assert.equal(capture.cappedOff, true);
+  assert.ok(errors.some(message => /refused constant quality/.test(message)), errors.join(' | '));
+
+  // And it stays off for later runs, instead of failing again every restart.
+  const before = runs.length;
+  capture.restart({ kbps: 6000 });
+  while (runs.length <= before) await new Promise(r => setTimeout(r, 10));
+  assert.equal(runs.at(-1).capped, false);
+  capture.stop();
 });

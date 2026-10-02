@@ -6,7 +6,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { access, constants } from 'node:fs/promises';
 import { spawn as spawnChild } from 'node:child_process';
-import { createCapture } from './rd-capture.mjs';
+import { captureVendor, createCapture, WAN_QUALITY } from './rd-capture.mjs';
 import { createRdInput } from './rd-input.mjs';
 import { createRateControl, scaleBox } from './rd-rate.mjs';
 import { createFocusWatcher } from './hypr-focus.mjs';
@@ -164,6 +164,9 @@ export function createRemoteDesktop({
   kbps = Number(env.PONTE_RD_KBPS) || (captureMode === 'lab' ? 4000 : 12000), maxFps = Number(env.PONTE_RD_FPS) || 60,
   python = 'python3', createInput = createRdInput, makeCapture = createCapture, now = () => performance.now(), exists = commandExists, probe = probeRtt,
   focusWatcher = createFocusWatcher({ env, log }), followSettleMs = FOLLOW_SETTLE_MS,
+  // Which encoder is behind gpu-screen-recorder: it decides whether the
+  // ceiling of a step can become a peak instead of a target. Asked once.
+  quality = WAN_QUALITY, vendor = captureMode === 'gsr' ? captureVendor({ env }) : null,
 } = {}) {
   if (env.NODE_TEST_CONTEXT || process.env.NODE_TEST_CONTEXT) {
     if (inputMode === 'uinput') inputMode = 'dry-run';
@@ -410,7 +413,7 @@ export function createRemoteDesktop({
       this.control.screen(monitor?.width);
       const wan = this.control.params();
       const { fps, kbps: rate } = wan || this.adapt.current;
-      return { monitor: monitor.name, width: monitor.width, height: monitor.height, fps, kbps: rate, keyint: wan ? wan.keyint : 1, scale: wan ? scaleBox(monitor, wan.maxWidth) : null };
+      return { monitor: monitor.name, width: monitor.width, height: monitor.height, fps, kbps: rate, keyint: wan ? wan.keyint : 1, scale: wan ? scaleBox(monitor, wan.maxWidth) : null, quality, vendor };
     }
 
     // The page tolerates a longer decoder queue outside the LAN: frames arrive

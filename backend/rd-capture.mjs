@@ -223,6 +223,45 @@ export class TsDemuxer {
 
 const clampInt = (value, low, high, fallback) => Number.isFinite(Number(value)) ? Math.max(low, Math.min(high, Math.round(Number(value)))) : fallback;
 
+// Constant quality with a ceiling on the peak (capped CQ). The step of the
+// ladder stops being a target and becomes a ceiling: the encoder spends what
+// the picture needs and no more, and the keyframe — the frame that shows up
+// after every restart — stops being the one the rate control starves.
+//
+// Measured on a real 1080p monitor, h264, 30 fps, 2 s keyint:
+//   nvidia, ceiling 2500: CBR 1.43 Mbps / 115 KB key → 1.10 Mbps / 131 KB
+//   nvidia, ceiling 6000: CBR 2.84 Mbps / 201 KB key → 1.13 Mbps / 201 KB
+//   amd,    ceiling 2500: CBR 0.85 Mbps / 114 KB key → 0.54 Mbps / 118 KB
+// Below 1600 the ceiling is what binds and the two are the same, so nothing
+// regresses on a bad link.
+//
+// The keys belong to the encoder, not to gpu-screen-recorder, and they differ:
+// NVENC takes rc/cq and needs b=0, VAAPI takes rc_mode=QVBR/qp and refuses
+// b=0. ICQ and AVBR do not even open the codec. Intel is VAAPI too, so it gets
+// the same recipe; an unknown vendor stays on CBR.
+export const CAPPED_CQ = {
+  nvidia: (quality, kbps) => `rc=vbr;cq=${quality};b=0;maxrate=${kbps}k;bufsize=${kbps}k`,
+  amd: (quality, kbps) => `rc_mode=QVBR;qp=${quality};maxrate=${kbps}k;bufsize=${kbps}k`,
+  intel: (quality, kbps) => `rc_mode=QVBR;qp=${quality};maxrate=${kbps}k;bufsize=${kbps}k`,
+};
+// 23 held up on every ceiling measured, on both vendors.
+export const WAN_QUALITY = 23;
+
+// Which encoder gpu-screen-recorder will use, from its own report
+// (`vendor|nvidia`). Asked once per process: it spawns a program.
+let vendorCache;
+export function captureVendor({ spawn = spawnSync, env = process.env, reset = false } = {}) {
+  if (reset) vendorCache = undefined;
+  if (vendorCache !== undefined) return vendorCache;
+  vendorCache = null;
+  try {
+    const result = spawn('gpu-screen-recorder', ['--info'], { env, timeout: 10000, maxBuffer: 1 << 20 });
+    const vendor = /^vendor\|(\w+)$/m.exec(String(result.stdout || ''))?.[1];
+    if (vendor && CAPPED_CQ[vendor]) vendorCache = vendor;
+  } catch {}
+  return vendorCache;
+}
+
 // The lab's desktop scene: a real desktop screenshot, a terminal scrolling
 // source code and a moving cursor, with a one-second-plus VBV so keyframes and
 // deltas come out the size gpu-screen-recorder makes them (1080p at 2 Mbps:
@@ -249,7 +288,7 @@ function labDesktop(w, h, fps, backdrop = LAB_BACKDROP, text = LAB_TEXT) {
 // the lab picture: 'pattern' (testsrc2) or 'desktop'. `scale` ({ width,
 // height }) is a box the picture shrinks into, keeping its aspect (gsr -s);
 // `keyint` is in seconds (gsr takes under 500).
-export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1080, fps = 60, kbps = 10000, keyint = 1, scale = null, scene = 'pattern', backdrop, text } = {}) {
+export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1080, fps = 60, kbps = 10000, keyint = 1, scale = null, scene = 'pattern', backdrop, text, quality = null, vendor = null } = {}) {
   fps = clampInt(fps, 1, 120, 60); kbps = clampInt(kbps, 250, 100000, 10000);
   keyint = Math.max(0.1, Math.min(499, Number(keyint) || 1));
   const box = scale && Number.isFinite(scale.width) && Number.isFinite(scale.height) ? { width: clampInt(scale.width, 2, 7680, 1920) & ~1, height: clampInt(scale.height, 2, 4320, 1080) & ~1 } : null;
@@ -272,8 +311,15 @@ export function captureCommand({ mode = 'gsr', monitor, width = 1920, height = 1
       '-f', 'mpegts', '-flush_packets', '1', '-muxdelay', '0', 'pipe:1']];
   }
   if (typeof monitor !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(monitor)) throw new Error('invalid monitor name');
+  // `-q` stays the ceiling in kbps; the capped CQ options below override the
+  // encoder's rate control so that ceiling becomes a peak instead of a target.
+  // clampInt would read null as 0 and clamp it to 1: the sharpest quality there
+  // is, from the value that means "none".
+  const cq = typeof quality === 'number' && Number.isFinite(quality) ? clampInt(quality, 1, 51, null) : null;
+  const recipe = cq !== null && vendor ? CAPPED_CQ[vendor] : null;
   return ['gpu-screen-recorder', ['-w', monitor, '-c', 'mpegts', '-k', 'h264', '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(kbps),
-    '-tune', 'performance', '-keyint', String(keyint), ...(box ? ['-s', `${box.width}x${box.height}`] : []), '-cursor', 'yes', '-v', 'no']];
+    '-tune', 'performance', '-keyint', String(keyint), ...(box ? ['-s', `${box.width}x${box.height}`] : []), '-cursor', 'yes', '-v', 'no',
+    ...(recipe ? ['-ffmpeg-video-opts', recipe(cq, kbps)] : [])]];
 }
 
 // gpu-screen-recorder opens /dev/stdout by path, and on the socketpair Node
@@ -294,11 +340,19 @@ export function realPipe() {
 // One running encoder at a time. restart() swaps monitor, bitrate or fps; the
 // new process always opens with a keyframe. onUnit gets each access unit with
 // the parameters of the run that made it.
+// A run that dies this fast without a single frame never worked: the encoder
+// refused what it was asked for.
+const CAPPED_GRACE_MS = 4000;
+
 export function createCapture({ mode = 'gsr', scene, env = process.env, spawn = spawnChild, onUnit, onExit = () => {}, log = console } = {}) {
-  let child = null, params = null, generation = 0;
+  let child = null, params = null, generation = 0, cappedOff = false;
   function start(next) {
     stop();
-    params = { ...next };
+    // The capped CQ keys are the encoder's own and vary with vendor and
+    // version. If one run dies without a frame, every later run drops them and
+    // goes on in plain CBR, which always worked: a softer keyframe beats a
+    // session with no picture at all.
+    params = cappedOff ? { ...next, quality: null } : { ...next };
     // PONTE_RD_LAB_BACKDROP: another picture under the lab's desktop scene (e.g. small native text).
     const [command, args] = captureCommand({ mode, scene, ...(mode === 'lab' && env.PONTE_RD_LAB_BACKDROP ? { backdrop: env.PONTE_RD_LAB_BACKDROP } : {}), ...params });
     const run = ++generation;
@@ -311,7 +365,8 @@ export function createCapture({ mode = 'gsr', scene, env = process.env, spawn = 
     child = current;
     const video = new net.Socket({ fd: readFd, readable: true, writable: false });
     current.video = video;
-    const demuxer = new TsDemuxer(unit => { if (run === generation) onUnit({ ...unit, params, startedAt }); });
+    let sawUnit = false;
+    const demuxer = new TsDemuxer(unit => { sawUnit = true; if (run === generation) onUnit({ ...unit, params, startedAt }); });
     current.demuxer = demuxer;
     let stderr = '';
     video.on('data', chunk => demuxer.push(chunk));
@@ -324,6 +379,12 @@ export function createCapture({ mode = 'gsr', scene, env = process.env, spawn = 
       if (run !== generation) return;
       child = null;
       if (stderr.trim()) log.error?.(`[rd] ${command} exited (${code ?? signal}): ${stderr.trim().split('\n').slice(-3).join(' | ')}`);
+      if (!cappedOff && params?.quality && !sawUnit && performance.now() - startedAt < CAPPED_GRACE_MS) {
+        cappedOff = true;
+        log.error?.('[rd] the encoder refused constant quality; carrying on in CBR');
+        start(next);
+        return;
+      }
       onExit({ code, signal, stderr });
     });
     return current;
@@ -343,6 +404,7 @@ export function createCapture({ mode = 'gsr', scene, env = process.env, spawn = 
   return {
     start, stop,
     restart: changes => start({ ...params, ...changes }),
+    get cappedOff() { return cappedOff; },
     get params() { return params; },
     get running() { return !!child; },
     get child() { return child; },

@@ -54,6 +54,40 @@ cada. O limite em vigor só muda quando o palco sai de uma faixa em volta dele,
 (abaixo disso os bytes economizados pagam o reinício). Dentro da faixa, o palco
 novo pega carona no próximo reinício, qualquer que seja o motivo dele.
 
+## Qualidade constante com teto de pico
+
+O degrau da escada não é mais um alvo de tamanho, é um **teto de pico**. O
+encoder gasta o que a imagem precisa e para aí, em vez de encher o bitrate
+contratado com dados que ninguém pediu. Quem mais ganha é o keyframe, que era o
+quadro mais sacrificado pelo CBR e é exatamente o que aparece depois de cada
+reinício.
+
+Medido num monitor 1080p real, h264, 30 fps, keyint 2 s:
+
+| Teto | CBR (como era) | Qualidade constante |
+| --- | --- | --- |
+| 600 | 0,49 Mbps, keyframe 39 KB | 0,38 Mbps, keyframe 41 KB |
+| 1600 | 1,14 Mbps, keyframe 88 KB | 1,11 Mbps, keyframe 87 KB |
+| 2500 | 1,43 Mbps, keyframe 115 KB | 1,10 Mbps, keyframe 131 KB |
+| 6000 | 2,84 Mbps, keyframe 201 KB | 1,13 Mbps, keyframe 201 KB |
+
+Abaixo de 1600 o teto é o que aperta e os dois dão no mesmo, então link ruim não
+regride. No degrau de 6000 é o mesmo keyframe por 60% menos banda, e é por isso
+que os degraus do topo deixaram de ser desperdício: em CBR o degrau de 14 Mbps
+queimava 8,27 Mbps numa tela parada sem entregar nada.
+
+As chaves são do encoder, não do `gpu-screen-recorder`, e mudam com o
+fornecedor: NVENC quer `rc=vbr;cq=…` e exige `b=0`, VAAPI quer
+`rc_mode=QVBR;qp=…` e recusa `b=0`. `ICQ` e `AVBR` nem abrem o codec. Quem
+decide é o `vendor` que o próprio `gpu-screen-recorder --info` relata,
+perguntado uma vez por processo; fornecedor sem receita continua em CBR.
+
+Uma chave errada não deixa a imagem pior, impede o encoder de abrir
+(`Could not open video codec: Invalid argument`) e a sessão não mostraria nada.
+Por isso, um run que morre em menos de 4 s sem um único quadro desliga a
+qualidade constante para o resto da sessão e segue em CBR: keyframe mais mole é
+melhor que tela preta.
+
 ## Por que um quadro é descartado
 
 O servidor joga um delta fora quando o socket tem bytes demais esperando, e um
