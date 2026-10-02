@@ -37,13 +37,60 @@ Só o teto quebrava a promessa do próprio código ("fps cai antes da largura: l
 Os dois últimos degraus existem porque o link de casa mediu 27,9 Mbps com 0% de
 perda e a escada parava em 6: uma sessão usava 21% do que havia. Em CBR o
 keyframe melhora junto com o bitrate (SSIM 0,959 a 2500 kbps contra 0,986 a
-6000), e é ele que aparece depois de cada reinício. Uma rajada de keyframe não
-mede mais que os próprios bytes sobre o piso de 50 ms do ack, então a abertura
-rápida não pula pra esses degraus: chega lá pela subida de um degrau por minuto.
+6000), e é ele que aparece depois de cada reinício.
 
 O palco da página continua limitando por cima: mandar 3440 px pra uma janela de
 1500 px gasta bytes que ninguém vê. Trocar de monitor relê o piso, porque ele é
 uma fração do monitor que está sendo mostrado.
+
+## Como a escada sabe que tem espaço
+
+A escada subia no cronômetro: 30 s sem reclamação e um degrau por minuto. Não
+era conservadorismo, era falta de medida. A única régua era cronometrar a
+rajada de um keyframe, e uma rajada não mede mais que os próprios bytes sobre o
+piso de 50 ms do ack: um keyframe de 110 KB mediu 17 Mbps num link que carrega
+28, e um de 15 KB ficou abaixo do limiar de amostragem e não mediu nada. Com
+isso dava pra saber que o degrau atual cabe, nunca que o de cima cabe.
+
+Hoje ela lê o **gradiente do atraso de ida**, que é como o WebRTC mede
+capacidade sem nunca encher o link (`backend/rd-bwe.mjs`, o estimador do
+[GCC](https://datatracker.ietf.org/doc/html/draft-ietf-rmcat-gcc-02)). Os
+quadros saem em T(i) e chegam em t(i); enquanto o link dá conta, a diferença
+`(t(i) − t(i−1)) − (T(i) − T(i−1))` fica em volta de zero por mais rápido que
+se mande. No instante em que se pede mais do que ele carrega, começa a formar
+fila e essa diferença vira positiva, muito antes de perder um byte ou de a fila
+ficar grande o bastante pra aparecer num limiar.
+
+O dado já estava no fio: o cabeçalho de vídeo leva a hora de envio e o ack leva
+o número do quadro que chegou. Faltava o ack dizer **quando** chegou, que é o
+campo `rx`. Ele vai no relógio da própria página, sem correção: o servidor só
+subtrai uma chegada da outra, então o deslocamento entre os dois relógios
+cancela sozinho, e reestimar esse deslocamento no meio da sessão não injeta
+degrau num gradiente que é lido em décimos de milissegundo.
+
+Quem autoriza subir é o gradiente plano por 2 s. O alvo do próprio GCC não
+serve pra isso: ele nunca passa de 1,5× o que está sendo entregue, e todo salto
+da escada é de 1,5× ou mais, então o alvo bloquearia qualquer subida. O alvo
+serve pra descida, junto com o que o link entregou desde que o gradiente saiu
+do plano; vale a menor das duas, porque um link que acabou de estreitar ainda
+está entregando a taxa antiga de dentro dos buffers.
+
+Três constantes do libwebrtc tiveram que ser recalibradas, todas pelo mesmo
+motivo: lá o retorno é por pacote, centenas por segundo, e aqui é um ack a cada
+50 ms.
+
+| Constante | libwebrtc | Aqui | Por quê |
+| --- | --- | --- | --- |
+| Janela do ajuste | 20 pontos | 16, a partir de 5 | 20 pontos a 50 ms é 1 s, e num link entregando metade do que se manda as chegadas se espaçam pra 100 ms: a resposta vinha com a fila já passando de 1 s |
+| Suavização | 0,9 (dez amostras) | 0,7 (três) | a 50 ms por amostra, 0,9 é meio segundo de atraso só no filtro |
+| Ganho da adaptação do limiar | k·Δt, Δt ≤ 100 ms | o mesmo, com ganho ≤ 0,5 | `k_down = 0,039` por ms com Δt de 50 ms dá ganho 1,95, que oscila em vez de convergir; lá o retorno denso mantém o ganho em ~0,2 |
+
+Uma página que não reporta `rx` continua exatamente no comportamento antigo.
+
+Medido em link simulado (`tests/rd-rate.test.mjs`), a escada estabiliza no
+degrau certo em 900k, 1200k, 3000k, 5000k, 9000k e 28000k. Num link largo ela
+sai do degrau de abertura e chega ao topo em 12 s, contra os ~4 minutos do
+cronômetro. Num estreitamento de 28 Mbps pra 900 kbps, cai em 3 s.
 
 ## O palco não reinicia o encoder por alguns pixels
 

@@ -167,9 +167,16 @@ Um limite que apareceu medindo: **uma rajada de keyframe não mede capacidade
 além dos próprios bytes sobre o piso de 50 ms do ack**. Um keyframe de 110 KB
 mede no máximo ~17 Mbps, e um de 15 KB (o que o CBR faz a 2500 kbps num monitor
 largo) fica abaixo do limiar de 20 KB e não gera amostra nenhuma. Por isso a
-abertura rápida não alcança os degraus novos e a subida real é de um degrau por
-minuto. Medir banda sem encher o link não dá, e encher o link é o que a escada
-existe para evitar.
+abertura rápida não alcançava os degraus novos e a subida real era de um degrau
+por minuto.
+
+Eu escrevi aqui que "medir banda sem encher o link não dá". Isso está errado, e
+é exatamente o problema que o WebRTC resolve há dez anos: não se mede a banda,
+mede-se o **gradiente do atraso de ida**. Enquanto o link dá conta, o intervalo
+entre chegadas acompanha o intervalo entre envios por mais rápido que se mande;
+quando não dá, começa a formar fila e os dois descolam, antes de qualquer perda.
+Resolvido em `backend/rd-bwe.mjs` (ver `docs/rd-control.md`), sem trocar o
+transporte: o ack passou a levar a hora de chegada e o resto é aritmética.
 
 Isso também explica a degradação que ficava: pedidos repetidos de keyframe
 derrubam a escada (`KEYS_PER_MINUTE`, 3 por minuto, desce um degrau), porque a
@@ -214,10 +221,39 @@ na regra é apostar.
    trabalho do encoder. `-fm content` não serve: só existe em X11 ou portal, e a
    captura aqui é KMS.
 
-O que **não** compensa: QUIC, WebTransport ou WebRTC no lugar do WebSocket. O
-link não perde pacote, e o servidor já descarta frame velho por conta própria
-(`shed` e `drop`). E subir o teto da escada para perto dos 28 Mbps também não:
+O que **não** compensa é o **transporte** do WebRTC: QUIC, WebTransport ou UDP
+no lugar do WebSocket. O link não perde pacote (0% medido), e o servidor já
+descarta frame velho por conta própria (`shed` e `drop`). O que UDP compraria é
+o fim do bloqueio de cabeça de fila do TCP, que importa num 4G instável e quase
+nada neste link. E subir o teto da escada para perto dos 28 Mbps também não:
 com capped CQ a cena fica em 1 Mbps, a banda deixa de ser o limite.
+
+O **algoritmo** do WebRTC, esse compensou, e era a parte que faltava: o controle
+de congestionamento por gradiente de atraso não depende de UDP nenhum, só de
+saber a hora em que cada quadro chegou. Vale separar as duas coisas, porque
+misturá-las foi o que me fez descartar o WebRTC inteiro de uma vez.
+
+## O que o Chrome Remote Desktop faz diferente
+
+Comparação feita a pedido, pra saber o que ainda dá pra puxar de lá.
+
+| | Chrome Remote Desktop | Ponte hoje |
+| --- | --- | --- |
+| Transporte | WebRTC sobre UDP, SRTP | WebSocket sobre TCP |
+| Medir capacidade | gradiente de atraso, feedback por pacote | gradiente de atraso, feedback por ack (50 ms) |
+| Mudar bitrate | contínuo, sem reiniciar o encoder | degrau da escada, ~450 ms sem imagem |
+| Perda | NACK e retransmissão | TCP retransmite, com bloqueio de cabeça de fila |
+| O que manda | só a região que mudou (damage region) | o quadro inteiro, delta do H.264 resolve |
+| Resolução | muda a resolução da tela remota pra casar com a janela | escala a imagem, com piso de legibilidade |
+| Encoder | VP8/VP9, historicamente em software | H.264 em NVENC/VAAPI |
+
+O que vale puxar, em ordem:
+
+1. **Damage region.** Tela de desktop é quase toda estática. O `gpu-screen-recorder` já tem noção de damage, mas `-fm content` só existe em X11 ou portal e aqui a captura é KMS. O caminho possível é `-fm vfr` (item 6 acima).
+2. **Bitrate ao vivo.** É o item 2 da ordem acima, barrado na autorização do portal.
+3. **UDP.** Ganho real só em link ruim de verdade. Exigiria escrever o pacing e o controle de congestionamento do lado do servidor, que é a parte difícil, ou trazer uma dependência nativa (o Ponte tem zero dependência npm hoje).
+
+O que **não** serve: mudar a resolução da tela remota. O CRD assume que ninguém está sentado na máquina remota; aqui o Lucas usa o PC presencialmente, e trocar a resolução do monitor dele no meio do trabalho é invasivo. O piso de legibilidade é o substituto.
 
 ## Em aberto
 

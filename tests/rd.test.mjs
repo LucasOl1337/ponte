@@ -9,6 +9,7 @@ import { createApp } from '../server.mjs';
 import { createDesktop } from '../backend/desktop.mjs';
 import { connect } from '../backend/ws.mjs';
 import { createAdaptation, createRemoteDesktop, parseVideoHeader, probeRtt, videoHeader } from '../backend/rd.mjs';
+import { createRateControl } from '../backend/rd-rate.mjs';
 import { absolutePoint } from '../backend/rd-input.mjs';
 
 const TOKEN = 'test_token_with_at_least_thirty_two_characters';
@@ -422,7 +423,7 @@ test('health and state report the rd capability', { skip: !canRun }, async t => 
 
 // A session over fake parts: a capture that emits what the test says and a
 // socket whose queue the test fills.
-function fakeSession({ buffered = 0, now, probe, hello = {} } = {}) {
+function fakeSession({ buffered = 0, now, probe, hello = {}, makeControl } = {}) {
   const sent = [];
   const ws = new EventEmitter();
   ws.readyState = 'open';
@@ -434,7 +435,7 @@ function fakeSession({ buffered = 0, now, probe, hello = {} } = {}) {
     emit = onUnit;
     return { start(p) { this.params = p; started = p; }, restart(p) { restarts.push(p); this.params = { ...this.params, ...p }; }, stop() {}, running: true };
   };
-  const rd = createRemoteDesktop({ readMonitors: async () => MONITORS, makeCapture, inputMode: 'off', clipboard: fakeClipboard(), exists: async () => true, log: { info() {}, error() {} }, ...(now ? { now } : {}), ...(probe ? { probe } : {}) });
+  const rd = createRemoteDesktop({ readMonitors: async () => MONITORS, makeCapture, inputMode: 'off', clipboard: fakeClipboard(), exists: async () => true, log: { info() {}, error() {} }, ...(now ? { now } : {}), ...(probe ? { probe } : {}), ...(makeControl ? { makeControl } : {}) });
   rd.accept(ws, {}, { authorize: async token => token === TOKEN ? { kind: 'owner' } : null });
   ws.emit('message', JSON.stringify({ t: 'hello', v: 1, token: TOKEN, ...hello }), false);
   const sps = { codec: 'avc1.640034', width: 960, height: 540 };
@@ -607,4 +608,25 @@ test('LAN adaptation: lasting congestion steps bitrate and fps down, a long calm
   clock += 4000;
   a.stats({ queue: 6 }); a.stats({ queue: 5 }); a.stats({ fps: 20 }); a.stats({ rtt: 80 });
   assert.deepEqual(a.tick(0), { fps: 30, kbps: 4050 });
+});
+
+test('the arrival time in an ack reaches the rate control, and a page that sends none leaves it untouched', async () => {
+  let clock = 1000;
+  const seen = [];
+  // The real control, wrapped so the session's call to it can be read.
+  const makeControl = options => {
+    const control = createRateControl(options);
+    return Object.create(control, { ack: { value: (seq, rx) => { seen.push([seq, rx]); return control.ack(seq, rx); } } });
+  };
+  const s = fakeSession({ now: () => clock, probe: async () => 30, hello: { caps: { ack: true, key: true } }, makeControl });
+  await s.ready();
+  const wan = { monitor: 'LAB-1', fps: 30, kbps: 2500 };
+  s.unit(true, wan, 60000);
+  for (let i = 0; i < 3; i++) { clock += 33; s.unit(false, wan); }
+  s.ws.emit('message', JSON.stringify({ t: 'ack', seq: 2, rx: 1_700_000_000_123 }), false);
+  s.ws.emit('message', JSON.stringify({ t: 'ack', seq: 3 }), false);
+  s.ws.emit('message', JSON.stringify({ t: 'ack', seq: 4, rx: 'agora' }), false);
+  assert.deepEqual(seen, [[2, 1_700_000_000_123], [3, null], [4, null]],
+    'the number goes through, anything else is no arrival time at all');
+  s.rd.close();
 });

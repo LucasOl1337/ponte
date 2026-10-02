@@ -2,6 +2,45 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.48 (2026-10-02)
+
+The ladder stops guessing. It climbed on a stopwatch (30 s without a complaint, then one step a
+minute) because the only ruler it had was timing a keyframe burst, and a burst cannot measure past
+its own bytes over the 50 ms ack floor: a 110 KB keyframe read 17 Mbps on a link that carries 28,
+and a 15 KB one read nothing at all. Now it reads the delay gradient, which is how WebRTC measures
+capacity without ever filling the link. Server and pages; the APK does not change (bump it so a
+cached WebView reloads).
+
+- **Delay-gradient congestion control** (`backend/rd-bwe.mjs`), the estimator from
+  draft-ietf-rmcat-gcc-02 and libwebrtc's TrendlineEstimator: trendline filter over the accumulated
+  delay, adaptive threshold, overuse detector, AIMD controller. While the link keeps up, the gap
+  between arrivals tracks the gap between departures however fast we send; the moment we ask for
+  more than it carries, a queue starts building and the two separate, long before a byte is lost.
+- **The ack carries when the frame landed** (`rx`), in the page's own clock, uncorrected: the server
+  only ever subtracts one arrival from the next, so the offset between the two clocks cancels on its
+  own and re-estimating it mid-session cannot inject a step into the gradient. A page that reports
+  no arrival time keeps exactly the old behaviour.
+- **Three libwebrtc constants had to be recalibrated**, all for the same reason: there the feedback
+  is per packet, hundreds a second, and here it is one ack per 50 ms. The 20 point window became 16
+  (fitted from 5), because 20 points on a link delivering half of what we send is two seconds, by
+  which time the queue is past a second. Smoothing 0.9 (ten samples) became 0.7, because at 50 ms a
+  sample the original is half a second of lag inside the filter alone. And the threshold adaptation
+  gain is capped at 0.5: `k_down` of 0.039 per ms with a 50 ms step gives 1.95, which oscillates
+  instead of converging, where dense feedback keeps it near 0.2.
+- **Climbing is permission from a flat gradient (2 s), not a stopwatch.** GCC's own target cannot
+  authorise it: the target never exceeds 1.5x what is being delivered and every step of the ladder
+  is a jump of 1.5x or more. The target drives the fall instead, together with what the link
+  delivered since the gradient left flat, whichever is lower, because a link that just narrowed is
+  still handing over the old rate out of its buffers. A fall the gradient did not raise teaches the
+  estimator too, otherwise the ladder walked down one step at a time.
+- **Measured on a simulated link** (`tests/rd-rate.test.mjs`, `tests/rd-bwe.test.mjs`): the ladder
+  settles on the right step at 900k, 1200k, 3000k, 5000k, 9000k and 28000k. On a wide link it goes
+  from the opening step to the top in 12 s, against roughly four minutes on the stopwatch. A
+  narrowing from 28 Mbps to 900 kbps is caught in 3 s. Ten percent over capacity, the case a queue
+  threshold is worst at, is called at 1.6 s instead of 2.2 s and with less queue built.
+- **The journal says what the gradient concluded**: the capacity it estimates and where it last saw
+  the link break, so a bad step can be told apart from a bad estimate.
+
 ## 0.1.0-alpha.47 (2026-10-02)
 
 The remote desktop stops paying for bytes nobody asked for: the step of the ladder became a ceiling
