@@ -625,7 +625,7 @@ test('the socket ceiling follows the capacity the link proved, never below the o
 // it landed, the way a real one does. A restart costs 450 ms with no picture.
 function session({ linkKbps, contentKbps = null, caps = { ack: true, key: true }, jitterMs = 0, reportsRx = true, seed = 11 }) {
   let clock = 0;
-  const c = createRateControl({ now: () => clock, caps, maxFps: 60 });
+  const c = createRateControl({ now: () => clock, caps, maxFps: 60, gradient: true });
   let free = 0, state = seed;
   const random = () => (state = (state * 1103515245 + 12345) % 2147483648) / 2147483648;
   const cross = (at, bytes) => {
@@ -748,4 +748,29 @@ test('a picture that fills its ceiling still climbs on the gradient', () => {
   busy.open(30);
   busy.run(60);
   assert.ok(busy.step > INITIAL_STEP, `step ${busy.step}, climbs ${JSON.stringify(busy.events.map(e => e.reason))}`);
+});
+
+test('shedding ends on its own: the frames in flight are forgotten by age, not only when one is sent', () => {
+  // Shedding stops sending, and sending was the only thing that pruned the
+  // in-flight list, so the condition for coming back ("nothing in flight") could
+  // never be met. A real session sat shedding for 57 s, sending nothing, on a
+  // link that was carrying 28 Mbps.
+  const t = control({ caps: { ack: true, key: true } });
+  t.c.open(40);
+  for (let i = 1; i <= 4; i++) { t.pass(30); t.c.sent(40000, i === 1, i); }
+  // A queue deep enough to shed from the floor.
+  t.pass(1200);
+  let decision = t.c.ack(1);
+  for (let i = 0; i < 12 && t.c.step > 0; i++) { t.pass(1200); t.c.sent(40000, false, 5 + i); decision = t.c.ack(2 + i) ?? decision; }
+  t.pass(2000);
+  while (t.c.step > 0 && t.c.tick()) t.pass(1000);
+  if (!t.c.shedding) { t.pass(1500); t.c.sent(40000, false, 90); t.pass(3000); t.c.ack(90); }
+  assert.equal(t.c.step, 0, 'on the floor');
+  assert.equal(t.c.shedding, true, 'and shedding, which is the state this is about');
+  // Nothing more is sent, so only age can clear what is in flight.
+  let out = null;
+  for (let i = 0; i < 15 && !out; i++) { t.pass(1000); out = t.c.tick(); }
+  assert.ok(out, 'it came back by itself, without a frame having to be sent first');
+  assert.equal(out.reason, 'key');
+  assert.equal(t.c.shedding, false);
 });

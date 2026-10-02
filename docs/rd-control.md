@@ -87,6 +87,33 @@ motivo: lá o retorno é por pacote, centenas por segundo, e aqui é um ack a ca
 
 Uma página que não reporta `rx` continua exatamente no comportamento antigo.
 
+### Está desligado por padrão, e o motivo importa
+
+`PONTE_RD_GRADIENT=1` liga. O estimador mede bem (`tests/rd-bwe.test.mjs`), mas
+encaixá-lo nesta escada não terminou, e o que falta é anterior a ele.
+
+Desde que a qualidade constante entrou (alpha.47), **o degrau é um teto, não um
+alvo**: quem decide quantos bits saem é a cena. Um desktop parado faz 130 kbps
+com o teto em 600 e com o teto em 14000. Só que a escada inteira foi escrita
+quando `deliveredKbps` era um bom retrato do que o link carrega, e ela ainda
+trata assim: `fitting` escolhe o degrau pela taxa entregue. Medido no link real,
+isso levou a escada ao degrau 0 e ao `shed` num link de 28 Mbps, com o detector
+lendo `normal` o tempo todo.
+
+O gradiente não causou isso, mas acelerou: ele sobe de 4 em 4 s, então chega mais
+rápido em qualquer lugar, inclusive no fundo. Duas tentativas de conserto já
+foram feitas e as duas só mudaram o problema de lugar, porque o alvo do GCC e a
+capacidade medida por ele **herdam a mesma taxa da cena**:
+
+| Tentativa | O que aconteceu |
+| --- | --- |
+| `fitting` usando o alvo do GCC | o alvo é limitado a 1,5× o entregue, caiu junto com a cena até o piso de 100 kbps |
+| `fitting` usando a capacidade medida | um sobreuso enquanto a cena entregava 128 kbps gravou 121 kbps como capacidade do link |
+
+O que falta é separar "o encoder não está produzindo" de "o link não dá conta",
+e o discriminador certo é a fila: só há medida de capacidade quando havia fila.
+Enquanto isso não estiver resolvido e medido no link real, fica desligado.
+
 Medido em link simulado (`tests/rd-rate.test.mjs`), a escada estabiliza no
 degrau certo em 900k, 1200k, 3000k, 5000k, 9000k e 28000k. Num link largo ela
 sai do degrau de abertura e chega ao topo em 12 s, contra os ~4 minutos do

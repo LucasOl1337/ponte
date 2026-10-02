@@ -39,7 +39,20 @@ cached WebView reloads).
   narrowing from 28 Mbps to 900 kbps is caught in 3 s. Ten percent over capacity, the case a queue
   threshold is worst at, is called at 1.6 s instead of 2.2 s and with less queue built.
 - **The journal says what the gradient concluded**: the capacity it estimates and where it last saw
-  the link break, so a bad step can be told apart from a bad estimate.
+  the link break, so a bad step can be told apart from a bad estimate. `PONTE_RD_TRACE=1` prints a
+  line a second with what the detector is seeing, because a ladder that oscillates has to be watched
+  live and the summary only arrives after the session is over.
+- **It is off by default** (`PONTE_RD_GRADIENT=1` turns it on), and the reason is older than the
+  gradient. Since constant quality shipped in alpha.47, the step is a ceiling and the scene decides
+  the bitrate: a still desktop makes 130 kbps under a 600 kbps ceiling and under a 14000 one. The
+  ladder still picks its step from the delivered rate, which is now the scene's rate, not the link's.
+  On the real link that put a session on the bottom step and into shedding, sending nothing, while
+  the overuse detector read normal throughout. The gradient did not cause it, it just gets there
+  faster. Documented in `docs/rd-control.md` with both failed attempts at patching it.
+- **Shedding could never end.** It stops sending, and sending was the only thing that pruned the
+  in-flight list, so the condition for coming back (nothing in flight) was unreachable: a session
+  seen live sat shedding for 57 s on a link carrying 28 Mbps. The list is now pruned by age on the
+  tick as well. This one is independent of everything above and could strand any session.
 
 ## 0.1.0-alpha.47 (2026-10-02)
 

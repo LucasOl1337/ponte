@@ -175,8 +175,11 @@ Eu escrevi aqui que "medir banda sem encher o link não dá". Isso está errado,
 mede-se o **gradiente do atraso de ida**. Enquanto o link dá conta, o intervalo
 entre chegadas acompanha o intervalo entre envios por mais rápido que se mande;
 quando não dá, começa a formar fila e os dois descolam, antes de qualquer perda.
-Resolvido em `backend/rd-bwe.mjs` (ver `docs/rd-control.md`), sem trocar o
-transporte: o ack passou a levar a hora de chegada e o resto é aritmética.
+Implementado em `backend/rd-bwe.mjs` (ver `docs/rd-control.md`), sem trocar o
+transporte: o ack passou a levar a hora de chegada e o resto é aritmética. O
+estimador mede bem isolado, mas está **desligado por padrão**, porque medir a
+capacidade do link não adianta enquanto a escada continuar escolhendo degrau
+pela taxa que o encoder produziu. Ver a seção em `docs/rd-control.md`.
 
 Isso também explica a degradação que ficava: pedidos repetidos de keyframe
 derrubam a escada (`KEYS_PER_MINUTE`, 3 por minuto, desce um degrau), porque a
@@ -185,6 +188,23 @@ levou até W0, 265 kbps, com o link carregando 28 Mbps. Para corrigir essa regra
 falta saber se o socket estava cheio ou vazio na hora do descarte, que é
 exatamente o dado que a instrumentação nova passou a registrar. Sem ele, mexer
 na regra é apostar.
+
+## O gargalo que apareceu: taxa entregue não é capacidade
+
+É o item que agora vale mais que todos os abaixo, e ele nasceu do próprio
+alpha.47. Com CBR, o encoder enchia o degrau, então `deliveredKbps` era um bom
+retrato do que o link carregava e a escada podia escolher degrau por ele. Com
+qualidade constante e teto de pico, o degrau virou teto: a cena decide a taxa.
+Uma tela parada entrega 130 kbps com o teto em 600 ou em 14000.
+
+A escada inteira ainda trata a taxa entregue como capacidade (`fitting`). Medido
+no link real: sessão no degrau 0 em `shed`, sem mandar nada, com o link
+carregando 28 Mbps. Isso acontece independente do gradiente; o gradiente só
+chega lá mais rápido.
+
+O conserto é distinguir "o encoder não produziu" de "o link não deu conta". O
+discriminador é a fila: a taxa entregue só mede o link quando havia fila. Está
+em aberto.
 
 ## O que ficou de fora, e por quê
 
@@ -257,6 +277,8 @@ O que **não** serve: mudar a resolução da tela remota. O CRD assume que ningu
 
 ## Em aberto
 
+- **`fitting` escolhe degrau pela taxa entregue**, que desde o capped CQ é a taxa
+  da cena, não a do link. É o que trava o gradiente, e trava sozinho também.
 - O Chrome do notebook decodifica H.264 3440x1440 em hardware ou software? Se for
   software, é gargalo de fluidez no lado de quem assiste. Só dá para medir no
   Chrome real, em `chrome://media-internals` com uma sessão aberta.

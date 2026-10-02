@@ -113,7 +113,7 @@ export function scaleBox(monitor, maxWidth) {
 // session applies with one encoder restart ('shed' instead means: stop sending
 // until the queue drains). params() is null in the LAN, where the session's
 // own adaptation keeps the encoder as before.
-export function createRateControl({ maxFps = 60, caps = {}, view = null, screen = null, now = () => performance.now() } = {}) {
+export function createRateControl({ maxFps = 60, caps = {}, view = null, screen = null, gradient = false, now = () => performance.now() } = {}) {
   let mode = 'lan', step = INITIAL_STEP, shedding = false;
   let openedAt = now(), openRtt = null;
   let lastRestartAt = -Infinity, lastDownAt = -Infinity, lastUpAt = -Infinity, upTo = null, atStepSince = now();
@@ -126,7 +126,14 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
   // Delay-gradient congestion control over the ack stream. It answers the two
   // questions the ladder used to guess at: is there room above this step, and
   // what does the link actually carry when it runs out.
+  // Off by default. The estimator itself measures well (see tests/rd-bwe), but
+  // wiring it into this ladder is not finished: since constant quality shipped,
+  // the delivered rate stopped being a proxy for what the link carries, and the
+  // ladder's whole vocabulary still assumes it is. Measured on the real link, a
+  // still desktop delivering 130 kbps under a 600 kbps ceiling had that 130
+  // recorded as the link's capacity. PONTE_RD_GRADIENT=1 turns it on.
   const bwe = createBwe({ startKbps: WAN_STEPS[INITIAL_STEP].kbps, now });
+  const steering = () => gradient;
   // Ack path: frames sent and not acked yet, ages of the acked ones, acked bytes.
   let acking = false, firstAckAt = null, sentSeq = 0, ackedSeq = 0, keySeq = 0, badSince = null, farSince = null, judgeFrom = now(), sample = null;
   const inFlight = [], ages = [], acked = [];
@@ -186,8 +193,8 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     // started shedding on a link carrying 28 Mbps. Only `capacity`, the rate
     // measured at the moment the link actually broke, means capacity.
     const rates = since !== null
-      ? [deliveredKbps(since), bwe.capacity]
-      : [bwe.capacity ?? fresh];
+      ? [deliveredKbps(since), steering() ? bwe.capacity : null]
+      : [(steering() ? bwe.capacity : null) ?? fresh];
     const known = rates.filter(value => finite(value) !== null && value > 0);
     const rate = known.length ? Math.min(...known) : null;
     const fit = rate === null ? below - 1 : WAN_STEPS.findLastIndex(s => s.kbps <= 0.8 * rate);
@@ -346,7 +353,7 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
       // and neither has to be corrected. A keyframe's own bytes take far
       // longer to cross than a delta's, so its sample is a queue that is not
       // congestion: break the chain instead of feeding it.
-      const verdict = mode === 'wan' && !keyframeExcuse(t, 100) && frame.at >= judgeFrom
+      const verdict = gradient && mode === 'wan' && !keyframeExcuse(t, 100) && frame.at >= judgeFrom
         ? bwe.ack(frame.at, finite(rx), deliveredKbps())
         : (bwe.gap(), null);
       // A keyframe that crossed the link in one burst measured its capacity.
@@ -440,6 +447,13 @@ export function createRateControl({ maxFps = 60, caps = {}, view = null, screen 
     // Called about once a second.
     tick() {
       const t = now();
+      // Frames older than the ack window are forgotten here too, not only when
+      // one is sent. Shedding stops sending, and sending was the only thing
+      // that pruned this list, so a session that shed with frames still in
+      // flight could never meet the condition below: it stayed shedding, with
+      // nothing leaving, for as long as the session lasted. Seen live, stuck
+      // for 57 s on a link that was carrying 28 Mbps.
+      while (inFlight.length && inFlight[0].at < t - ACK_WINDOW_MS) inFlight.shift();
       if (mode === 'wan' && shedding && acking && !inFlight.length) return change('key', 0);
       if (mode !== 'wan' || shedding) return null;
       const stalled = emergency(t);
