@@ -47,9 +47,29 @@ KEYS = list(range(1, 249))            # KEY_ESC .. KEY_MICMUTE: everything the N
 TYPES = {EV_SYN: 'EV_SYN', EV_KEY: 'EV_KEY', EV_REL: 'EV_REL', EV_ABS: 'EV_ABS'}
 
 
+# Names for the dry-run log when python-evdev is missing (CI, the lab): the
+# keyboard and navigation keys from input-event-codes.h, everything else stays a number.
+FALLBACK = {
+    EV_KEY: {
+        **{code: 'KEY_' + name for code, name in enumerate((
+            'ESC 1 2 3 4 5 6 7 8 9 0 MINUS EQUAL BACKSPACE TAB Q W E R T Y U I O P LEFTBRACE RIGHTBRACE ENTER LEFTCTRL '
+            'A S D F G H J K L SEMICOLON APOSTROPHE GRAVE LEFTSHIFT BACKSLASH Z X C V B N M COMMA DOT SLASH RIGHTSHIFT '
+            'KPASTERISK LEFTALT SPACE CAPSLOCK F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 NUMLOCK SCROLLLOCK '
+            'KP7 KP8 KP9 KPMINUS KP4 KP5 KP6 KPPLUS KP1 KP2 KP3 KP0 KPDOT').split(), 1)},
+        87: 'KEY_F11', 88: 'KEY_F12', 96: 'KEY_KPENTER', 97: 'KEY_RIGHTCTRL', 98: 'KEY_KPSLASH', 99: 'KEY_SYSRQ', 100: 'KEY_RIGHTALT',
+        102: 'KEY_HOME', 103: 'KEY_UP', 104: 'KEY_PAGEUP', 105: 'KEY_LEFT', 106: 'KEY_RIGHT', 107: 'KEY_END', 108: 'KEY_DOWN',
+        109: 'KEY_PAGEDOWN', 110: 'KEY_INSERT', 111: 'KEY_DELETE', 125: 'KEY_LEFTMETA', 126: 'KEY_RIGHTMETA',
+        272: 'BTN_LEFT', 273: 'BTN_RIGHT', 274: 'BTN_MIDDLE', 275: 'BTN_SIDE', 276: 'BTN_EXTRA',
+    },
+    EV_REL: {REL_X: 'REL_X', REL_Y: 'REL_Y', REL_HWHEEL: 'REL_HWHEEL', REL_WHEEL: 'REL_WHEEL',
+             REL_WHEEL_HI_RES: 'REL_WHEEL_HI_RES', REL_HWHEEL_HI_RES: 'REL_HWHEEL_HI_RES'},
+    EV_ABS: {ABS_X: 'ABS_X', ABS_Y: 'ABS_Y'},
+}
+
+
 def code_name(kind, code):
     if e is None:
-        return code
+        return FALLBACK.get(kind, {}).get(code, code)
     table = {EV_KEY: {**e.KEY, **e.BTN}, EV_REL: e.REL, EV_ABS: e.ABS}.get(kind, {})
     name = table.get(code, code)
     return name[0] if isinstance(name, (list, tuple)) else name
