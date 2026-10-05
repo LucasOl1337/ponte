@@ -24,6 +24,10 @@ async function labTui(t, prompt = 'corrige o bug') {
     await rm(root, { recursive: true, force: true });
   });
   const session = await terminals.create({ cols: 70, rows: 24, agent: 'claude', prompt });
+  const tmux = args => runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', ...args], { env });
+  // An older tmux (3.4 on the CI runner) has no #{bracket_paste_flag}: it reads
+  // empty, never 0 or 1, and these tests are about that flag.
+  if ((await tmux(['display-message', '-p', '-t', `=ponte_${session.id}:`, '#{bracket_paste_flag}'])).trim() === '') { t.skip('this tmux has no #{bracket_paste_flag}'); return null; }
   const events = async () => { try { return (await readFile(path.join(root, 'events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } };
   const until = async (check, what) => {
     for (let i = 0; i < 120; i++) {
@@ -33,7 +37,6 @@ async function labTui(t, prompt = 'corrige o bug') {
     }
     assert.fail(`timed out waiting for ${what}: ${JSON.stringify(plain((await terminals.read(session.id)).text).slice(-600))}`);
   };
-  const tmux = args => runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', ...args], { env });
   return { root, terminals, session, events, until, tmux };
 }
 
