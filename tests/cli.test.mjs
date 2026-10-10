@@ -261,7 +261,7 @@ elif name == 'scrcpy':
 elif name == 'tailscale':
     if sys.argv[1:] == ['status', '--json']:
         online = os.environ.get('PONTE_TEST_TS_ONLINE', '1') == '1'
-        print(json.dumps({'Peer': {'phone': {'Online': online, 'TailscaleIPs': ['100.111.221.82']}}}))
+        print(json.dumps({'Peer': {'phone': {'Online': online, 'HostName': 'redmi-note-13-pro-5g-1', 'TailscaleIPs': ['100.111.221.82']}, 'poco': {'Online': True, 'HostName': 'poco-x8-pro-max', 'TailscaleIPs': ['100.122.80.42']}}}))
 `;
 
 async function phoneFixture(t, { tools = ['adb', 'scrcpy', 'tailscale', 'systemctl'] } = {}) {
@@ -419,8 +419,15 @@ test('phone ensure keeps every phone it reached, never restarts another phone, a
   calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
   assert.deepEqual(calls.filter(call => call[1] === 'connect').map(call => call[2]), ['100.122.80.42:5555', '100.111.221.82:5555']);
   // default switches which phone app/wake/install/view use; the list stays.
+  // status names the phone it looks at (from its tailnet peer) and the real default.
+  const poco = (await f.cli(['phone', '--phone', '100.122.80.42', 'status'])).stdout;
+  assert.match(poco, /control for poco-x8-pro-max \(100\.122\.80\.42:5555\)/);
+  assert.match(poco, /Default phone: 100\.122\.80\.42:5555/);
   await f.cli(['phone', 'default', '100.111.221.82']);
   assert.deepEqual(await read(), { address: '100.111.221.82:5555', phones: ['100.111.221.82:5555', '100.122.80.42:5555'] });
+  const redmi = (await f.cli(['phone', 'status'])).stdout;
+  assert.match(redmi, /control for redmi-note-13-pro-5g-1 \(100\.111\.221\.82:5555\)/);
+  assert.match(redmi, /Default phone: 100\.111\.221\.82:5555/);
   await assert.rejects(f.cli(['phone', '--phone', '8.8.8.8', 'status']), error => error.code === 2);
 });
 

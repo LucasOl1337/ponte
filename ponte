@@ -271,7 +271,7 @@ def port(value):
 
 
 DEFAULT_PHONE = '100.111.221.82:5555'
-PHONE_NAME = 'redmi-note-13-pro-5g-1'
+PHONE_NAME = 'phone'
 
 
 def phone_target(value):
@@ -391,15 +391,21 @@ def adb_device_state(serial, runner=run):
     return None
 
 
-def tailscale_phone_online(ip, runner=run):
+def tailscale_phone_peer(ip, runner=run):
+    """(online, hostname) of the tailnet peer holding this IP; (False, None)
+    when no peer does, (None, None) when Tailscale cannot be read."""
     try:
         status = json.loads(runner('tailscale', 'status', '--json', capture=True).stdout)
     except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
-        return None
+        return None, None
     for peer in (status.get('Peer') or {}).values():
         if ip in (peer.get('TailscaleIPs') or []):
-            return bool(peer.get('Online'))
-    return False
+            return bool(peer.get('Online')), peer.get('HostName') or None
+    return False, None
+
+
+def tailscale_phone_online(ip, runner=run):
+    return tailscale_phone_peer(ip, runner=runner)[0]
 
 
 def scrcpy_command(serial, screen_off=False):
@@ -410,18 +416,18 @@ def scrcpy_command(serial, screen_off=False):
 
 
 def phone_status(config_file, data, runner=run, which=command_path, address=None):
-    address = address or load_phone_address(config_file, data)
+    default = load_phone_address(config_file, data)
+    address = address or default
     host = address.split(':')[0]
     adb = which('adb')
     scrcpy = which('scrcpy')
+    online, name = tailscale_phone_peer(host, runner=runner)
     lines = [
-        f'Ponte phone control for {PHONE_NAME}',
-        f'Default address: {DEFAULT_PHONE}',
-        f'Last address: {address}',
+        f'Ponte phone control for {name or PHONE_NAME} ({address})',
+        f'Default phone: {default}',
         f'adb: {"yes — " + adb if adb else "no — install with: pacman -S android-tools"}',
         f'scrcpy: {"yes — " + scrcpy if scrcpy else "no — install with: pacman -S scrcpy"}',
     ]
-    online = tailscale_phone_online(host, runner=runner)
     if online is True:
         lines.append(f'Tailscale: {host} is online')
     elif online is False:
