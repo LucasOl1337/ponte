@@ -167,6 +167,8 @@ async function fixture(t, { realTerminals = false } = {}) {
   app = await createApp({
     dataDir, token: TOKEN, env: {},
     desktop, terminals, audio, transcriber,
+    // Never the owner's real DailyWork: its descriptor lives in ~/.config.
+    dailywork: { summary: async () => ({ estado: 'indisponivel', pendencias: [], agora: [], contador_pendencias: null }), action: async () => { throw new Error('unused'); } },
     tailnetIdentity: { available: false, authorize: async () => false },
   });
   app.server.on('request', req => requests.push({ method: req.method, path: req.url, authorization: req.headers.authorization }));

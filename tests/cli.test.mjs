@@ -239,6 +239,9 @@ if name == 'adb':
         if serial.count(':') == 1 and not tcp_up and not os.environ.get('PONTE_TEST_ADB_DEVICE'):
             sys.stderr.write('error: device offline\\n'); sys.exit(1)
         if rest[:2] == ['shell', 'echo']: print(rest[2])
+        elif rest[:3] == ['shell', 'ip', '-4']:
+            ip = os.environ.get('PONTE_TEST_TRANSPORT_IP')
+            if ip: print('    inet ' + ip + '/32 scope global tun1')
         elif rest[:1] == ['tcpip']:
             if state: open(state, 'w').write('tcp')
             print('restarting in TCP mode port: ' + rest[1])
@@ -386,6 +389,39 @@ test('phone ensure reaches the phone over Tailscale, or switches adbd to the fix
   // Nothing reachable at all: the exact manual step, no silent retry loop.
   await assert.rejects(f.cli(['phone', 'ensure'], { PONTE_TEST_ADB_FAIL: 'connect' }), error => /plug the phone in once, or on Wi-Fi turn on Wireless debugging/.test(error.stderr));
   await assert.rejects(f.cli(['phone', 'ensure'], { PONTE_TEST_ADB_FAIL: 'connect', PONTE_TEST_ADB_DEVICES: 'US554HTK89BI8TPF=unauthorized' }), error => /accept the USB debugging prompt/.test(error.stderr));
+});
+
+test('phone ensure keeps every phone it reached, never restarts another phone, and --phone picks one', async t => {
+  const f = await phoneFixture(t);
+  const state = path.join(f.directory, 'phone-state');
+  const read = async () => JSON.parse(await readFile(path.join(f.dataDir, 'phone.json'), 'utf8'));
+  // A second phone is reached and kept without taking the default, also when its link was already up.
+  await f.cli(['phone', 'connect', '100.122.80.42:5555']);
+  await f.cli(['phone', '--phone', '100.111.221.82', 'ensure'], { PONTE_TEST_ADB_DEVICE: '100.111.221.82:5555' });
+  assert.deepEqual(await read(), { address: '100.122.80.42:5555', phones: ['100.122.80.42:5555', '100.111.221.82:5555'] });
+  assert.equal((await f.cli(['phone', 'list'])).stdout, '100.122.80.42:5555  (default)\n100.111.221.82:5555\n');
+  // USB of a different phone (its tun holds another tailnet IP) is never switched.
+  await writeFile(f.log, '');
+  await assert.rejects(f.cli(['phone', '--phone', '100.111.221.82', 'ensure'], {
+    PONTE_TEST_PHONE_STATE: state, PONTE_TEST_ADB_DEVICES: 'OTHERPHONE=device', PONTE_TEST_TRANSPORT_IP: '100.122.80.42', PONTE_TEST_ADB_FAIL: 'connect',
+  }), error => /plug the phone in once/.test(error.stderr));
+  let calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(calls.some(call => call.includes('tcpip')), false, 'another phone was restarted');
+  // USB of the same phone heals it.
+  await writeFile(f.log, '');
+  const healed = await f.cli(['phone', '--phone', '100.111.221.82', 'ensure'], {
+    PONTE_TEST_PHONE_STATE: state, PONTE_TEST_ADB_DEVICES: 'US554HTK89BI8TPF=device', PONTE_TEST_TRANSPORT_IP: '100.111.221.82', PONTE_TEST_ADB_FAIL: 'connect',
+  });
+  assert.match(healed.stdout, /through US554HTK89BI8TPF; phone reachable over Tailscale at 100\.111\.221\.82:5555/);
+  // A plain ensure (the timer) visits every kept phone and reports the one that failed.
+  await writeFile(f.log, '');
+  await assert.rejects(f.cli(['phone', 'ensure', '--quiet'], { PONTE_TEST_ADB_FAIL: 'connect' }), error => /100\.122\.80\.42:5555: Cannot reach/.test(error.stderr) && /100\.111\.221\.82:5555: Cannot reach/.test(error.stderr));
+  calls = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.filter(call => call[1] === 'connect').map(call => call[2]), ['100.122.80.42:5555', '100.111.221.82:5555']);
+  // default switches which phone app/wake/install/view use; the list stays.
+  await f.cli(['phone', 'default', '100.111.221.82']);
+  assert.deepEqual(await read(), { address: '100.111.221.82:5555', phones: ['100.111.221.82:5555', '100.122.80.42:5555'] });
+  await assert.rejects(f.cli(['phone', '--phone', '8.8.8.8', 'status']), error => error.code === 2);
 });
 
 test('phone app launches the agent session above the lock screen, dismissing the HyperOS proximity guide, and install reports the version', async t => {

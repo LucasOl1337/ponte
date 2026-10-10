@@ -297,34 +297,81 @@ def phone_state_file(data):
     return Path(data) / 'phone.json'
 
 
-def load_phone_address(config_file, data):
-    if Path(config_file).exists():
+def phone_option(value):
+    """--phone accepts IP:port or a bare Tailscale IP (the fixed port 5555)."""
+    return phone_target(value if ':' in value else f'{value}:5555')
+
+
+def saved_phone(config_file, data):
+    """{'address': default, 'phones': [every phone ever reached]} from the
+    private config, else the state file, with invalid entries dropped."""
+    for source in ('config', 'state'):
         try:
-            saved = load_config(Path(config_file)).get('phone') or {}
-            if isinstance(saved, dict) and saved.get('address'):
-                return phone_target(saved['address'])
-        except ValueError:
-            pass
-    state = phone_state_file(data)
-    if state.exists():
-        try:
-            saved = json.loads(state.read_text())
-            if isinstance(saved, dict) and saved.get('address'):
-                return phone_target(saved['address'])
+            if source == 'config':
+                if not Path(config_file).exists():
+                    continue
+                saved = load_config(Path(config_file)).get('phone') or {}
+            else:
+                state = phone_state_file(data)
+                if not state.exists():
+                    continue
+                saved = json.loads(state.read_text())
         except (OSError, ValueError):
-            pass
-    return DEFAULT_PHONE
+            continue
+        if not isinstance(saved, dict) or not saved.get('address'):
+            continue
+        try:
+            address = phone_target(saved['address'])
+        except ValueError:
+            continue
+        phones = []
+        for entry in [address, *(saved.get('phones') or [])]:
+            try:
+                entry = phone_target(entry)
+            except (TypeError, ValueError):
+                continue
+            if entry not in phones:
+                phones.append(entry)
+        return {'address': address, 'phones': phones}
+    return {'address': DEFAULT_PHONE, 'phones': []}
 
 
-def save_phone_address(config_file, data, address):
-    address = phone_target(address)
+def load_phone_address(config_file, data):
+    return saved_phone(config_file, data)['address']
+
+
+def load_phone_addresses(config_file, data):
+    """Every phone this PC keeps reachable, the default first."""
+    saved = saved_phone(config_file, data)
+    return saved['phones'] or [saved['address']]
+
+
+def write_phone_state(config_file, data, value):
     private_dir(Path(data))
-    private_json(phone_state_file(data), {'address': address})
+    private_json(phone_state_file(data), value)
     target = Path(config_file)
     if target.exists() and not target.is_symlink():
         config = load_config(target)
-        config['phone'] = {'address': address}
+        config['phone'] = value
         private_json(target, config)
+
+
+def save_phone_address(config_file, data, address):
+    """Make this phone the default and keep the others in the list."""
+    address = phone_target(address)
+    phones = [address, *[p for p in saved_phone(config_file, data)['phones'] if p != address]]
+    write_phone_state(config_file, data, {'address': address, 'phones': phones})
+    return address
+
+
+def remember_phone(config_file, data, address):
+    """Add a phone to the kept list without changing the default."""
+    address = phone_target(address)
+    saved = saved_phone(config_file, data)
+    if not saved['phones']:
+        return save_phone_address(config_file, data, address)  # the first phone ever reached is the default
+    if address not in saved['phones']:
+        write_phone_state(config_file, data, {'address': saved['address'], 'phones': [*saved['phones'], address]})
     return address
 
 
@@ -362,8 +409,8 @@ def scrcpy_command(serial, screen_off=False):
     return command
 
 
-def phone_status(config_file, data, runner=run, which=command_path):
-    address = load_phone_address(config_file, data)
+def phone_status(config_file, data, runner=run, which=command_path, address=None):
+    address = address or load_phone_address(config_file, data)
     host = address.split(':')[0]
     adb = which('adb')
     scrcpy = which('scrcpy')
@@ -465,20 +512,33 @@ def adb_responds(serial, runner=run):
     return 'ponte' in (result.stdout or '')
 
 
-def phone_ensure(config_file, data, runner=run, which=command_path, quiet=False, sleep=SLEEP):
-    """Make the phone reachable over adb through Tailscale alone.
+def transport_tailnet_ips(serial, runner=run):
+    """The Tailscale IPv4s an adb transport's phone holds, or None when it
+    cannot tell (old shell, Tailscale off): then it may be the phone."""
+    try:
+        output = runner('adb', '-s', serial, 'shell', 'ip', '-4', 'addr', capture=True, timeout=10).stdout or ''
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = {match for match in re.findall(r'inet (100\.\d+\.\d+\.\d+)', output) if ipaddress.IPv4Address(match) in TAILNET}
+    return found or None
+
+
+def phone_ensure(config_file, data, runner=run, which=command_path, quiet=False, sleep=SLEEP, address=None):
+    """Make one phone reachable over adb through Tailscale alone.
 
     adbd only listens on TCP after `adb tcpip PORT`, which is lost on reboot.
-    So: connect to the saved Tailscale address; if that fails, use whatever
-    transport is up right now (USB, or a Wireless-debugging session) just to
-    switch adbd to the fixed port, then come back over Tailscale. Prints the
+    So: connect to the Tailscale address; if that fails, use whatever
+    transport of that same phone is up right now (USB, or a Wireless-debugging
+    session) just to switch adbd to the fixed port, then come back over
+    Tailscale. Another phone's transport is never restarted. Prints the
     single manual step left when nothing is reachable."""
     if not which('adb'):
         raise ValueError('adb is not installed. Install it with: pacman -S android-tools')
-    address = load_phone_address(config_file, data)
+    address = phone_target(address) if address else load_phone_address(config_file, data)
     host, port = address.split(':')
     say = (lambda *_: None) if quiet else print
     if adb_device_state(address, runner=runner) == 'device' and adb_responds(address, runner=runner):
+        remember_phone(config_file, data, address)
         say(f'Phone reachable over Tailscale at {address}.')
         return address
     online = tailscale_phone_online(host, runner=runner)
@@ -493,13 +553,22 @@ def phone_ensure(config_file, data, runner=run, which=command_path, quiet=False,
     except (OSError, subprocess.SubprocessError):
         pass
     if adb_device_state(address, runner=runner) == 'device' and adb_responds(address, runner=runner):
-        save_phone_address(config_file, data, address)
+        remember_phone(config_file, data, address)
         say(f'Phone reachable over Tailscale at {address}.')
         return address
-    # No TCP listener: enable it through any other transport that is up.
-    others = [serial for serial, state in adb_devices(runner=runner) if serial != address and state == 'device' and not serial.startswith('emulator-')]
+    # No TCP listener: enable it through another transport of this phone.
+    # A tailnet serial of another host is another phone already reached over
+    # Tailscale; restarting its adbd would only drop that link.
+    others = [
+        serial for serial, state in adb_devices(runner=runner)
+        if serial != address and state == 'device' and not serial.startswith('emulator-')
+        and not (serial.count(':') == 1 and serial.startswith('100.') and serial.split(':')[0] != host)
+    ]
     for serial in others:
         if not adb_responds(serial, runner=runner):
+            continue
+        ips = transport_tailnet_ips(serial, runner=runner)
+        if ips is not None and host not in ips:
             continue
         try:
             runner('adb', '-s', serial, 'tcpip', port, capture=True, timeout=20)
@@ -512,7 +581,7 @@ def phone_ensure(config_file, data, runner=run, which=command_path, quiet=False,
             except (OSError, subprocess.SubprocessError):
                 pass
             if adb_device_state(address, runner=runner) == 'device' and adb_responds(address, runner=runner):
-                save_phone_address(config_file, data, address)
+                remember_phone(config_file, data, address)
                 say(f'adbd switched to TCP port {port} through {serial}; phone reachable over Tailscale at {address}.')
                 return address
             sleep(1)
@@ -526,18 +595,31 @@ def phone_ensure(config_file, data, runner=run, which=command_path, quiet=False,
     )
 
 
+def phone_ensure_all(config_file, data, runner=run, which=command_path, quiet=False, sleep=SLEEP):
+    """ensure every kept phone; one unreachable phone does not stop the rest."""
+    reached, failures = [], []
+    for address in load_phone_addresses(config_file, data):
+        try:
+            reached.append(phone_ensure(config_file, data, runner=runner, which=which, quiet=quiet, sleep=sleep, address=address))
+        except ValueError as error:
+            failures.append(f'{address}: {error}')
+    if failures:
+        raise ValueError('\n'.join(failures))
+    return reached
+
+
 def phone_unlock_file(data):
     return Path(data) / 'phone-unlock'
 
 
-def phone_wake(config_file, data, runner=run, which=command_path, sleep=SLEEP):
+def phone_wake(config_file, data, runner=run, which=command_path, sleep=SLEEP, address=None):
     """Wake the phone and get past the lock screen so an agent can act on it.
 
     The screen wakes with KEYCODE_WAKEUP; a swipe dismisses a lock without
     credentials. If phone-unlock (0600, in the data dir) holds a PIN or
     password, it is typed after the swipe. Nothing is typed when the phone is
     already unlocked."""
-    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep)
+    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep, address=address)
     adb = lambda *args, **kw: runner('adb', '-s', address, *args, capture=True, timeout=15, **kw)
     def locked():
         try:
@@ -586,14 +668,14 @@ def phone_wake(config_file, data, runner=run, which=command_path, sleep=SLEEP):
 PONTE_ACTIVITY = 'app.ponte.omarchy/.MainActivity'
 
 
-def phone_app(config_file, data, runner=run, which=command_path, sleep=SLEEP):
+def phone_app(config_file, data, runner=run, which=command_path, sleep=SLEEP, address=None):
     """Bring Ponte to the front over Tailscale, screen on, above the lock screen.
 
     The activity started with the agent extra shows above the keyguard and
     turns the screen on; it finishes itself when it leaves the foreground.
     HyperOS may show its 'do not cover the earpiece' guide on wake, which
     Volume Up dismisses."""
-    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep)
+    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep, address=address)
     adb = lambda *args, **kw: runner('adb', '-s', address, *args, capture=True, timeout=20, **kw)
     def focus():
         try:
@@ -666,9 +748,9 @@ def phone_timer(config_file, config_home, enable, runner=run, which=command_path
     print(f'Phone keepalive timer installed ({PHONE_TIMER}, every 2 min).')
 
 
-def phone_install(config_file, data, apk=None, runner=run, which=command_path, sleep=SLEEP):
+def phone_install(config_file, data, apk=None, runner=run, which=command_path, sleep=SLEEP, address=None):
     """Install the built APK on the phone over Tailscale, then confirm the version it reports."""
-    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep)
+    address = phone_ensure(config_file, data, runner=runner, which=which, quiet=True, sleep=sleep, address=address)
     target = Path(apk) if apk else Path(__file__).resolve().parent / '.work' / 'Ponte.apk'
     if not target.is_file():
         raise ValueError(f'{target} not found. Build it with ./android/build.sh')
@@ -686,12 +768,12 @@ def phone_install(config_file, data, apk=None, runner=run, which=command_path, s
     return address
 
 
-def phone_view(config_file, data, screen_off=False, runner=run, which=command_path):
+def phone_view(config_file, data, screen_off=False, runner=run, which=command_path, address=None):
     if not which('scrcpy'):
         raise ValueError('scrcpy is not installed. Install it with: pacman -S scrcpy')
     if not which('adb'):
         raise ValueError('adb is not installed. Install it with: pacman -S android-tools')
-    address = load_phone_address(config_file, data)
+    address = address or load_phone_address(config_file, data)
     command = scrcpy_command(address, screen_off=screen_off)
     try:
         runner(*command, timeout=None)
@@ -706,6 +788,7 @@ def phone_main(argv):
         prog='ponte phone',
         description='Show and control the paired phone from this PC with wireless ADB and scrcpy over Tailscale.',
     )
+    parser.add_argument('--phone', type=phone_option, metavar='IP[:PORT]', help='Act on this phone instead of the default (Tailscale IPv4, port 5555 when omitted).')
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('status', help='Check adb, scrcpy, Tailscale reachability and ADB connection.')
     connect = sub.add_parser('connect', help='adb connect to the phone and remember the address.')
@@ -715,8 +798,11 @@ def phone_main(argv):
     pair.add_argument('code', help='6-digit pairing code shown on the phone.')
     view = sub.add_parser('view', help='Open scrcpy against the connected phone.')
     view.add_argument('--screen-off', action='store_true', help='Turn the phone screen off while mirroring (--turn-screen-off).')
-    ensure = sub.add_parser('ensure', help='Reach the phone over Tailscale; switch adbd to the fixed TCP port through any transport that is up.')
+    ensure = sub.add_parser('ensure', help='Reach every kept phone over Tailscale (or only --phone); switch adbd to the fixed TCP port through a transport of that same phone.')
     ensure.add_argument('--quiet', action='store_true', help='Print nothing on success.')
+    sub.add_parser('list', help='Phones this PC keeps reachable over adb, the default first.')
+    default = sub.add_parser('default', help='Make a kept phone the default for app, wake, install, view and status.')
+    default.add_argument('target', type=phone_option, help='Tailscale IPv4[:port] of the phone.')
     sub.add_parser('wake', help='Wake the phone and pass the lock screen (PIN from the private phone-unlock file, if present).')
     sub.add_parser('app', help='Bring Ponte to the front over Tailscale, screen on, above the lock screen.')
     timer = sub.add_parser('timer', help='Install or remove the user timer that keeps the adb link alive (every 2 min).')
@@ -725,24 +811,35 @@ def phone_main(argv):
     install.add_argument('apk', nargs='?', help='APK path (default .work/Ponte.apk).')
     args = parser.parse_args(argv)
     config_file, data, config_home = paths()
+    chosen = args.phone
     if args.action == 'status':
-        phone_status(config_file, data)
+        phone_status(config_file, data, address=chosen)
     elif args.action == 'timer':
         phone_timer(config_file, config_home, args.state == 'on')
     elif args.action == 'ensure':
-        phone_ensure(config_file, data, quiet=args.quiet)
+        if chosen:
+            phone_ensure(config_file, data, quiet=args.quiet, address=chosen)
+        else:
+            phone_ensure_all(config_file, data, quiet=args.quiet)
+    elif args.action == 'list':
+        saved = saved_phone(config_file, data)
+        for address in saved['phones'] or [saved['address']]:
+            print(f"{address}{'  (default)' if address == saved['address'] else ''}")
+    elif args.action == 'default':
+        save_phone_address(config_file, data, args.target)
+        print(f'Default phone: {args.target}.')
     elif args.action == 'wake':
-        phone_wake(config_file, data)
+        phone_wake(config_file, data, address=chosen)
     elif args.action == 'app':
-        phone_app(config_file, data)
+        phone_app(config_file, data, address=chosen)
     elif args.action == 'install':
-        phone_install(config_file, data, args.apk)
+        phone_install(config_file, data, args.apk, address=chosen)
     elif args.action == 'connect':
-        phone_connect(config_file, data, args.target)
+        phone_connect(config_file, data, args.target or chosen)
     elif args.action == 'pair':
         phone_pair(config_file, data, args.target, args.code)
     elif args.action == 'view':
-        phone_view(config_file, data, screen_off=args.screen_off)
+        phone_view(config_file, data, screen_off=args.screen_off, address=chosen)
 
 
 def certificate_dates(path):
@@ -900,28 +997,33 @@ def doctor(config_file):
         version = config.get('android', {}).get('versionName')
         if version and shutil.which('adb'):
             serial = os.environ.get('ANDROID_SERIAL')
-            if not serial:
-                # Prefer the phone's Tailscale address (the transport agents use),
-                # then any physical phone, then an emulator.
-                devices = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=15).stdout
-                attached = [line.split('\t')[0] for line in devices.splitlines()[1:] if line.endswith('\tdevice')]
-                tailnet = load_phone_address(config_file, paths()[1])
-                serial = tailnet if tailnet in attached else next((s for s in attached if not s.startswith('emulator-')), attached[0] if attached else None)
-                if tailnet in attached:
-                    report('ok', f'phone adb over Tailscale: {tailnet} (no USB or Wi-Fi needed)')
-                else:
-                    report('warn', f'phone adb over Tailscale: {tailnet} not connected; run ./ponte phone ensure')
-            command = ['adb', *(['-s', serial] if serial else []), 'shell', 'dumpsys', 'package', 'app.ponte.omarchy']
-            probe = subprocess.run(command, capture_output=True, text=True, timeout=15)
-            match = re.search(r'versionName=(\S+)', probe.stdout)
-            if probe.returncode != 0 or 'more than one device' in probe.stderr:
-                report('warn', 'phone not reachable over adb (optional): ' + (probe.stderr.strip().splitlines() or ['no device'])[-1])
-            elif not match:
-                report('warn', 'phone reachable over adb but Ponte is not installed')
-            elif match.group(1) != version:
-                report('warn', f'phone runs Ponte {match.group(1)}, this PC builds {version}; install the new APK')
+            devices = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=15).stdout
+            attached = [line.split('\t')[0] for line in devices.splitlines()[1:] if line.endswith('\tdevice')]
+            if serial:
+                targets = [serial]
             else:
-                report('ok', f'phone runs Ponte {version}, same as this build')
+                # Every phone kept over Tailscale (the transport agents use);
+                # without any, the first physical phone, then an emulator.
+                kept = load_phone_addresses(config_file, paths()[1])
+                for tailnet in kept:
+                    if tailnet in attached:
+                        report('ok', f'phone adb over Tailscale: {tailnet} (no USB or Wi-Fi needed)')
+                    else:
+                        report('warn', f'phone adb over Tailscale: {tailnet} not connected; run ./ponte phone ensure')
+                targets = [t for t in kept if t in attached] or [next((s for s in attached if not s.startswith('emulator-')), attached[0] if attached else None)]
+            for serial in targets:
+                command = ['adb', *(['-s', serial] if serial else []), 'shell', 'dumpsys', 'package', 'app.ponte.omarchy']
+                probe = subprocess.run(command, capture_output=True, text=True, timeout=15)
+                match = re.search(r'versionName=(\S+)', probe.stdout)
+                where = f' ({serial})' if serial else ''
+                if probe.returncode != 0 or 'more than one device' in probe.stderr:
+                    report('warn', 'phone not reachable over adb (optional): ' + (probe.stderr.strip().splitlines() or ['no device'])[-1])
+                elif not match:
+                    report('warn', f'phone{where} reachable over adb but Ponte is not installed')
+                elif match.group(1) != version:
+                    report('warn', f'phone{where} runs Ponte {match.group(1)}, this PC builds {version}; install the new APK')
+                else:
+                    report('ok', f'phone{where} runs Ponte {version}, same as this build')
 
     print('All checks passed.' if problems == 0 else f'{problems} check(s) need attention.')
     return 0 if problems == 0 else 1

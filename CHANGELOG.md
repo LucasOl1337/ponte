@@ -2,6 +2,11 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## Unreleased
+
+- **The PC keeps every phone reachable over adb, not just the last one.** `./ponte phone ensure` (and the two-minute timer) used to keep one saved address, so connecting the POCO left the Redmi unreachable after its next reboot without anyone noticing. `phone.json` now keeps a list; `ensure` visits each, `--phone IP[:PORT]` picks one for any `phone` command, `phone list` and `phone default` show and change the default, and `doctor` checks each phone. The USB rescue (`adb tcpip 5555`) only runs through a transport whose Tailscale interface holds that phone's address, so plugging one phone in never restarts the adbd of another. Verified on the real Redmi Note 13 Pro+ (Android 15, mobile data, DERP relay): USB plugged, `ensure --phone 100.111.221.82` back on 5555, `phone app` put Ponte in front with the live monitor, alongside the POCO on the same timer.
+- `tests/ctl.test.mjs` used the owner's real DailyWork descriptor from `~/.config`, so `ctl volume` timed out whenever DailyWork was slow. The fixture now injects a synthetic DailyWork.
+
 ## 0.1.0-alpha.48 (2026-10-02)
 
 The ladder stops guessing. It climbed on a stopwatch (30 s without a complaint, then one step a

@@ -103,7 +103,10 @@ With Serve on, a browser on any of your own tailnet devices opens `https://<pc>.
 An agent or a script on this PC can install, launch and drive the Android app while the phone is anywhere with Tailscale up, on mobile data included. adb on the phone listens on TCP port 5555 on every interface, Tailscale's among them, and this PC's adb connects to `100.111.221.82:5555`.
 
 ```sh
-./ponte phone ensure          # reachable over Tailscale, or fix it through any transport that is up
+./ponte phone ensure          # every kept phone reachable over Tailscale, or fixed through a transport of that same phone
+./ponte phone list            # phones this PC keeps, the default first
+./ponte phone --phone 100.111.221.82 app   # any command on one phone (bare IP means port 5555)
+./ponte phone default 100.111.221.82      # the phone app/wake/install/view/status use without --phone
 ./ponte phone install         # adb install -r .work/Ponte.apk, then the version the phone reports
 ./ponte phone app             # Ponte to the front: screen on, above the lock screen, live stream
 ./ponte phone timer on        # user timer: ensure every 2 min, so the link survives network changes
@@ -113,11 +116,11 @@ adb -s 100.111.221.82:5555 shell input tap 610 1106
 
 What each piece does and where it stops:
 
-- **`ensure`** connects to the saved address and checks that a shell answers. If the phone is not listening (adbd forgets the TCP port on every reboot), it looks for any other adb transport that is up right now (the USB cable, or a Wireless-debugging session on Wi-Fi), runs `adb tcpip 5555` through it, and reconnects over Tailscale. With nothing up it prints the one manual step: plug the phone in once, or on Wi-Fi turn on Wireless debugging and `./ponte phone connect IP:PORT` (pairing is remembered); after that `ensure` needs nothing again until the next reboot.
+- **`ensure`** connects to each kept phone (every one this PC ever reached over Tailscale; `--phone` limits it to one) and checks that a shell answers. If a phone is not listening (adbd forgets the TCP port on every reboot), it looks for another adb transport of that same phone that is up right now (the USB cable, or a Wireless-debugging session on Wi-Fi), runs `adb tcpip 5555` through it, and reconnects over Tailscale. A transport is that phone's when its Tailscale interface holds the phone's address; another phone's adbd is never restarted. With nothing up it prints the one manual step: plug the phone in once, or on Wi-Fi turn on Wireless debugging and `./ponte phone connect IP:PORT` (pairing is remembered); after that `ensure` needs nothing again until the next reboot. One unreachable phone does not stop the others.
 - **`app`** starts the activity with the agent extra. The app then shows above the lock screen and turns the screen on, so the phone stays locked for everything else, and it finishes itself the moment it leaves the foreground: a locked phone never keeps PC control one power-button press away. HyperOS gates "show on lock screen" behind its own app op; `app` grants it over adb (`appops set app.ponte.omarchy 10020 allow`) and dismisses the "do not cover the earpiece" guide with Volume Up. The app keeps the screen on while it is in front.
 - **`wake`** wakes the phone with the power key and, if `phone-unlock` (mode 0600, in the state directory) holds the PIN, types it after a swipe. This is only needed to reach the rest of the phone; the Ponte app itself needs no unlock.
 - **`timer on`** installs `ponte-phone.timer` for this user, which runs `ensure --quiet` every two minutes, so `adb devices` already lists the phone when something needs it and the link re-forms after the phone changes networks. `timer off` removes it.
-- **`doctor`** reports whether the Tailscale adb link is up and which app version the phone runs through it.
+- **`doctor`** reports, for every kept phone, whether the Tailscale adb link is up and which app version it runs.
 
 Security: adbd on TCP accepts only keys the phone has authorized (this PC's), and the port is reachable from other networks only where the phone's network allows inbound connections (mobile carriers do not; a public Wi-Fi might, and any connection attempt from an unknown key prompts on the phone). Turn it off with `adb -s 100.111.221.82:5555 usb` when the phone leaves your hands. A build with `PONTE_ANDROID_DEBUGGABLE=1` makes the WebView inspectable over adb (`tools/lab/cdp.mjs`) for measuring gestures on the real device; keep the ordinary build for daily use.
 
