@@ -21,7 +21,8 @@ async function labTui(t, prompt = 'corrige o bug') {
   t.after(async () => {
     await terminals.close();
     await runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', 'kill-server'], { env }).catch(() => {});
-    await rm(root, { recursive: true, force: true });
+    // The fake TUI can still write into root for a moment after kill-server.
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
   const session = await terminals.create({ cols: 70, rows: 24, agent: 'claude', prompt });
   const tmux = args => runCommand('tmux', ['-S', socketPath, '-f', '/dev/null', ...args], { env });
