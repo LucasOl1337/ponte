@@ -204,7 +204,8 @@ test('reordering a list keeps locked keys in place and stores ids only', () => {
   fire(r.keys.enter, 'pointerdown', { clientX: 20, clientY: 800, pointerId: 4 });
   fire(r.keys.enter, 'pointerup', { clientX: 20, clientY: 800, pointerId: 4 });
   fire(r.keys.enter, 'click');
-  assert.deepEqual(r.shortcut, ['enter'], 'a locked key is not taken by the edit mode');
+  assert.deepEqual(r.shortcut, [], 'a locked key is neither moved nor sent while arranging');
+  assert.deepEqual(r.tailIds(), ['ctrl-z', 'tab', 'up', 'down']);
   r.layout.save();
   assert.deepEqual(JSON.parse(r.store.data.get(KEY)).order, { 'screen.keys': ['ctrl-z', 'tab', 'up', 'down'] });
   assert.deepEqual(r.layout.order('screen.keys', ['enter', 'esc', 'ctrl-c', 'tab', 'up', 'down', 'ctrl-z', 'f5']), ['enter', 'esc', 'ctrl-c', 'ctrl-z', 'f5', 'tab', 'up', 'down'], 'a key new to the catalog follows its neighbour');
@@ -327,6 +328,23 @@ test('a saved corner keeps its spot at 320, 390 and 430 wide, inside the area', 
   r.window.resize(320, 844);
   const rotate = box(r.fabs.rotate);
   assert.equal(rotate.left + rotate.width, 312, 'a live resize to 320 re-clamps');
+});
+
+test('while arranging, the bottom nav and a locked key do nothing; after it they work', () => {
+  const r = rig();
+  const navigations = [];
+  r.nav.addEventListener('click', () => navigations.push('nav'));
+  r.layout.enter();
+  fire(r.nav, 'pointerdown', { clientX: 40, clientY: 780, pointerId: 1 });
+  fire(r.nav, 'pointerup', { clientX: 40, clientY: 780, pointerId: 1 });
+  fire(r.nav, 'click', { clientX: 40, clientY: 780 });
+  fire(r.keys.esc, 'click', {});
+  assert.deepEqual([navigations, r.shortcut], [[], []]);
+  assert.equal(r.layout.editing(), true);
+  fire(r.button('cancel'), 'click');
+  fire(r.nav, 'click', {});
+  fire(r.keys.esc, 'click', {});
+  assert.deepEqual([navigations, r.shortcut], [['nav'], ['esc']]);
 });
 
 test('a button dragged up to the edit bar stays at the same pixel after Save', () => {

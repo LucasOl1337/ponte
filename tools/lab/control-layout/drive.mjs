@@ -159,6 +159,13 @@ check('drag-reorders-keys', tail1.join() !== tail0.join() && tail1.indexOf('tab'
 const lockedTry = await rect('#screen-key-row .key-head [data-shortcut="esc"]');
 await drag(lockedTry.cx, lockedTry.cy, lockedTry.cx + 120, lockedTry.cy);
 check('locked-keys-stay', (await headIds()).join() === 'enter,esc,ctrl-c', { head: await headIds() });
+await evaluate(`document.querySelector('#screen-input-send')?.addEventListener('click', () => window.labHits.push('send'));
+  document.querySelector('.bottom-nav').addEventListener('click', () => window.labHits.push('nav'))`);
+for (const selector of ['#screen-key-row .key-head [data-shortcut="esc"]', '#screen-input-send', '.bottom-nav .nav-item[data-nav="voz"]']) {
+  const spot = await rect(selector);
+  if (spot) await tap(spot.cx, spot.cy);
+}
+check('edit-inert-outside-bar', await evaluate('!!document.querySelector(".pcl-layer")'), { hits: await hits() });
 check('edit-swallows-keys', (await hits()).length === 0, { hits: await hits() });
 await shot('06-390-teclas-editando');
 await evaluate('window.labLayout.save()');

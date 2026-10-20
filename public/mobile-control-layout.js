@@ -334,8 +334,8 @@
     function onDown(event) {
       if (layer && layer.contains(event.target)) return;
       const float = floatOf(event.target), entry = float ? null : listItemOf(event.target);
-      if (!float && !entry) return;
       swallow(event);
+      if (!float && !entry) return;
       const element = float ? float.element : entry.element;
       selected = float ? `f:${float.id}` : `l:${entry.list.id}:${entry.id}`;
       drag = { float, entry, element, x: event.clientX, y: event.clientY, box: rectOf(element), moved: false, pointerId: event.pointerId };
@@ -362,10 +362,11 @@
       if (done.moved && done.entry) storeList(done.entry.list);
       apply(done.moved ? (done.float ? 'move' : 'order') : '');
     }
-    // Touch and mouse compatibility events of a press on a control (or any
-    // press while dragging) are swallowed too, so nothing underneath reacts.
-    function onCompat(event) { if (layer && layer.contains(event.target)) return; if (drag || floatOf(event.target) || listItemOf(event.target)) swallow(event); }
-    function onClick(event) { if (layer && layer.contains(event.target)) return; if (floatOf(event.target) || listItemOf(event.target) || (event.target.closest && event.target.closest('.pcl-veil'))) swallow(event); }
+    // Outside the edit bar the page is inert while arranging: a press is a
+    // move or nothing. The typing bar and the bottom nav sit above the veil,
+    // so Send, a nav tab or a locked key must not act either.
+    function onCompat(event) { if (!(layer && layer.contains(event.target))) swallow(event); }
+    function onClick(event) { if (!(layer && layer.contains(event.target))) swallow(event); }
     function onKey(event) { if (event.key === 'Escape') { swallow(event); cancel(); } }
     function enter() {
       if (layer || !enabled()) return false;
