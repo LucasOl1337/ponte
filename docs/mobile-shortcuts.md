@@ -29,8 +29,8 @@ nas bancadas dos agentes. Quem quiser pode montá-los em "Montar atalho".
 
 ```html
 <!-- index.html, junto dos outros assets -->
-<link rel="stylesheet" href="/mobile-shortcuts.css?v=0.1.0-alpha.48">
-<script src="/mobile-shortcuts.js?v=0.1.0-alpha.48" defer></script>
+<link rel="stylesheet" href="/mobile-shortcuts.css?v=0.1.0-alpha.49">
+<script src="/mobile-shortcuts.js?v=0.1.0-alpha.49" defer></script>
 <!-- onde o botão deve morar, por exemplo ao lado da barra de teclas da tela -->
 <div id="shortcut-host"></div>
 ```

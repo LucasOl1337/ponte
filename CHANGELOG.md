@@ -7,6 +7,42 @@ All notable changes to Ponte. The project is an experimental alpha; entries desc
 - **The PC keeps every phone reachable over adb, not just the last one.** `./ponte phone ensure` (and the two-minute timer) used to keep one saved address, so connecting the POCO left the Redmi unreachable after its next reboot without anyone noticing. `phone.json` now keeps a list; `ensure` visits each, `--phone IP[:PORT]` picks one for any `phone` command, `phone list` and `phone default` show and change the default, and `doctor` checks each phone. The USB rescue (`adb tcpip 5555`) only runs through a transport whose Tailscale interface holds that phone's address, so plugging one phone in never restarts the adbd of another. Verified on the real Redmi Note 13 Pro+ (Android 15, mobile data, DERP relay): USB plugged, `ensure --phone 100.111.221.82` back on 5555, `phone app` put Ponte in front with the live monitor, alongside the POCO on the same timer.
 - `tests/ctl.test.mjs` used the owner's real DailyWork descriptor from `~/.config`, so `ctl volume` timed out whenever DailyWork was slow. The fixture now injects a synthetic DailyWork.
 
+## 0.1.0-alpha.49 (2026-10-20)
+
+Typing on the phone stops submitting forms by itself, the PC's Super shortcuts are one tap away, and
+the floating buttons can be moved. Server, pages and APK (versionCode 25: the WebView proxy serves
+the two new modules, and the IME stops learning what is typed).
+
+- **Fill only types; Enter only when asked.** The screen's typing bar used to send Enter with the
+  text from the main button, the phone keyboard's action key and dictation, which submitted a
+  login dialog after the user name. Fill (main button and the IME action key) types without Enter;
+  Send types and presses Enter; ⏎ on the key row presses Enter alone. An empty field never becomes
+  Enter, Fill refuses text with a line break, a double tap waits for the PC, and an unconfirmed
+  send keeps the draft. Dictation lands in the draft to review. A line typed at a password prompt
+  is not kept in the terminal history. Android sets `IME_FLAG_NO_PERSONALIZED_LEARNING`.
+- **⌘ Super shortcuts** (`public/mobile-shortcuts.js`): a palette on the floating rail with the
+  Omarchy binds (Principais first), each sent as one `keyboard.combo` that presses and releases in
+  a single ydotool call. Only `Super[+Ctrl][+Alt][+Shift]+KEY` with fixed evdev codes passes;
+  anything else is `KEY_NOT_ALLOWED` before ydotool runs, and a failed call releases every key.
+  The user can compose and save their own combos. "Abrir terminal com Pi" opens a bare `pi`
+  session on the PC being shown (no prompt from the phone reaches it). `ctl keyboard combo` does
+  the same from the shell.
+- **Organizar botões** (`public/mobile-control-layout.js`): from the typing bar's options, the
+  floating buttons and the movable keys of the key row can be dragged or nudged, saved per device
+  and orientation as ids and fractions only, cancelled or reset. Only a deliberate tap enters it;
+  while arranging nothing reaches the PC, and leaving the screen cancels it.
+- Fixed while composing the three: the palette ends above the rail in portrait and left of it in
+  landscape; on a short landscape phone with the typing bar open the rail becomes a row under the
+  workspace strip instead of running off the top; an agent notice no longer covers Save while
+  arranging; the editor names ⌘ by its label, not by the text of the whole palette.
+- `rd.mjs` logs the exit code, signal and error code of each failed capture (PON-7).
+- Verified: `npm test` 645 tests (644 pass, 1 skipped), `android/test.sh` (Native proxy serves the
+  new modules), and a composition run in the fake lab driving the real page by touch on a mobile
+  Chromium (`tools/lab`): Super+F and Super+Shift+1 as two ydotool calls, arrange and save with
+  nothing sent to the PC, rail and palette clear of the typing bar at 390, 360, landscape and
+  with the keyboard open, Pi opened on Terminais, and user, Tab, password reaching the PC with no
+  Enter until ⏎. Not yet run on a real phone.
+
 ## 0.1.0-alpha.48 (2026-10-02)
 
 The ladder stops guessing. It climbed on a stopwatch (30 s without a complaint, then one step a
