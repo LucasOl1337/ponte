@@ -176,9 +176,12 @@
       const px = name => (style ? parseFloat(style[name]) || 0 : 0);
       return { top: px('paddingTop'), right: px('paddingRight'), bottom: px('paddingBottom'), left: px('paddingLeft') };
     }
-    function area() {
+    // The frame positions are stored against never counts the edit bar, so a
+    // button stays at the same pixel after Save or Cancel takes the bar away;
+    // area(true) adds the bar only to keep a dragged button out from under it.
+    function area(underBar) {
       const port = viewport();
-      const blockers = [...avoid(), ...(layer ? [layer.querySelector('.pcl-bar')] : [])].filter(visible).map(rectOf);
+      const blockers = [...avoid(), ...(underBar && layer ? [layer.querySelector('.pcl-bar')] : [])].filter(visible).map(rectOf);
       return { ...safeArea({ ...port, insets: insets(), avoid: blockers }), orientation: orientationOf(port.width, port.height) };
     }
     function clearStyle(element) {
@@ -205,13 +208,13 @@
       floats.forEach(item => clearStyle(item.element));
       const state = current();
       if (!enabled() || (!draft && isEmpty(state))) return;
-      const zone = area(), saved = state.pos[zone.orientation];
+      const zone = area(), reach = layer ? area(true) : zone, saved = state.pos[zone.orientation];
       const placed = shown.filter(item => saved[item.id]);
       const sizes = new Map(placed.map(item => [item.id, rectOf(item.element)]));
       placed.forEach(item => setBox(item.element, { ...sizes.get(item.id), left: zone.left, top: zone.top }));
       const fixed = shown.filter(item => !saved[item.id]).map(item => rectOf(item.element));
       for (const item of placed) {
-        const box = placeFree(fromFraction(saved[item.id], sizes.get(item.id), zone), fixed, zone);
+        const box = placeFree(clampBox(fromFraction(saved[item.id], sizes.get(item.id), zone), reach), fixed, reach);
         setBox(item.element, box); fixed.push(box);
       }
     }
@@ -274,8 +277,8 @@
       if (!selected.startsWith('f:')) return;
       const item = floats.find(entry => `f:${entry.id}` === selected);
       if (!item) return;
-      const box = rectOf(item.element), zone = area();
-      storeFloat(item, clampBox({ ...box, left: box.left + dx, top: box.top + dy }, zone));
+      const box = rectOf(item.element);
+      storeFloat(item, clampBox({ ...box, left: box.left + dx, top: box.top + dy }, area(true)));
       apply('move');
     }
     function step(direction) {
@@ -345,7 +348,7 @@
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < DRAG_SLOP) return;
       drag.moved = true;
-      if (drag.float) { setBox(drag.element, clampBox({ ...drag.box, left: drag.box.left + dx, top: drag.box.top + dy }, area())); return; }
+      if (drag.float) { setBox(drag.element, clampBox({ ...drag.box, left: drag.box.left + dx, top: drag.box.top + dy }, area(true))); return; }
       const siblings = Array.from(drag.element.parentElement.children).filter(node => node !== drag.element && node.matches(drag.entry.list.itemSelector) && !drag.entry.list.locked.includes(drag.entry.list.idOf(node)));
       const over = siblings.find(node => { const rect = rectOf(node); return event.clientX >= rect.left && event.clientX <= rect.left + rect.width; });
       if (over) { const rect = rectOf(over); over.parentElement.insertBefore(drag.element, event.clientX < rect.left + rect.width / 2 ? over : over.nextSibling); }

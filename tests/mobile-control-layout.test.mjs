@@ -313,6 +313,34 @@ test('destroy removes every listener and inline position', () => {
   assert.equal(r.fabs.rotate.style.position, '');
 });
 
+test('a saved corner keeps its spot at 320, 390 and 430 wide, inside the area', () => {
+  const stored = JSON.stringify({ v: 1, pos: { portrait: { 'screen.rotate': { x: 1, y: 0 }, 'screen.keyboard': { x: 0, y: 1 } }, landscape: {} }, order: {} });
+  for (const width of [320, 390, 430]) {
+    const r = rig({ width, stored });
+    const rotate = box(r.fabs.rotate), keyboard = box(r.fabs.keyboard), nav = box(r.nav);
+    assert.equal(rotate.left + rotate.width, width - 8, `${width}: right edge on the margin`);
+    assert.equal(rotate.top, 32, `${width}: under the top inset`);
+    assert.equal(keyboard.left, 8, `${width}: left edge on the margin`);
+    assert.ok(keyboard.top + keyboard.height <= nav.top, `${width}: above the bottom nav`);
+  }
+  const r = rig({ width: 430, stored });
+  r.window.resize(320, 844);
+  const rotate = box(r.fabs.rotate);
+  assert.equal(rotate.left + rotate.width, 312, 'a live resize to 320 re-clamps');
+});
+
+test('a button dragged up to the edit bar stays at the same pixel after Save', () => {
+  const r = rig();
+  r.layout.enter();
+  r.document.querySelector('.pcl-bar').box = { left: 8, top: 24, width: 374, height: 150 };
+  drag(r, r.fabs.rotate, -300, -800);
+  const during = box(r.fabs.rotate);
+  assert.ok(during.top >= 174, 'kept out from under the edit bar while editing');
+  fire(r.button('save'), 'click');
+  const after = box(r.fabs.rotate);
+  assert.deepEqual([after.left, after.top], [during.left, during.top]);
+});
+
 test('the edit bar is safe-area aware and has 44px targets', () => {
   assert.match(css, /\.pcl-bar\{[^}]*env\(safe-area-inset-top/);
   assert.match(css, /\.pcl-button\{[^}]*min-width:44px;min-height:44px/);
