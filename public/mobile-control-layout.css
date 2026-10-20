@@ -18,6 +18,11 @@
 body[data-control-layout-editing=true] [data-pcl-placed],body[data-control-layout-editing=true] .screen-fabs>*,body[data-control-layout-editing=true] .key-tail [data-shortcut]{touch-action:none}
 body[data-control-layout-editing=true] .screen-fabs>*,body[data-control-layout-editing=true] .key-tail [data-shortcut]{outline:2px dashed #d5f88899;outline-offset:2px;cursor:grab}
 [data-pcl-selected=true]{outline:3px solid #d5f888!important;outline-offset:3px}
+/* The typing bar hides Monitor and Rotate (styles.css). The key row is only
+   arranged with that bar open, so both come back while arranging and leave
+   again on Save or Cancel. */
+body[data-control-layout-editing=true][data-screen-composer=true] #screen-switch-monitor,
+body[data-control-layout-editing=true][data-screen-composer=true] #screen-rotate{display:flex}
 [data-pcl-dragging=true]{opacity:.85;cursor:grabbing;box-shadow:0 0 0 6px #d5f88833}
 @media (orientation:landscape) and (max-height:500px){.pcl-bar{flex-direction:row;flex-wrap:wrap;align-items:center;max-width:none}.pcl-row:first-child .pcl-button{flex:none}.pcl-status{flex:1 1 100%}}
 @media (prefers-reduced-motion:reduce){[data-pcl-dragging=true]{box-shadow:none}}

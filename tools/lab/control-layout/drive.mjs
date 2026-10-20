@@ -148,6 +148,8 @@ await sleep(150);
 await layoutSane('390-compositor');
 await evaluate('window.labLayout.enter()');
 await sleep(100);
+const shownWhileArranging = () => evaluate(`['#screen-switch-monitor', '#screen-rotate'].map(s => document.querySelector(s).getBoundingClientRect().width > 0)`);
+check('composer-arrange-shows-all', (await shownWhileArranging()).every(Boolean), { shown: await shownWhileArranging() });
 const tailIds = () => evaluate(`Array.from(document.querySelectorAll('#screen-key-row .key-tail [data-shortcut]')).map(e => e.dataset.shortcut)`);
 const headIds = () => evaluate(`Array.from(document.querySelectorAll('#screen-key-row .key-head [data-shortcut]')).map(e => e.dataset.shortcut)`);
 const tail0 = await tailIds();
@@ -170,6 +172,7 @@ check('edit-swallows-keys', (await hits()).length === 0, { hits: await hits() })
 await shot('06-390-teclas-editando');
 await evaluate('window.labLayout.save()');
 await sleep(100);
+check('composer-hides-again', (await shownWhileArranging()).every(shown => !shown), { shown: await shownWhileArranging() });
 await phone(390, 844);
 await evaluate('window.labComposer(true)');
 await sleep(150);
