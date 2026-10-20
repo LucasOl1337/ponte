@@ -55,13 +55,21 @@ with _lab.locked():
             extra['target'] = name
         extra['cursor'] = s['cursor']; extra['held'] = s['held']
     elif args[:1] == ['key']:
-        names = {'28': 'Enter', '1': 'Esc', '14': 'BackSpace', '15': 'Tab', '103': 'Up', '108': 'Down', '105': 'Left', '106': 'Right', '29': 'Ctrl', '46': 'C', '47': 'V', '44': 'Z', '30': 'A'}
+        names = {'28': 'Enter', '1': 'Esc', '14': 'BackSpace', '15': 'Tab', '103': 'Up', '108': 'Down', '105': 'Left', '106': 'Right', '29': 'Ctrl', '46': 'C', '47': 'V', '44': 'Z', '30': 'A', '125': 'Super', '56': 'Alt', '42': 'Shift'}
         pressed = [names.get(a.split(':')[0], a.split(':')[0]) for a in args[1:] if a.endswith(':1')]
         extra['keys'] = pressed
+        # Every evdev code still down after this call (a modifier pressed and
+        # never released would stay here and show as "down" in events.jsonl).
+        down = set(s.get('down', []))
+        for a in args[1:]:
+            code, _, state = a.partition(':')
+            if state == '1': down.add(code)
+            elif state == '0': down.discard(code)
+        s['down'] = sorted(down); extra['down'] = s['down']
         for key in pressed:
             if key == 'BackSpace': s['typed'] = s['typed'][:-1]
             elif key == 'Enter': s['typed'] += '⏎'
-            elif key not in ('Ctrl',): s['typed'] += f'<{key}>' if len(key) > 1 else key
+            elif key not in ('Ctrl', 'Super', 'Alt', 'Shift'): s['typed'] += f'<{key}>' if len(key) > 1 else key
         s['typed'] = s['typed'][-400:]
     elif args[:1] == ['type']:
         text = sys.stdin.read() if '--file' in args else ' '.join(args[1:])

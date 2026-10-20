@@ -1,0 +1,21 @@
+/* Ponte mobile shortcuts palette (public/mobile-shortcuts.js).
+   Every tap target is at least 44px tall; the palette scrolls on its own. */
+.shortcut-super { min-height: 44px; min-width: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line, #444); background: var(--panel, #1b1b1f); color: inherit; font: inherit; }
+.shortcut-super[aria-expanded="true"] { background: var(--accent, #3d6df2); color: #fff; }
+.shortcut-palette { position: fixed; inset: auto 8px calc(8px + env(safe-area-inset-bottom, 0px)) 8px; max-height: 70vh; overflow-y: auto; overscroll-behavior: contain; z-index: 40; padding: 10px; border-radius: 14px; background: var(--panel, #1b1b1f); border: 1px solid var(--line, #444); box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+.shortcut-palette[hidden] { display: none; }
+.shortcut-group { display: grid; gap: 6px; margin: 0 0 10px; }
+.shortcut-group h3 { margin: 4px 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; opacity: .7; }
+.shortcut-item { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line, #333); background: transparent; color: inherit; font: inherit; text-align: left; touch-action: manipulation; }
+.shortcut-item:active { background: var(--line, #333); }
+.shortcut-item:disabled { opacity: .45; }
+.shortcut-item kbd { font: 12px ui-monospace, monospace; opacity: .75; white-space: nowrap; }
+.shortcut-action { border-color: var(--accent, #3d6df2); }
+.shortcut-status:empty { display: none; }
+.shortcut-status { min-height: 1.2em; margin: 0 2px 8px; font-size: 13px; opacity: .85; }
+.shortcut-compose { display: grid; gap: 6px; }
+.shortcut-compose summary { min-height: 44px; display: flex; align-items: center; padding: 0 4px; cursor: pointer; }
+.shortcut-mods { display: flex; gap: 6px; }
+.shortcut-mod { min-height: 44px; min-width: 64px; flex: 1; border-radius: 10px; border: 1px solid var(--line, #333); background: transparent; color: inherit; font: inherit; }
+.shortcut-mod[aria-pressed="true"] { background: var(--accent, #3d6df2); color: #fff; }
+.shortcut-palette select { min-height: 44px; width: 100%; padding: 0 10px; border-radius: 10px; background: transparent; color: inherit; border: 1px solid var(--line, #333); font: inherit; }

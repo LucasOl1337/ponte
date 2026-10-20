@@ -5,7 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { gunzipSync } from 'node:zlib';
 import { mkdtemp, mkdir, readFile, writeFile, stat, rm, access, symlink, realpath, chmod } from 'node:fs/promises';
-import { createTerminals, sanitizeAnsi, TERMINAL_ANSI_LIMIT, TERMINAL_TEXT_LIMIT } from '../backend/terminals.mjs';
+import { createTerminals, sanitizeAnsi, TERMINAL_AGENTS, TERMINAL_ANSI_LIMIT, TERMINAL_TEXT_LIMIT } from '../backend/terminals.mjs';
 import { createApp } from '../server.mjs';
 import { ApiError, commandExists, runCommand } from '../backend/process.mjs';
 
@@ -136,6 +136,24 @@ test('a session can start an allowlisted agent with the request as one argv word
   const restored = createTerminals(root, mock);
   t.after(() => restored.close());
   assert.deepEqual((await restored.list()).sessions.map(item => item.title), ['Codex 2', 'Terminal 3', 'Codex 1']);
+});
+
+test('the phone Pi preset starts the bare pi CLI as argv and refuses any request text', async t => {
+  const root = await temporary(t), mock = mockedTmux();
+  const looked = [];
+  const terminals = createTerminals(root, { ...mock, exists: async name => { looked.push(name); return true; } });
+  t.after(() => terminals.close());
+  assert.ok(TERMINAL_AGENTS.includes('pi'));
+  const pi = await terminals.create({ cols: 80, rows: 24, agent: 'pi' });
+  assert.equal(pi.title, 'Pi 1');
+  assert.deepEqual(looked, ['tmux', 'pi']);
+  const launch = mock.calls.find(call => call.args.includes('new-session'));
+  assert.deepEqual(launch.args.slice(launch.args.indexOf('-y') + 2), ['--', '/bin/sh', '-c', '"$@"; exec "${SHELL:-/bin/sh}" -l', 'ponte-agent', 'pi']);
+  const before = mock.calls.length;
+  for (const prompt of ['oi', '', '$(id)']) await assert.rejects(async () => terminals.create({ cols: 80, rows: 24, agent: 'pi', prompt }), { code: 'INVALID_PROMPT' });
+  for (const agent of ['pi ', 'Pi', 'pi;id', '../pi', 'pi*']) await assert.rejects(async () => terminals.create({ cols: 80, rows: 24, agent }));
+  assert.equal(mock.calls.slice(before).some(call => call.args.includes('new-session')), false);
+  assert.equal(mock.calls.some(call => ['load-buffer', 'paste-buffer', 'send-keys'].some(word => call.argv.includes(word))), false);
 });
 
 test('an ssh session opens only a configured alias, as one argv word, and types its first line like a shell', async t => {
