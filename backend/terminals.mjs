@@ -26,8 +26,11 @@ const cursorFormat = `${format}\t#{cursor_x}\t#{cursor_y}\t#{cursor_flag}\t#{alt
 // program names run; the phone chooses a key, never a command.
 // `ssh` opens one of the node's configured SSH aliases (ssh.hosts in the
 // private config), never a host the phone typed.
-const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' }, ssh: { title: 'SSH', program: 'ssh' } });
-const titlePattern = /^(Terminal|Claude|Codex|Jcode|SSH [A-Za-z0-9][A-Za-z0-9._-]{0,63}) [1-4]$/;
+// `pi` is the phone's "Abrir terminal com Pi" preset: the bare CLI, never a
+// request (`bare`), so nothing the phone sends reaches the model or argv.
+const agents = Object.freeze({ shell: { title: 'Terminal' }, claude: { title: 'Claude', program: 'claude' }, codex: { title: 'Codex', program: 'codex' }, pi: { title: 'Pi', program: 'pi', bare: true }, ssh: { title: 'SSH', program: 'ssh' } });
+export const TERMINAL_AGENTS = Object.freeze(Object.keys(agents));
+const titlePattern = /^(Terminal|Claude|Codex|Jcode|Pi|SSH [A-Za-z0-9][A-Za-z0-9._-]{0,63}) [1-4]$/;
 const projectPattern = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
 // The agent runs as the pane's own argv (tmux execs it without a shell): the
 // program and the prompt are "$@", never parsed as shell text. When the agent
@@ -76,6 +79,7 @@ function sessionStart(value, hosts) {
     if (agent !== 'ssh' || Object.hasOwn(value, 'project') || typeof value.host !== 'string' || !hosts.some(item => item.host === value.host)) throw new ApiError(400, 'SSH_HOST_NOT_ALLOWED');
   }
   let prompt;
+  if (agents[agent].bare && Object.hasOwn(value, 'prompt')) throw new ApiError(400, 'INVALID_PROMPT');
   if (Object.hasOwn(value, 'prompt')) {
     prompt = value.prompt;
     // An agent receives the request as one argv word, so line breaks are safe
