@@ -30,13 +30,19 @@ the two new modules, and the IME stops learning what is typed).
 - **Organizar botões** (`public/mobile-control-layout.js`): from the typing bar's options, the
   floating buttons and the movable keys of the key row can be dragged or nudged, saved per device
   and orientation as ids and fractions only, cancelled or reset. Only a deliberate tap enters it;
-  while arranging nothing reaches the PC, and leaving the screen cancels it.
+  while arranging nothing reaches the PC, and leaving the screen cancels it. The dimming veil stays
+  inside the fixed page, the edit bar hangs on the body, and positions are stored against a stable
+  frame, so they survive the keyboard opening and the page scrolling.
 - Fixed while composing the three: the palette ends above the rail in portrait and left of it in
   landscape; on a short landscape phone with the typing bar open the rail becomes a row under the
   workspace strip instead of running off the top; an agent notice no longer covers Save while
   arranging; the editor names ⌘ by its label, not by the text of the whole palette.
 - `rd.mjs` logs the exit code, signal and error code of each failed capture (PON-7).
-- Verified: `npm test` 645 tests (644 pass, 1 skipped), `android/test.sh` (Native proxy serves the
+- `tools/release/apply.mjs` applies a local release on the checkout the service runs from: dry-run
+  by default, `--apply` fast-forwards the branch and carries uncommitted work over by a 3-way merge
+  per file (never stash or reset), runs the suite on the composed tree first, backs up, bumps the
+  config's Android version, restarts and checks `/api/health`; `--rollback DIR` undoes it.
+- Verified: `npm test` 656 tests (655 pass, 1 skipped), `android/test.sh` (Native proxy serves the
   new modules), and a composition run in the fake lab driving the real page by touch on a mobile
   Chromium (`tools/lab`): Super+F and Super+Shift+1 as two ydotool calls, arrange and save with
   nothing sent to the PC, rail and palette clear of the typing bar at 390, 360, landscape and
