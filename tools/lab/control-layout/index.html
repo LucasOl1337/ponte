@@ -34,6 +34,9 @@ const nav = document.importNode(real.querySelector('.bottom-nav'), true);
 nav.hidden = false;
 root.append(page, nav);
 document.body.classList.add('remote-screen-active');
+// As in the app on the Tela page: #page-tela becomes position:fixed, z-index 20,
+// so the controls sit in that page's stacking context (the veil must too).
+document.body.setAttribute('data-current-page', 'tela');
 document.querySelector('#screen-empty')?.remove();
 
 const LOCKED = ['enter', 'esc', 'ctrl-c'], MOVABLE = ['tab', 'up', 'down', 'left', 'right', 'ctrl-z', 'ctrl-l'];
