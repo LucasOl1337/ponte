@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ponte · prova do layout editável</title>
+<link rel="stylesheet" href="/public/styles.css">
+<link rel="stylesheet" href="/public/mobile-control-layout.css">
+<style>
+  /* Only the stand-in for the PC picture and the lab panel; the controls use the real styles.css. */
+  #screen-preview{background:repeating-linear-gradient(45deg,#1d2a17 0 24px,#18220f 24px 48px)}
+  .lab-panel{position:fixed;left:8px;top:calc(8px + env(safe-area-inset-top));z-index:30;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100% - 16px)}
+  .lab-log{position:fixed;left:8px;top:calc(64px + env(safe-area-inset-top));z-index:30;font:11px/1.4 ui-monospace,monospace;color:#c8d8b7;background:#0009;padding:4px 6px;border-radius:6px;max-width:calc(100% - 16px);margin:0;height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+</head>
+<body>
+<div id="lab-root"></div>
+<div class="lab-panel"><button class="button small" id="organize" type="button">Organizar botões</button></div>
+<p class="lab-log" id="lab-log" aria-live="polite"></p>
+<script src="/public/mobile-control-layout.js"></script>
+<script type="module">
+// Real markup: the Tela page, the floating rail and the bottom nav come from
+// public/index.html as shipped. The key row is drawn here with the same classes
+// and data-shortcut ids renderKeyBar uses. Every press that reaches a control
+// is counted in window.labHits, so the drive script can tell a shortcut that
+// fired from one the edit mode swallowed.
+const html = await (await fetch('/public/index.html')).text();
+const real = new DOMParser().parseFromString(html, 'text/html');
+const root = document.getElementById('lab-root');
+root.append(document.importNode(real.querySelector('.svg-defs'), true));
+const page = document.importNode(real.querySelector('#page-tela'), true);
+page.hidden = false;
+const nav = document.importNode(real.querySelector('.bottom-nav'), true);
+nav.hidden = false;
+root.append(page, nav);
+document.body.classList.add('remote-screen-active');
+document.querySelector('#screen-empty')?.remove();
+
+const LOCKED = ['enter', 'esc', 'ctrl-c'], MOVABLE = ['tab', 'up', 'down', 'left', 'right', 'ctrl-z', 'ctrl-l'];
+const label = { enter: '⏎', esc: 'Esc', 'ctrl-c': '^C', tab: 'Tab', up: '↑', down: '↓', left: '←', right: '→', 'ctrl-z': '^Z', 'ctrl-l': '^L' };
+const keyButton = id => `<button type="button" class="key-button${id === 'enter' ? ' key-enter' : ''}" data-shortcut="${id}" aria-label="${id}" title="${id}">${label[id]}</button>`;
+let layout;
+function renderKeyBar() {
+  const order = layout ? layout.order('screen.keys', [...LOCKED, ...MOVABLE]) : [...LOCKED, ...MOVABLE];
+  document.querySelector('#screen-key-row').innerHTML = `<div class="key-row"><div class="key-head">${LOCKED.map(keyButton).join('')}</div>`
+    + `<div class="key-tail" role="group" aria-label="Mais teclas">${order.filter(id => !LOCKED.includes(id)).map(keyButton).join('')}</div>`
+    + `<button type="button" class="key-button key-more" data-key-sheet aria-label="Todos os atalhos">⋯</button></div>`;
+}
+renderKeyBar();
+
+window.labHits = [];
+const log = document.getElementById('lab-log');
+document.addEventListener('click', event => {
+  const hit = event.target.closest?.('.screen-fabs button,[data-shortcut]');
+  if (!hit) return;
+  window.labHits.push(hit.getAttribute('data-shortcut') || hit.id || hit.getAttribute('data-scroll-step'));
+  log.textContent = `ações disparadas: ${window.labHits.join(', ')}`;
+});
+window.labComposer = open => {
+  document.querySelector('#screen-composer').hidden = !open;
+  document.body.toggleAttribute('data-screen-composer', open);
+  if (open) document.body.setAttribute('data-screen-composer', 'true');
+  const height = open ? document.querySelector('#screen-composer').getBoundingClientRect().height : 0;
+  document.documentElement.style.setProperty('--screen-composer-h', `${Math.round(height)}px`);
+  layout.refresh();
+};
+window.labKeyboard = open => {
+  if (open) document.body.setAttribute('data-keyboard-open', 'true'); else document.body.removeAttribute('data-keyboard-open');
+  layout.refresh();
+};
+
+const $ = selector => document.querySelector(selector);
+layout = PonteControlLayout.mount({
+  layoutId: 'screen',
+  floats: [['screen.scroll', '#screen-scroll'], ['screen.monitor', '#screen-switch-monitor'], ['screen.rotate', '#screen-rotate'], ['screen.keyboard', '#screen-keyboard'], ['screen.dictate', '#screen-dictate']]
+    .map(([id, selector]) => ({ id, element: $(selector) })),
+  lists: [{ id: 'screen.keys', element: () => $('#screen-key-row .key-tail'), locked: LOCKED, catalog: () => [...LOCKED, ...MOVABLE] }],
+  avoid: () => [$('.bottom-nav'), $('#screen-composer:not([hidden])'), $('.lab-panel'), $('#lab-log')].filter(Boolean),
+  onChange: ({ reason }) => { if (reason === 'save' || reason === 'cancel' || reason === 'reset') { renderKeyBar(); layout.apply(); } },
+});
+window.labLayout = layout;
+$('#organize').addEventListener('click', () => layout.enter());
+document.body.dataset.labReady = 'true';
+</script>
+</body>
+</html>
