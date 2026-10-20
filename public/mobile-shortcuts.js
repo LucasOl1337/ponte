@@ -38,11 +38,11 @@
   // (labels are the bind descriptions, in Portuguese). Order = menu order:
   // the five Lucas asked for first. Not a usage ranking; there is no sensor.
   const DEFAULT_SHORTCUTS = Object.freeze([
-    { id: 'fullscreen', combo: 'Super+F', label: 'Tela cheia', group: 'janela' },
-    { id: 'close', combo: 'Super+W', label: 'Fechar janela ou encerrar bancada', group: 'janela' },
-    { id: 'move-ws-1', combo: 'Super+Shift+1', label: 'Mover janela para o workspace 1', group: 'workspace' },
-    { id: 'move-ws-2', combo: 'Super+Shift+2', label: 'Mover janela para o workspace 2', group: 'workspace' },
-    { id: 'apps', combo: 'Super+Space', label: 'Menu de apps', group: 'apps' },
+    { id: 'fullscreen', combo: 'Super+F', label: 'Tela cheia', group: 'principais' },
+    { id: 'close', combo: 'Super+W', label: 'Fechar janela ou encerrar bancada', group: 'principais' },
+    { id: 'move-ws-1', combo: 'Super+Shift+1', label: 'Mover janela para o workspace 1', group: 'principais' },
+    { id: 'move-ws-2', combo: 'Super+Shift+2', label: 'Mover janela para o workspace 2', group: 'principais' },
+    { id: 'apps', combo: 'Super+Space', label: 'Menu de apps', group: 'principais' },
     { id: 'terminal', combo: 'Super+Return', label: 'Terminal', group: 'apps' },
     { id: 'ws-1', combo: 'Super+1', label: 'Ir para o workspace 1', group: 'workspace' },
     { id: 'ws-2', combo: 'Super+2', label: 'Ir para o workspace 2', group: 'workspace' },
@@ -63,7 +63,7 @@
     { id: 'keybindings', combo: 'Super+K', label: 'Lista de atalhos', group: 'sistema' },
     { id: 'dismiss', combo: 'Super+Comma', label: 'Dispensar a última notificação', group: 'sistema' },
   ]);
-  const GROUPS = [['janela', 'Janela'], ['workspace', 'Workspaces'], ['apps', 'Apps'], ['sistema', 'Sistema'], ['meus', 'Meus atalhos']];
+  const GROUPS = [['principais', 'Principais'], ['janela', 'Janela'], ['workspace', 'Workspaces'], ['apps', 'Apps'], ['sistema', 'Sistema'], ['meus', 'Meus atalhos']];
   // Preset actions: a fixed id the server maps to a fixed program. No prompt,
   // no text, no wildcard ever reaches it from here.
   const PRESET_ACTIONS = Object.freeze([

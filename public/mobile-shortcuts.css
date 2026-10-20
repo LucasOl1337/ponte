@@ -11,6 +11,7 @@
 .shortcut-item:disabled { opacity: .45; }
 .shortcut-item kbd { font: 12px ui-monospace, monospace; opacity: .75; white-space: nowrap; }
 .shortcut-action { border-color: var(--accent, #3d6df2); }
+.shortcut-status:empty { display: none; }
 .shortcut-status { min-height: 1.2em; margin: 0 2px 8px; font-size: 13px; opacity: .85; }
 .shortcut-compose { display: grid; gap: 6px; }
 .shortcut-compose summary { min-height: 44px; display: flex; align-items: center; padding: 0 4px; cursor: pointer; }

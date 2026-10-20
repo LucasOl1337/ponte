@@ -125,6 +125,10 @@ test('Super button opens a palette; a tap sends one keyboard.combo and never typ
   superButton.click();
   assert.equal(host.querySelector('.shortcut-palette').hidden, false);
   assert.equal(host.querySelector('[data-shortcut-super]').getAttribute('aria-expanded'), 'true');
+  // After Ações, the first group is Principais with the five requested combos, in order.
+  const principais = host.querySelectorAll('.shortcut-group')[1];
+  assert.equal(principais.querySelector('h3').textContent, 'Principais');
+  assert.deepEqual(principais.querySelectorAll('[data-combo]').map(button => button.dataset.combo), ['Super+F', 'Super+W', 'Super+Shift+1', 'Super+Shift+2', 'Super+Space']);
 
   host.querySelector('[data-combo="Super+Shift+1"]').click();
   await new Promise(resolve => setImmediate(resolve));
