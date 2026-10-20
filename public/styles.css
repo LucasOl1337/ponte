@@ -426,6 +426,12 @@ body[data-keyboard-open=true] .terminal-page{padding-bottom:20px}
 .screen-composer .cmd-history{padding:2px 2px 6px}
 .screen-composer .cmd-chip{min-height:34px;padding:5px 10px}
 .screen-composer-tools{display:flex;gap:6px;padding-top:6px}
+.screen-composer-actions{display:flex;gap:6px;padding-top:6px}
+.screen-composer-action{flex:1;min-height:44px;border-radius:12px;background:#1e2419;border:1px solid #3b4531;color:#c3d6a8;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:600;font-size:15px;line-height:1;font-family:inherit;padding:0 12px}
+.screen-composer-action svg{width:18px;height:18px}
+.screen-composer-action.primary{background:var(--lime);border-color:var(--lime);color:#222a18}
+.screen-composer-hint{margin:4px 2px 0;font-size:12px;line-height:1.3;color:#8d9a80}
+.screen-composer-hint.warn{color:#f0c060}
 
 .tap-marker{position:absolute;z-index:6;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;border:2px solid var(--lime);box-shadow:0 0 0 1px #0008;pointer-events:none;opacity:0;transform:scale(1.4)}.tap-marker[data-kind=right]{border-color:var(--danger)}.tap-marker[data-kind=scroll]{border-color:#ffbe50;border-style:dashed}.tap-marker.show{animation:tap-marker .45s ease-out forwards}@keyframes tap-marker{0%{opacity:.95;transform:scale(1.3)}70%{opacity:.6;transform:scale(.55)}100%{opacity:0;transform:scale(.45)}}
 .screen-key-row{padding:0 0 6px}.screen-key-row .key-button{min-height:40px;background:#2b3124;border-color:#3b4531;color:#c3cdb8}.screen-key-row .key-button:active{background:#3c4b2e}.screen-key-row .key-sheet{bottom:calc(100% + 6px)}

@@ -86,7 +86,7 @@ const KEY_HEAD = ['enter','esc','ctrl-c'];
 const KEY_ORDER = {
   agent: ['shift-tab','up','down','newline','menu-1','menu-2','menu-3','tab','slash','at','esc-esc','left','right','backspace','pgup','pgdn','ctrl-o','ctrl-t','repeat','ctrl-r','ctrl-l','ctrl-d','bang','ctrl-c-twice'],
   shell: ['up','tab','ctrl-r','repeat','down','left','right','backspace','ctrl-l','ctrl-d','ctrl-z','fg','home','end','ctrl-u','ctrl-w','ctrl-a','ctrl-e','pgup','pgdn','ctrl-c-twice'],
-  desk: ['tab','backspace','up','down','left','right','paste','term-paste','term-copy','undo','shift-tab','newline','alt-tab','select-all','delete','home','end','pgup','pgdn','ctrl-l','ctrl-r','ctrl-d','find','save','new-tab','close-tab','ctrl-tab','f5','redo','super','close-window'],
+  desk: ['tab','shift-tab','backspace','up','down','left','right','paste','term-paste','term-copy','undo','newline','alt-tab','select-all','delete','home','end','pgup','pgdn','ctrl-l','ctrl-r','ctrl-d','find','save','new-tab','close-tab','ctrl-tab','f5','redo','super','close-window'],
 };
 const KEY_GROUPS = [['agent','Agente'],['nav','Navegação'],['edit','Edição'],['shell','Terminal'],['desk','Janelas e apps']];
 const KEY_SEQUENCE_GAP_MS = 150;
@@ -173,7 +173,7 @@ async function api(path, options = {}) {
         try { localStorage.removeItem(storageKey); } catch {}
         showPairing(); connectOverTailscale();
       }
-      throw Object.assign(new Error(message),{errorCode:details?.errorCode,errorParameters:details?.errorParameters,dailywork:details?.dailywork,confirmed:details?.confirmed===true});
+      throw Object.assign(new Error(message),{status:response.status,errorCode:details?.errorCode,errorParameters:details?.errorParameters,dailywork:details?.dailywork,confirmed:details?.confirmed===true});
     }
     // Transcript reads keep their cancellation and timeout through the body,
     // not only until response headers arrive.
@@ -2458,7 +2458,12 @@ $('#screen-rotate').addEventListener('click', () => requestOrientation(landscape
 $('#screen-dictate').addEventListener('click', () => {
   toggleDictation($('#screen-dictate'), $('#screen-dictate-status'), async blob => {
     const text = await uploadDictation('/dictate', blob);
-    if (text) { await quietAction('keyboard.text',{text}); await quietAction('keyboard.key',{key:'Enter'}); }
+    // What was heard lands in the draft to review: it may be half a password
+    // or a line for a form, so it never types or presses Enter by itself.
+    if (text) {
+      if (!screenComposerOpen()) openScreenComposer();
+      if (screenComposerOpen()) { screenInput.value = screenInput.value ? `${screenInput.value} ${text}` : text; growScreenInput(); screenHint("Revise o texto e toque em Preencher ou Enviar."); }
+    }
     return text;
   });
 });
@@ -3005,9 +3010,15 @@ $('#terminal-pause').addEventListener('click',() => { terminalPaused = !terminal
 const CMD_HISTORY_KEY = 'ponte-cmd-history';
 let cmdHistory = [];
 try { const saved = JSON.parse(localStorage.getItem(CMD_HISTORY_KEY) || '[]'); if (Array.isArray(saved)) cmdHistory = saved.filter(item => typeof item === 'string').slice(0, 40); } catch {}
+// A line typed at a password prompt is a secret, not a command: never keep it.
+const SECRET_PROMPT = /(pass(word|phrase)?|senha|contraseña|\bpin\b|token|otp|verification code|código)[^\n]{0,40}[:?]\s*$/i;
+function terminalAsksSecret() {
+  const tail = String(terminalText || '').split('\n').filter(line => line.trim()).slice(-1)[0] || '';
+  return SECRET_PROMPT.test(tail);
+}
 function rememberCommand(text) {
   const trimmed = text.trim();
-  if (!trimmed) return;
+  if (!trimmed || terminalAsksSecret()) return;
   cmdHistory = [trimmed, ...cmdHistory.filter(item => item !== trimmed)].slice(0, 40);
   try { localStorage.setItem(CMD_HISTORY_KEY, JSON.stringify(cmdHistory)); } catch {}
   renderCmdHistory();
@@ -3059,15 +3070,21 @@ $('#cmd-history').addEventListener('click', event => {
 });
 renderCmdHistory();
 
-// Screen typing bar. It works like a keyboard, not like a form: the keyboard
-// button opens a thin bar and focuses its field inside the same tap (the only
-// way Android shows the soft keyboard), and every edit goes to the PC as it
-// happens — the field only mirrors what was sent, so autocorrect fixes turn
-// into backspaces on the PC too. Enter presses Enter on the PC, remembers the
-// line in the command history shared with the terminal, and clears the field.
-// The clock button reveals that history plus New/Close; a chip types its line.
+// Screen typing bar. The keyboard button opens a thin bar and focuses its
+// field inside the same tap (the only way Android shows the soft keyboard).
+// The draft stays on the phone until one of two explicit buttons: Fill types
+// it on the PC and stops there, Send types it and presses Enter. Nothing else
+// presses Enter on the PC: the phone keyboard's action key is Fill, so a login
+// form gets its user name, Tab, its password and only then an Enter the user
+// chose. The bar types into arbitrary fields, passwords included, so nothing
+// typed here is ever saved.
 const screenInput = $('#screen-input');
 let screenComposing = false;
+// The last line that left the phone. `sending` blocks a second tap until the
+// PC answers, so a double tap never types twice. `uncertain`: no answer came
+// back (timeout, lost link, server error), so the PC may already have typed
+// it; the draft stays and repeating it takes a second, deliberate tap.
+let screenDelivery = null;
 let screenComposerH = -1;
 let screenComposerAutomatic = false;
 function screenComposerOpen() { return !$('#screen-composer').hidden; }
@@ -3121,6 +3138,7 @@ function closeScreenComposer() {
   document.body.setAttribute('data-screen-composer', 'false');
   $('#screen-keyboard').setAttribute('aria-pressed', 'false');
   screenInput.value = ''; screenComposing = false; screenComposerH = -1; screenComposerAutomatic = false;
+  screenDelivery = null; screenHint();
   for (const timer of screenFocusTimers) clearTimeout(timer);
   screenInput.blur();
   // Blurring the field does not always lower the IME inside the WebView; ask
@@ -3130,30 +3148,62 @@ function closeScreenComposer() {
 }
 // A key that did not reach the PC: keep the draft so it can be sent again.
 function failScreenInput() { toast(t("O texto não entrou. Tente de novo."), true); }
-// The text stays on the phone until Send: one request types the whole line
-// and presses Enter in the same server action. Forwarding every edit as
-// keystrokes (the previous design) turned a Gboard correction over a
-// Tailscale relay into a burst of backspaces that arrived garbled or not at
-// all. The bar closes after a successful send, like a chat.
-function sendScreenText({ enter = true } = {}) {
+function screenHint(message = "Preencher só digita. Enter só com Enviar ou ⏎.", warn = false) {
+  const hint = $('#screen-input-hint');
+  if (!hint) return;
+  hint.setAttribute('data-i18n', message);
+  hint.textContent = t(message);
+  hint.classList.toggle('warn', warn);
+}
+function screenTypeBody(text, enter) {
+  if (text) return { type: 'keyboard.text', ...(enter ? { text, enter: true } : { text }) };
+  return enter ? { type: 'keyboard.key', key: 'Enter' } : null;
+}
+// 'ok', 'refused' (the PC answered no: nothing typed) or 'uncertain'.
+async function screenTypeOutcome({ type, ...payload }) {
+  if (!connected) return 'refused';
+  try { await api('/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type, ...payload}) }); return 'ok'; }
+  catch (error) { return error?.status >= 400 && error.status < 500 ? 'refused' : 'uncertain'; }
+}
+// Fill (enter false) types the draft and stops; Send (enter true) types it
+// and presses Enter in the same server action, so the Enter cannot be lost
+// between two requests on a relayed link.
+function sendScreenText({ enter = false } = {}) {
   if (screenComposing || !screenKeyboardAvailable()) return;
+  if (screenDelivery?.state === 'sending') return;
   const text = screenInput.value;
-  // The screen bar types into arbitrary PC fields (including password fields),
-  // so its lines are NEVER saved to history. Only the terminal composer keeps a
-  // command history.
+  // A line break is typed as Return by the PC: Fill would hide an Enter in it.
+  if (!enter && /[\r\n]/.test(text)) { screenHint("O texto tem quebra de linha, que vira Enter no PC. Tire a quebra ou use Enviar.", true); return; }
+  const body = screenTypeBody(text, enter);
+  if (!body) { screenHint("Nada para preencher. Digite o texto primeiro.", true); return; }
+  const key = `${enter}:${text}`;
+  if (screenDelivery?.state === 'uncertain' && screenDelivery.key === key && !screenDelivery.armed) {
+    screenDelivery.armed = true;
+    screenHint("O PC pode já ter recebido este texto. Confira a tela e toque de novo para repetir.", true);
+    return;
+  }
+  screenDelivery = { state: 'sending', key };
   sendKeys(async () => {
-    const ok = text ? await quietAction('keyboard.text', enter ? { text, enter: true } : { text }) : (enter ? await quietAction('keyboard.key',{key:'Enter'}) : true);
-    if (!ok) { failScreenInput(); return; }
+    const outcome = await screenTypeOutcome(body);
+    if (outcome !== 'ok') {
+      screenDelivery = outcome === 'uncertain' ? { state: 'uncertain', key, armed: false } : null;
+      if (outcome === 'uncertain') screenHint("Sem confirmação do PC: o texto pode ter entrado. Confira a tela antes de repetir.", true);
+      else failScreenInput();
+      return;
+    }
+    screenDelivery = null;
+    screenHint();
     if (screenInput.value !== text) return; // typed more meanwhile: keep the bar
     screenInput.value = ''; growScreenInput();
     if (enter && text) closeScreenComposer(); else screenInput.focus({ preventScroll: true });
   });
 }
+function fillScreenText() { sendScreenText({ enter: false }); }
 function sendScreenEnter() { sendScreenText({ enter: true }); }
 // A button tap must not steal focus from the field: that would close the
 // keyboard, shift the bar under the finger and lose the tap itself.
 for (const name of ['pointerdown','mousedown']) {
-  $$('#screen-input-send,#screen-input-more,#screen-input-clear,#screen-input-paste').forEach(element => element.addEventListener(name, event => event.preventDefault()));
+  $$('#screen-input-fill,#screen-input-send,#screen-input-more,#screen-input-clear').forEach(element => element.addEventListener(name, event => event.preventDefault()));
 }
 $('#screen-keyboard').addEventListener('click', () => {
   if (!screenComposerOpen()) { openScreenComposer({ automatic: false, requestNativeKeyboard: true }); return; }
@@ -3169,6 +3219,7 @@ $('#screen-keyboard').addEventListener('click', () => {
   closeScreenComposer();
 });
 $('#screen-input-close').addEventListener('click', closeScreenComposer);
+$('#screen-input-fill').addEventListener('click', fillScreenText);
 $('#screen-input-send').addEventListener('click', sendScreenEnter);
 $('#screen-input-more').addEventListener('click', () => {
   const open = $('#screen-composer-tools').hidden;
@@ -3179,17 +3230,36 @@ $('#screen-input-more').addEventListener('click', () => {
 $('#screen-input-clear').addEventListener('click', () => {
   // Nothing was sent yet, so New only clears the phone's draft.
   screenInput.value = ''; growScreenInput();
+  screenDelivery = null; screenHint();
   screenInput.focus({ preventScroll: true });
 });
-$('#screen-input-paste').addEventListener('click', () => sendScreenText({ enter: false }));
-screenInput.addEventListener('input', growScreenInput);
+// The phone keyboard's action key arrives as a line break: on Gboard as a
+// keydown Enter, on IMEs that report keyCode 229 only as an insertLineBreak
+// input. Either way it means Fill, never Enter on the PC.
+screenInput.addEventListener('beforeinput', event => {
+  if (event.inputType !== 'insertLineBreak' && event.inputType !== 'insertParagraph') return;
+  event.preventDefault();
+  if (!screenComposing && !event.isComposing) fillScreenText();
+});
+screenInput.addEventListener('input', event => {
+  if ((event?.inputType === 'insertLineBreak' || event?.inputType === 'insertParagraph') && /[\r\n]/.test(screenInput.value)) {
+    // A WebView that ignored preventDefault left the break in the draft.
+    screenInput.value = screenInput.value.replace(/\r?\n/g, '');
+    fillScreenText();
+  }
+  if (screenDelivery?.state === 'uncertain') { screenDelivery = null; screenHint(); }
+  growScreenInput();
+});
 screenInput.addEventListener('compositionstart', () => { screenComposing = true; });
 screenInput.addEventListener('compositionend', () => { screenComposing = false; });
 screenInput.addEventListener('keydown', event => {
   // Ignore Enter/Backspace mid-IME-composition (isComposing, or Android's 229
   // placeholder keycode): otherwise confirming a candidate sends a stray Enter.
   if (event.isComposing || event.keyCode === 229) return;
-  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendScreenEnter(); }
+  // Ctrl/Cmd+Enter is the deliberate Send of a hardware keyboard; plain Enter
+  // (the phone keyboard's action key) only fills.
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); sendScreenEnter(); }
+  else if (event.key === 'Enter') { event.preventDefault(); fillScreenText(); }
   else if (event.key === 'Backspace' && !screenInput.value) { event.preventDefault(); sendKeys(() => quietAction('keyboard.key',{key:'BackSpace'})); }
 });
 screenInput.addEventListener('focus', measureScreenComposer);

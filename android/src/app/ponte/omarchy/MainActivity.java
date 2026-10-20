@@ -125,7 +125,18 @@ public final class MainActivity extends Activity {
     }
 
     private void configureBrowser() {
-        browser = new WebView(this);
+        // What is typed here goes to arbitrary PC fields, passwords included:
+        // ask the phone keyboard not to learn it (no suggestions, no personal
+        // dictionary, no cloud sync of the words). The page decides what the
+        // action key means; this only changes what the keyboard keeps.
+        browser = new WebView(this) {
+            @Override
+            public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo outAttrs) {
+                android.view.inputmethod.InputConnection connection = super.onCreateInputConnection(outAttrs);
+                if (outAttrs != null) outAttrs.imeOptions |= android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
+                return connection;
+            }
+        };
         browser.setBackgroundColor(Color.rgb(21, 23, 20));
         WebSettings settings = browser.getSettings();
         settings.setJavaScriptEnabled(true);

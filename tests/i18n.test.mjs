@@ -167,7 +167,7 @@ test('Leaving the screen discards queued scroll and releases a held drag',async(
  assert.deepEqual(actions,[{type:'mouse.drag',pressed:false}]);
 });
 
-test('A tap on a PC text field only lights the keyboard button; the typing bar opens from that button, sends the line in one action on Enter, closes, and never persists what is typed',async()=>{
+test('A tap on a PC text field only lights the keyboard button; the typing bar opens from that button, fills on the phone keyboard action key, sends with Enter only from Send, and never persists what is typed',async()=>{
  let focused=true;
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path,options)=>path==='/api/textinput'?{ok:true,json:async()=>({available:true,focused})}:{ok:true,json:async()=>path==='/api/audio'?{recordings:[]}:fixture}});await flush();
  h.window.innerWidth=390;h.window.innerHeight=844;
@@ -175,7 +175,10 @@ test('A tap on a PC text field only lights the keyboard button; the typing bar o
  await h.run('checkTextInput()');await flush();
  assert.equal(h.el('#screen-keyboard').getAttribute('data-text-focused'),'true');
  assert.notEqual(h.document.activeElement,h.el('#screen-input'));assert.equal(h.el('#screen-composer').hidden,true);
- assert.equal(h.el('#screen-input').getAttribute('enterkeyhint'),'send');
+ assert.equal(h.el('#screen-input').getAttribute('enterkeyhint'),'done','the phone keyboard action key does not promise a send');
+ assert.equal(h.el('#screen-input-paste'),null,'no hidden send-without-Enter: Fill is the visible primary action');
+ assert.ok(h.el('#screen-input-fill').classList.contains('primary'));
+ assert.equal(h.el('#screen-input-send').classList.contains('primary'),false);
  // The keyboard button opens the bar and focuses its field in the same tap.
  h.el('#screen-keyboard').click();
  assert.equal(h.el('#screen-composer').hidden,false);assert.equal(h.document.activeElement,h.el('#screen-input'));
@@ -191,40 +194,48 @@ test('A tap on a PC text field only lights the keyboard button; the typing bar o
  keys.value='olá mundo';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
  const actions=()=>h.calls.filter(call=>call.path==='/api/action').map(call=>JSON.parse(call.options.body));
  assert.deepEqual(actions(),[]);
+ // The phone keyboard's action key (keydown Enter) only fills: no Enter reaches the PC.
  keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
- assert.deepEqual(actions(),[{type:'keyboard.text',text:'olá mundo',enter:true}],'one action types the line and presses Enter');
+ assert.deepEqual(actions(),[{type:'keyboard.text',text:'olá mundo'}],'the action key types the line without Enter');
  assert.equal(keys.value,'');
- assert.equal(h.el('#screen-composer').hidden,true,'the bar closes after a sent line, like a chat');
+ assert.equal(h.el('#screen-composer').hidden,false,'the bar stays for the next field');
+ // Send is the explicit Enter: one action types the line and presses Enter, then the bar closes like a chat.
+ h.calls.length=0;keys.value='ls';keys.dispatchEvent({type:'input'});
+ h.el('#screen-input-send').click();await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[{type:'keyboard.text',text:'ls',enter:true}]);
+ assert.equal(h.el('#screen-composer').hidden,true);
  assert.equal(h.document.body.getAttribute('data-screen-composer'),'false');
  // Security: the screen bar types into arbitrary PC fields (passwords included),
  // so nothing typed there is ever saved to the command history.
  assert.equal(h.run('cmdHistory.length'),0,'screen typing is never persisted to history');
  assert.equal(h.el('#screen-cmd-history'),null,'the screen bar has no history list');
- // Empty line + Enter is just Enter on the PC, and the bar stays for the next line.
+ // Empty line + action key sends nothing; empty line + Send is a bare Enter on the PC.
  h.el('#screen-keyboard').click();h.calls.length=0;
  keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[],'the action key on an empty field never becomes Enter');
+ h.el('#screen-input-send').click();await h.run('keyQueue');await flush();
  assert.deepEqual(actions(),[{type:'keyboard.key',key:'Enter'}]);
  assert.equal(h.el('#screen-composer').hidden,false);
- // Send without Enter pastes the text and keeps the bar open.
- h.el('#screen-input-more').click();
- assert.equal(h.el('#screen-composer-tools').hidden,false);
- h.calls.length=0;keys.value='só texto';keys.dispatchEvent({type:'input'});
- h.el('#screen-input-paste').click();await h.run('keyQueue');await flush();
- assert.deepEqual(actions(),[{type:'keyboard.text',text:'só texto'}]);
- assert.equal(h.el('#screen-composer').hidden,false);assert.equal(keys.value,'');
+ // A hardware keyboard sends deliberately with Ctrl+Enter.
+ h.calls.length=0;keys.value='pwd';keys.dispatchEvent({type:'input'});
+ keys.dispatchEvent({type:'keydown',key:'Enter',ctrlKey:true,preventDefault(){}});await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[{type:'keyboard.text',text:'pwd',enter:true}]);
  // Focus leaving the PC field only dims the cue; the bar stays until closed.
+ h.el('#screen-keyboard').click();
  focused=false;await h.run('checkTextInput()');await flush();
  assert.equal(h.el('#screen-keyboard').getAttribute('data-text-focused'),'false');assert.equal(h.el('#screen-composer').hidden,false);
+ h.el('#screen-input-more').click();
+ assert.equal(h.el('#screen-composer-tools').hidden,false);
  h.el('#screen-input-close').click();
  assert.equal(h.el('#screen-composer').hidden,true);assert.equal(h.document.activeElement,null);
  h.window.innerHeight=844;h.run('syncRemoteViewport()');
  assert.equal(h.document.body.getAttribute('data-keyboard-open'),'false');
 });
 
-test('the screen typing bar swallows Enter during IME composition and keeps the draft when the PC did not take it',async()=>{
- let failAction=false;
+test('the screen typing bar swallows Enter during IME composition, keeps the draft when the PC refused it and never repeats an unconfirmed line on one tap',async()=>{
+ let failStatus=0;
  const h=harness({stored:{'ponte-pair-token':'synthetic-test-token'},runApp:true,response:async(path)=>{
-  if(path==='/api/action'&&failAction)return{ok:false,status:503,json:async()=>({error:'x'})};
+  if(path==='/api/action'&&failStatus)return{ok:false,status:failStatus,json:async()=>({error:'x'})};
   if(path==='/api/textinput')return{ok:true,json:async()=>({available:true,focused:false})};
   return{ok:true,json:async()=>path==='/api/audio'?{recordings:[]}:fixture};
  }});await flush();
@@ -236,18 +247,28 @@ test('the screen typing bar swallows Enter during IME composition and keeps the 
  keys.dispatchEvent({type:'compositionstart'});
  keys.value='码';keys.dispatchEvent({type:'input'});await h.run('keyQueue');await flush();
  keys.dispatchEvent({type:'keydown',key:'Enter',isComposing:true,preventDefault(){}});await flush();
+ keys.dispatchEvent({type:'beforeinput',inputType:'insertLineBreak',isComposing:true,preventDefault(){}});await flush();
  let actions=()=>h.calls.filter(c=>c.path==='/api/action').map(c=>JSON.parse(c.options.body));
  assert.equal(actions().length,0,'nothing sent while the IME is composing');
  keys.dispatchEvent({type:'compositionend'});await flush();
- assert.equal(actions().length,0,'the committed candidate still waits for Send');
- // A delivery failure keeps the draft on the phone so it can be sent again.
- failAction=true;
- keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
+ assert.equal(actions().length,0,'the committed candidate still waits for an action');
+ // The PC answered no (4xx): nothing was typed, so the draft stays and one tap retries.
+ failStatus=400;
+ h.el('#screen-input-send').click();await h.run('keyQueue');await flush();
  assert.deepEqual(actions(),[{type:'keyboard.text',text:'码',enter:true}]);
- assert.equal(keys.value,'码','the draft survives a failed send');
+ assert.equal(keys.value,'码','the draft survives a refused send');
  assert.equal(h.el('#screen-composer').hidden,false);
- failAction=false;h.calls.length=0;
- keys.dispatchEvent({type:'keydown',key:'Enter',preventDefault(){}});await h.run('keyQueue');await flush();
+ // No answer (5xx, timeout): the PC may have typed it. The draft stays with a warning,
+ // the next tap only arms the repeat, and only a second deliberate tap repeats it.
+ failStatus=503;h.calls.length=0;
+ h.el('#screen-input-send').click();await h.run('keyQueue');await flush();
+ assert.equal(actions().length,1);
+ assert.equal(keys.value,'码');
+ assert.ok(h.el('#screen-input-hint').classList.contains('warn'),'an unconfirmed send is flagged');
+ failStatus=0;h.calls.length=0;
+ h.el('#screen-input-send').click();await h.run('keyQueue');await flush();
+ assert.deepEqual(actions(),[],'one tap after an unconfirmed send does not retype it');
+ h.el('#screen-input-send').click();await h.run('keyQueue');await flush();
  assert.deepEqual(actions(),[{type:'keyboard.text',text:'码',enter:true}]);
  assert.equal(h.el('#screen-composer').hidden,true);
 });
