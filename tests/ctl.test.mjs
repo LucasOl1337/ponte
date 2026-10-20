@@ -190,6 +190,7 @@ const ACTION_CASES = [
   ['mouse drag-start', 'mouse.dragStartAt', { monitor: 'TEST-1', x: 10, y: 20, modifier: 'super' }],
   ['keyboard text', 'keyboard.text', { text: 'olá 漢字 👋', enter: true }],
   ['keyboard key', 'keyboard.key', { key: 'Copy' }],
+  ['keyboard combo', 'keyboard.combo', { combo: 'Super+Shift+1' }],
   ['workspace focus', 'workspace.focus', { id: 6, monitor: 'TEST-1' }],
   ['window focus', 'window.focus', { address: '0xabc' }],
   ['window move', 'window.moveToWorkspace', { address: '0xabc', id: 7 }],

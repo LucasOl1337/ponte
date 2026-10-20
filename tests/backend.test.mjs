@@ -333,6 +333,20 @@ test('drag renews its lease and auto-releases; shortcut keys release modifiers',
   assert.equal(f.calls.filter(call => call.args.includes('0x80')).length, 2);
 });
 
+test('a Super shortcut goes through /api/action with the bearer token as one press-and-release call', async t => {
+  const f = await fixture(t);
+  const unauth = await fetch(`${f.base}/api/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'keyboard.combo', combo: 'Super+F' }) });
+  assert.equal(unauth.status, 401);
+  assert.equal(f.calls.some(call => call.command === 'ydotool'), false);
+  const ok = await f.action({ type: 'keyboard.combo', combo: 'Super+Shift+1' });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(f.calls.filter(call => call.command === 'ydotool').map(call => call.args), [['key', '--key-delay', '1', '125:1', '42:1', '2:1', '2:0', '42:0', '125:0']]);
+  const bad = await f.action({ type: 'keyboard.combo', combo: 'Ctrl+Alt+Delete' });
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).errorCode, 'KEY_NOT_ALLOWED');
+  assert.equal(f.calls.filter(call => call.command === 'ydotool').length, 1);
+});
+
 test('the new desktop chords press fixed evdev codes and release them in reverse; unknown names never reach ydotool', async t => {
   const f = await fixture(t);
   // evdev: 29 LEFTCTRL, 42 LEFTSHIFT, 15 TAB, 28 ENTER, 46 C, 47 V, 44 Z, 32 D,

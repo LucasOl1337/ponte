@@ -103,6 +103,9 @@ export const COMMANDS = [
     text: { ...text }, enter: boolean({ default: false }),
   }, { input: { sources: ['text', 'stdin', 'file'], field: 'text' } }),
   actionCommand('keyboard key', 'Press a supported desktop key.', 'keyboard.key', { key: string({ ...required, enum: desktopKeys }) }),
+  actionCommand('keyboard combo', 'Press a system shortcut: Super, optional Ctrl/Alt/Shift in that order, then one key; all released after.', 'keyboard.combo', {
+    combo: string({ ...required, maxLength: 40, pattern: `^Super(\\+Ctrl)?(\\+Alt)?(\\+Shift)?\\+(?:[A-Z0-9]|Return|Space|Tab|Escape|BackSpace|Delete|Left|Right|Up|Down|Comma|Period|Slash|Minus|Equal|F[1-9]|F1[0-2]|Print)${end}` }),
+  }),
   actionCommand('workspace focus', 'Focus a workspace, optionally on a monitor.', 'workspace.focus', {
     id: { ...workspaceId }, monitor: { ...dpmsMonitor },
   }),

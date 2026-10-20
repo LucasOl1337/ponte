@@ -160,6 +160,7 @@ dono. Nesta máquina, bancadas e a política de convivência continuam valendo.
 printf '%s' 'texto literal' | ./ponte ctl keyboard text --stdin
 ./ponte ctl keyboard text --file ./texto.txt
 ./ponte ctl keyboard key --key Enter
+./ponte ctl keyboard combo --combo Super+Shift+1   # atalho do sistema: Super[+Ctrl][+Alt][+Shift]+TECLA
 ./ponte ctl workspace focus --id 6 --monitor DP-1
 ./ponte ctl window focus --address 0x123abc
 ./ponte ctl window move --address 0x123abc --id 7
