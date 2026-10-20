@@ -37,15 +37,23 @@ the two new modules, and the IME stops learning what is typed).
   landscape; on a short landscape phone with the typing bar open the rail becomes a row under the
   workspace strip instead of running off the top; an agent notice no longer covers Save while
   arranging; the editor names ⌘ by its label, not by the text of the whole palette.
+- **The connection state stays readable under the controls** (rev. 1105). While reconnecting with
+  the typing bar and the phone keyboard open, the workspace strip covered the end of RECONNECTING
+  and the rail sat on "Connection interrupted. Retrying…". `screenStatusPlacement` (app.js) now
+  keeps the HUD and the note clear of the strip, the rail and moved buttons: each keeps its spot
+  when clear, else narrows and wraps beside them, else moves past them; on a 360 px phone the HUD
+  drops to one row (the badge already says "no new frames") so the note fits above the rail.
+  Nothing is hidden, no control moves, and a healthy live view is unchanged.
 - `rd.mjs` logs the exit code, signal and error code of each failed capture (PON-7).
 - `tools/release/apply.mjs` applies a local release on the checkout the service runs from: dry-run
   by default, `--apply` fast-forwards the branch and carries uncommitted work over by a 3-way merge
   per file (never stash or reset), runs the suite on the composed tree first, backs up, bumps the
   config's Android version, restarts and checks `/api/health`; `--rollback DIR` undoes it.
-- Verified: `npm test` 656 tests (655 pass, 1 skipped), `android/test.sh` (Native proxy serves the
+- Verified: `npm test` 659 tests (658 pass, 1 skipped), `android/test.sh` (Native proxy serves the
   new modules), and a composition run in the fake lab driving the real page by touch on a mobile
   Chromium (`tools/lab`): Super+F and Super+Shift+1 as two ydotool calls, arrange and save with
   nothing sent to the PC, rail and palette clear of the typing bar at 390, 360, landscape and
+  with the keyboard open, RECONNECTING and the retry note clear of every control at 390, 360 and
   with the keyboard open, Pi opened on Terminais, and user, Tab, password reaching the PC with no
   Enter until ⏎. Not yet run on a real phone.
 

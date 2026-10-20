@@ -925,6 +925,7 @@ function renderScreenWorkspaces() {
     const windows = Number(ws?.windows || 0);
     return `<button type="button" class="screen-workspace ${id === active ? 'active' : ''}" data-screen-workspace="${id}" aria-label="${escaped(i18n.plural('Ir para área {workspace}, {count} janela','Ir para área {workspace}, {count} janelas',windows,{workspace:id}))}" ${id === active ? 'aria-current="true"' : ''}>${id}${windows ? '<i aria-hidden="true"></i>' : ''}</button>`;
   }).join('');
+  placeScreenStatus();
 }
 $('#screen-workspaces').addEventListener('click', async event => {
   const chip = event.target.closest('[data-screen-workspace]');
@@ -1003,6 +1004,7 @@ function syncRemoteViewport() {
   document.documentElement.style.setProperty('--remote-viewport-top',`${window.visualViewport?.offsetTop || 0}px`);
   applyScreenZoom();
   controlLayout?.refresh();
+  placeScreenStatus();
 }
 window.visualViewport?.addEventListener('resize',syncRemoteViewport);
 window.visualViewport?.addEventListener('scroll',syncRemoteViewport);
@@ -1455,6 +1457,82 @@ function screenFrame(preview, natural, boxes) {
   if (!best) { const base = fitScreenBase(preview, natural, all); best = { w: base.w, h: base.h, fit: all }; }
   return { ...best, pan: all };
 }
+// The state HUD (top left: monitor, "No new frames", RECONNECTING) and the
+// status note (bottom: "Connection interrupted. Retrying in 4s.") are text the
+// owner must read, so no control may sit on them. The workspace strip hugs the
+// top right and the button rail the bottom right; either can reach across a
+// phone, and the owner can move buttons anywhere (Organize). Each label keeps
+// its spot when it is clear, else tries the alternatives in order and takes
+// the first one that touches no control and stays on the preview:
+//   HUD:  its spot, then narrowed (wrapping) to the room left of the strip,
+//         so it stays in the top band, then under whatever covers it;
+//   note: its spot, then narrowed (wrapping) to the room left of the rail,
+//         then raised above the rail;
+//   both: on a short preview (360 px phone, keyboard and typing bar open)
+//         none of that fits, so the HUD goes compact (one row, without the
+//         "No new frames" line the RECONNECTING badge already says) and the
+//         note is tried again in the room that frees under it.
+// measure(width) is the label's height at that width (it wraps);
+// measureHudCompact(maxWidth) is the compact HUD's {width, height}. Boxes are
+// page coordinates. The result says where each label's box goes, or null to
+// leave it as it is.
+function screenStatusPlacement({ area, hud, note, blockers, measureHud, measureNote, measureHudCompact, gap = 6, minWidth = 120 }) {
+  const live = (blockers || []).filter(box => box && box.width > 0 && box.height > 0);
+  const hits = (rect, list) => list.some(box => rect.left < box.left + box.width - 0.5 && box.left < rect.left + rect.width - 0.5 && rect.top < box.top + box.height - 0.5 && box.top < rect.top + rect.height - 0.5);
+  const onArea = rect => !area || (rect.left >= area.left - 0.5 && rect.top >= area.top - 0.5 && rect.left + rect.width <= area.left + area.width + 0.5 && rect.top + rect.height <= area.top + area.height + 0.5);
+  const free = (rect, list) => !hits(rect, list) && onArea(rect);
+  // The nearest control edge to the right of `left` inside the band [top, top+height].
+  const roomRight = (left, top, height, fallback) => live
+    .filter(box => box.top < top + height && top < box.top + box.height && box.left + box.width > left && box.left > left)
+    .reduce((edge, box) => Math.min(edge, box.left - gap), fallback);
+  const pick = (candidates, list) => candidates.find(rect => rect && free(rect, list)) || null;
+  let hudBox = null, hudPlace = null;
+  if (hud && hud.width > 0 && hud.height > 0) {
+    let below = { ...hud };
+    for (let i = 0; i < 4; i++) {
+      const over = live.filter(box => hits(below, [box]));
+      if (!over.length) break;
+      below = { ...below, top: Math.max(...over.map(box => box.top + box.height)) + gap };
+    }
+    const width = roomRight(hud.left, hud.top, hud.height, hud.left + hud.width) - hud.left;
+    const narrow = width >= minWidth && width < hud.width && measureHud ? { left: hud.left, top: hud.top, width, height: measureHud(width) } : null;
+    const chosen = pick([hud, narrow, below], live);
+    hudBox = chosen || hud;
+    hudPlace = chosen && chosen !== hud ? { top: chosen.top, width: chosen.width < hud.width ? chosen.width : null } : null;
+  }
+  let notePlace = null;
+  if (note && note.width > 0 && note.height > 0) {
+    const bottom = note.top + note.height;
+    let narrow = null;
+    const width = roomRight(note.left, note.top, note.height, note.left + note.width) - note.left;
+    if (width >= minWidth && width < note.width && measureNote) {
+      const height = measureNote(width);
+      // Taller once it wraps: check the room again over the new band.
+      const room = roomRight(note.left, bottom - height, height, note.left + note.width) - note.left;
+      if (room >= width - 0.5) narrow = { left: note.left, top: bottom - height, width, height };
+    }
+    const noteSpot = others => {
+      let above = { ...note };
+      for (let i = 0; i < 4; i++) {
+        const over = others.filter(box => hits(above, [box]));
+        if (!over.length) break;
+        above = { ...above, top: Math.min(...over.map(box => box.top)) - gap - note.height };
+      }
+      return pick([note, narrow, above], others);
+    };
+    let chosen = noteSpot(hudBox ? [...live, hudBox] : live);
+    if (!chosen && hud && hud.width > 0 && hud.height > 0 && measureHudCompact) {
+      // Up to the next control itself: free() below still keeps it off it.
+      const room = roomRight(hud.left, hud.top, hud.height, area ? area.left + area.width : hud.left + hud.width + gap) + gap - hud.left;
+      const size = room > 0 ? measureHudCompact(room) : null;
+      const compact = size && size.width <= room + 0.5 ? { left: hud.left, top: hud.top, width: size.width, height: size.height } : null;
+      const spot = compact && free(compact, live) ? noteSpot([...live, compact]) : null;
+      if (spot) { chosen = spot; hudPlace = { top: hud.top, width: null, compact: true }; }
+    }
+    notePlace = chosen && chosen !== note ? { bottom: chosen.top + chosen.height, width: chosen.width < note.width ? chosen.width : null } : null;
+  }
+  return { hud: hudPlace, note: notePlace };
+}
 
 function screenIsVisible() { return isScreenPage(currentPage) && !document.hidden && !nativePaused && !!token; }
 function selectedMonitor() {
@@ -1662,8 +1740,62 @@ function setScreenStatus(mode,message = '') {
   $('#live-note').classList.toggle('error',mode === 'reconnecting');
   $('#live-note').hidden = mode === 'live' || mode === 'idle';
   updateScreenButtons();
+  placeScreenStatus();
+}
+// Puts the HUD and the note where screenStatusPlacement says: inline styles
+// only, reset first so each pass measures the labels at their CSS spot.
+function placeScreenStatus() {
+  const stage = $('#screen-stage'), hud = $('#screen-hud'), note = $('#live-note');
+  if (!stage?.getBoundingClientRect || !hud || !note) return;
+  for (const [element, names] of [[hud, ['top', 'width']], [note, ['bottom', 'right', 'width']]]) for (const name of names) element.style[name] = '';
+  hud.removeAttribute('data-compact');
+  const box = element => {
+    if (!element || element.hidden || element.closest?.('[hidden]')) return null;
+    if (window.getComputedStyle?.(element)?.display === 'none') return null;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
+  };
+  const hudBox = box(hud), noteBox = box(note);
+  if (!hudBox && !noteBox) return;
+  const rail = [...($('.screen-fabs')?.children || [])].map(box);
+  const blockers = [...rail, box($('#screen-workspaces')), box($('#node-badge')), ...(controlLayout?.boxes() || [])].filter(Boolean);
+  const measure = (element, names) => width => {
+    element.style.width = `${Math.floor(width)}px`;
+    if (names.includes('right')) element.style.right = 'auto';
+    const height = element.getBoundingClientRect().height;
+    for (const name of names) element.style[name] = '';
+    return height;
+  };
+  // Compact: one row (styles.css), as wide as it needs up to maxWidth.
+  const measureHudCompact = maxWidth => {
+    hud.setAttribute('data-compact', '');
+    hud.style.width = 'max-content';
+    const rect = hud.getBoundingClientRect();
+    hud.style.width = ''; hud.removeAttribute('data-compact');
+    return rect.width <= maxWidth + 0.5 ? { width: rect.width, height: rect.height } : null;
+  };
+  const place = screenStatusPlacement({ area: box(stage), hud: hudBox, note: noteBox, blockers, measureHud: measure(hud, ['width']), measureNote: measure(note, ['width', 'right']), measureHudCompact });
+  // Both are position:absolute: their offsets count from the offset parent's
+  // padding box (inside its border).
+  const parentBox = element => {
+    const parent = element.offsetParent || element.parentElement;
+    const rect = parent?.getBoundingClientRect?.() || { top: 0, height: 0 };
+    const inner = Number(parent?.clientTop) || 0;
+    return { top: rect.top + inner, height: Number(parent?.clientHeight) || Math.max(0, rect.height - 2 * inner) };
+  };
+  if (place.hud) {
+    if (place.hud.compact) hud.setAttribute('data-compact', '');
+    hud.style.top = `${Math.round(place.hud.top - parentBox(hud).top)}px`;
+    if (place.hud.width) hud.style.width = `${Math.floor(place.hud.width)}px`;
+  }
+  if (place.note) {
+    const frame = parentBox(note);
+    note.style.bottom = `${Math.round(frame.top + frame.height - place.note.bottom)}px`;
+    if (place.note.width) { note.style.width = `${Math.floor(place.note.width)}px`; note.style.right = 'auto'; }
+  }
 }
 function applyScreenZoom() {
+  placeScreenStatus();
   computeScreenBase();
   screenScale = Math.max(1, Math.min(screenMaxScale, screenScale));
   if (screenScale <= 1.001) { screenScale = 1; centerScreenPan(); } else clampScreenPan();
@@ -3177,6 +3309,7 @@ function openScreenComposer({ automatic = false, requestNativeKeyboard = false }
   if (requestNativeKeyboard) requestNativeScreenKeyboard();
   measureScreenComposer();
   controlLayout?.refresh();
+  placeScreenStatus();
 }
 function closeScreenComposer() {
   clearTimeout(keyboardCheckTimer);

@@ -306,6 +306,14 @@ body[data-keyboard-open=true] .screen-toolbar > .icon-button { height: 32px; }
 .screen-stage[data-screen-mode=live] .screen-hud{display:none}
 .screen-note{position:absolute;left:12px;right:12px;bottom:12px;z-index:4;margin:0;padding:8px 12px;border-radius:12px;background:#0f140dd9;border:1px solid #3a4534;font-size:11px;color:#b6c4a6;pointer-events:none}
 .screen-note.error{color:#e3baa1}
+/* The HUD and the note never sit under a control: app.js (placeScreenStatus)
+   narrows the HUD to the room left of the workspace strip, or drops it under
+   the strip, and keeps the note beside or above the button rail. When even
+   that leaves the note no room (short preview), the HUD goes compact: one row
+   without "No new frames", which the RECONNECTING badge already says. */
+.screen-hud{flex-wrap:wrap;row-gap:4px}
+.screen-hud[data-compact]{flex-wrap:nowrap}
+.screen-hud[data-compact] #capture-time{display:none}
 .screen-fab[data-text-focused=true]{border-color:var(--lime);box-shadow:0 0 0 2px #d5f88855,0 6px 24px #0008}
 .screen-fabs{position:fixed;right:14px;bottom:calc(96px + env(safe-area-inset-bottom));z-index:45;display:flex;flex-direction:column;align-items:center;gap:10px}
 .screen-fab{width:44px;height:44px;border-radius:50%;background:#24291fe6;border:1px solid #454e38;color:#c3d5af;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px #0008;padding:0}

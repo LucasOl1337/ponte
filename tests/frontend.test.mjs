@@ -128,6 +128,7 @@ function mappingContext() {
     globalThis.screenPanBounds = screenPanBounds;
     globalThis.clampPan = clampPan;
     globalThis.screenFrame = screenFrame;
+    globalThis.screenStatusPlacement = screenStatusPlacement;
   `, context);
   return context;
 }
@@ -187,6 +188,112 @@ test('free area: each control takes its own edge off the preview, with a cap', (
   // A control as tall as the preview never shrinks the monitor below 55%.
   const huge = plain(m.screenControlInsets(landscapePreview, [{ left: 300, top: 0, width: 553, height: 394 }]));
   assert.ok(huge.right <= 853 * 0.45 + 1);
+});
+
+// Revisão 1105: the parent's capture 08-390-teclado-aberto (390x460, phone
+// keyboard open, typing bar open, reconnecting). Boxes as the lab measured
+// them: the workspace strip covered the right end of RECONNECTING, and the
+// rail row (scroll, keyboard, mic) sat on "Connection interrupted. Retrying".
+const keyboardOpen390 = {
+  area: { left: 0, top: 0, width: 390, height: 185 },
+  hud: { left: 10, top: 10, width: 236, height: 34 },
+  note: { left: 12, top: 136, width: 366, height: 37 },
+  strip: { left: 208, top: 8, width: 174, height: 38 },
+  rail: [{ left: 176, top: 124, width: 90, height: 46 }, { left: 274, top: 125, width: 44, height: 44 }, { left: 266, top: 72, width: 44, height: 44 }, { left: 326, top: 121, width: 52, height: 52 }],
+};
+// Text wraps: one line per 190px of width, 18px a line plus padding.
+const wrapHeight = (chars, pad) => width => pad + 18 * Math.ceil(chars * 6.2 / Math.max(1, width - 2 * pad));
+const touches = (a, b) => a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
+function placedBoxes(m, scene) {
+  const blockers = [scene.strip, ...scene.rail].filter(Boolean);
+  const measureHud = wrapHeight(34, 8), measureNote = wrapHeight(40, 10);
+  // Compact HUD (one row, no "No new frames"): 163x34, as the lab measured.
+  const measureHudCompact = max => (163 <= max ? { width: 163, height: 34 } : null);
+  const place = JSON.parse(JSON.stringify(m.screenStatusPlacement({ area: scene.area, hud: scene.hud, note: scene.note, blockers, measureHud, measureNote, measureHudCompact })));
+  const hud = scene.hud && (place.hud ? (place.hud.compact ? { left: scene.hud.left, top: place.hud.top, width: 163, height: 34 } : { left: scene.hud.left, top: place.hud.top, width: place.hud.width || scene.hud.width, height: place.hud.width ? measureHud(place.hud.width) : scene.hud.height }) : scene.hud);
+  const note = scene.note && (place.note ? (() => { const width = place.note.width || scene.note.width, height = place.note.width ? measureNote(width) : scene.note.height; return { left: scene.note.left, top: place.note.bottom - height, width, height }; })() : scene.note);
+  return { place, hud, note, blockers };
+}
+
+test('reconnecting with the phone keyboard open: no control sits on RECONNECTING or on the retry note', () => {
+  const m = mappingContext();
+  const before = keyboardOpen390;
+  // The defect as the parent saw it.
+  assert.ok(touches(before.hud, before.strip));
+  assert.ok(before.rail.some(button => touches(before.note, button)));
+  const { place, hud, note, blockers } = placedBoxes(m, before);
+  for (const control of blockers) {
+    assert.ok(!touches(hud, control), `HUD under ${JSON.stringify(control)}`);
+    assert.ok(!touches(note, control), `note under ${JSON.stringify(control)}`);
+  }
+  assert.ok(!touches(hud, note));
+  // Both stay in view, on the monitor above the typing bar, and keep their
+  // place: the HUD still starts at the top, the note still ends at the bottom.
+  for (const box of [hud, note]) assert.ok(box.top >= 0 && box.top + box.height <= before.area.height && box.left + box.width <= before.area.width);
+  assert.equal(hud.top, before.hud.top);
+  assert.equal(note.top + note.height, before.note.top + before.note.height);
+  // Narrowed, not hidden: the full text wraps in what is left.
+  assert.ok(place.hud.width >= 120 && place.note.width >= 120);
+  assert.ok(!place.hud.compact);
+});
+
+// Revisão 1105, second lab round: 360x430 with the keyboard and the bar open
+// (08-360-teclado-aberto). The ⌘ button sits left on the note's row, so the
+// note cannot narrow beside the rail, and raising it alone hits the two-row
+// HUD. The HUD goes compact (one row) and the note fits under it.
+test('360 with the phone keyboard open: the note clears the rail via a compact HUD, nothing hidden', () => {
+  const m = mappingContext();
+  const scene = {
+    area: { left: 0, top: 0, width: 360, height: 155 },
+    hud: { left: 10, top: 10, width: 239, height: 34 },
+    note: { left: 12, top: 106, width: 336, height: 37 },
+    strip: { left: 178, top: 8, width: 174, height: 38 },
+    rail: [{ left: 146, top: 94, width: 90, height: 46 }, { left: 244, top: 95, width: 44, height: 44 }, { left: 94, top: 103, width: 44, height: 44 }, { left: 296, top: 91, width: 52, height: 52 }],
+  };
+  assert.ok(scene.rail.some(button => touches(scene.note, button)));
+  const { place, hud, note, blockers } = placedBoxes(m, scene);
+  assert.equal(place.hud.compact, true);
+  for (const control of blockers) assert.ok(!touches(hud, control) && !touches(note, control), JSON.stringify({ hud, note, control }));
+  assert.ok(!touches(hud, note));
+  for (const box of [hud, note]) assert.ok(box.top >= 0 && box.top + box.height <= scene.area.height);
+  // The note keeps its full width and one line: raised, not cut.
+  assert.equal(place.note.width, null);
+  assert.equal(note.height, scene.note.height);
+  // 390 tall again: plenty of room, so the HUD is not compact there.
+  const tall = { ...scene, area: { left: 0, top: 0, width: 360, height: 505 }, note: { left: 12, top: 456, width: 336, height: 37 },
+    rail: scene.rail.map(box => ({ ...box, top: box.top + 350 })) };
+  assert.ok(!placedBoxes(m, tall).place.hud?.compact);
+});
+
+test('neighbours of the reconnect case: 360 and 390 portrait, landscape, a moved button, and a healthy connection', () => {
+  const m = mappingContext();
+  // 390x844 and 360x780 with the bar open and the keyboard down: the same
+  // collision lower on the screen (08-390, 08-360 of integração 1005).
+  const tall390 = { area: { left: 0, top: 0, width: 390, height: 569 }, hud: { left: 10, top: 10, width: 236, height: 34 }, note: { left: 12, top: 520, width: 366, height: 37 }, strip: { left: 208, top: 8, width: 174, height: 38 },
+    rail: [{ left: 176, top: 508, width: 90, height: 46 }, { left: 274, top: 509, width: 44, height: 44 }, { left: 266, top: 441, width: 44, height: 44 }, { left: 326, top: 505, width: 52, height: 52 }] };
+  const tall360 = { area: { left: 0, top: 0, width: 360, height: 505 }, hud: { left: 10, top: 10, width: 236, height: 34 }, note: { left: 12, top: 456, width: 336, height: 37 }, strip: { left: 178, top: 8, width: 174, height: 38 },
+    rail: [{ left: 146, top: 444, width: 90, height: 46 }, { left: 244, top: 445, width: 44, height: 44 }, { left: 243, top: 392, width: 44, height: 44 }, { left: 296, top: 441, width: 52, height: 52 }] };
+  for (const scene of [tall390, tall360]) {
+    const { hud, note, blockers } = placedBoxes(m, scene);
+    for (const control of blockers) assert.ok(!touches(hud, control) && !touches(note, control), JSON.stringify({ hud, note, control }));
+  }
+  // 844x390 landscape, bar open: the strip is far right and the note is not
+  // shown (hidden on a low landscape screen), so nothing moves.
+  const landscape = { area: { left: 0, top: 0, width: 844, height: 115 }, hud: { left: 10, top: 10, width: 238, height: 34 }, note: null, strip: { left: 662, top: 8, width: 174, height: 38 },
+    rail: [{ left: 598, top: 59, width: 82, height: 42 }, { left: 688, top: 60, width: 40, height: 40 }, { left: 736, top: 58, width: 44, height: 44 }, { left: 788, top: 57, width: 46, height: 46 }] };
+  assert.deepEqual(placedBoxes(m, landscape).place, { hud: null, note: null });
+  // A button the owner moved onto the left of the note: no room beside it,
+  // so the note is raised above it, still whole and still on the monitor.
+  const moved = { ...tall390, rail: [...tall390.rail, { left: 20, top: 515, width: 44, height: 44 }] };
+  const raised = placedBoxes(m, moved);
+  assert.equal(raised.place.note.width, null);
+  for (const control of raised.blockers) assert.ok(!touches(raised.note, control));
+  assert.ok(raised.note.top >= 0);
+  // A healthy live connection hides both labels: nothing to place, and a
+  // clear layout (wide screen, controls elsewhere) is left exactly as it is.
+  assert.deepEqual(placedBoxes(m, { ...tall390, hud: null, note: null }).place, { hud: null, note: null });
+  const wide = { area: { left: 0, top: 0, width: 1100, height: 600 }, hud: { left: 10, top: 10, width: 236, height: 34 }, note: { left: 12, top: 550, width: 500, height: 37 }, strip: { left: 900, top: 8, width: 174, height: 38 }, rail: [{ left: 1000, top: 400, width: 52, height: 180 }] };
+  assert.deepEqual(placedBoxes(m, wide).place, { hud: null, note: null });
 });
 
 test('1x frame: an ultrawide in portrait fits clear of the controls without shrinking', () => {
