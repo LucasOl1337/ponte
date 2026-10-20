@@ -221,6 +221,18 @@ test('dragging a key across the row reorders it without sending it', () => {
   assert.deepEqual(JSON.parse(r.store.data.get(KEY)).order['screen.keys'], ['up', 'down', 'ctrl-z', 'tab']);
 });
 
+test('the app rebuilding the row mid-drag ends that drag quietly', () => {
+  const r = rig();
+  r.layout.enter();
+  fire(r.keys.tab, 'pointerdown', { clientX: 192, clientY: 806, pointerId: 9 });
+  r.keys.tab.remove();
+  assert.doesNotThrow(() => fire(r.document, 'pointermove', { clientX: 300, clientY: 806, pointerId: 9 }));
+  assert.doesNotThrow(() => fire(r.document, 'pointerup', { clientX: 300, clientY: 806, pointerId: 9 }));
+  assert.equal(r.layout.editing(), true);
+  assert.deepEqual(r.layout.snapshot().order, {}, 'nothing reordered from a key that is gone');
+  assert.deepEqual(r.shortcut, []);
+});
+
 test('the app redrawing the row keeps the saved order', () => {
   const stored = JSON.stringify({ v: 1, pos: { portrait: {}, landscape: {} }, order: { 'screen.keys': ['down', 'up', 'tab', 'ctrl-z'] } });
   const r = rig({ stored });

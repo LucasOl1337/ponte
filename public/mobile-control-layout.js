@@ -349,6 +349,9 @@
       if (!drag.moved && Math.hypot(dx, dy) < DRAG_SLOP) return;
       drag.moved = true;
       if (drag.float) { setBox(drag.element, clampBox({ ...drag.box, left: drag.box.left + dx, top: drag.box.top + dy }, area(true))); return; }
+      // The app may rebuild the row mid-drag (renderKeyBar): the grabbed key is
+      // then gone; the drag ends without a reorder instead of throwing.
+      if (!drag.element.parentElement || drag.element.isConnected === false) { drag.moved = false; return; }
       const siblings = Array.from(drag.element.parentElement.children).filter(node => node !== drag.element && node.matches(drag.entry.list.itemSelector) && !drag.entry.list.locked.includes(drag.entry.list.idOf(node)));
       const over = siblings.find(node => { const rect = rectOf(node); return event.clientX >= rect.left && event.clientX <= rect.left + rect.width; });
       if (over) { const rect = rectOf(over); over.parentElement.insertBefore(drag.element, event.clientX < rect.left + rect.width / 2 ? over : over.nextSibling); }
