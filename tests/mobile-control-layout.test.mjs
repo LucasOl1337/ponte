@@ -371,9 +371,63 @@ test('a button dragged up to the edit bar stays at the same pixel after Save', (
   assert.deepEqual([after.left, after.top], [during.left, during.top]);
 });
 
+test('a saved spot does not shift when the typing bar it was saved with closes', () => {
+  const r = rig();
+  const closed = { ...r.nav.box };
+  r.nav.box = { left: 0, top: 500, width: 390, height: 344 }; // typing bar + key row open
+  r.layout.enter();
+  drag(r, r.fabs.rotate, -200, -150);
+  fire(r.button('save'), 'click');
+  const saved = box(r.fabs.rotate);
+  r.nav.box = closed; // the app closes the typing bar
+  r.window.resize(390, 844);
+  const after = box(r.fabs.rotate);
+  assert.deepEqual([after.left, after.top], [saved.left, saved.top]);
+});
+
 test('the edit bar is safe-area aware and has 44px targets', () => {
   assert.match(css, /\.pcl-bar\{[^}]*env\(safe-area-inset-top/);
   assert.match(css, /\.pcl-button\{[^}]*min-width:44px;min-height:44px/);
   assert.match(css, /\.pcl-veil\{[^}]*pointer-events:auto/);
   assert.match(css, /\.pcl-probe\{[^}]*env\(safe-area-inset-bottom/);
+});
+
+// The app's shape: #page-tela is position:fixed with z-index 20, the rail and
+// the typing bar live inside it. A veil on <body> would sit over the whole page.
+function appShaped() {
+  const { document, window } = makeLayoutDom();
+  const page = el(document, 'section', { id: 'page-tela' });
+  const fixed = new Set([page]);
+  window.getComputedStyle = element => (fixed.has(element) ? { position: 'fixed', zIndex: '20' } : { position: 'static', zIndex: 'auto', paddingTop: '0', paddingRight: '0', paddingBottom: '0', paddingLeft: '0' });
+  const rail = el(document, 'div', { class: 'screen-fabs' }, null, page);
+  const fab = el(document, 'button', { id: 'screen-scroll' }, { left: 300, top: 600, width: 90, height: 46 }, rail);
+  const composer = el(document, 'div', { id: 'screen-composer' }, null, page);
+  const tail = el(document, 'div', { class: 'key-tail' }, null, composer);
+  const keys = ['tab', 'up', 'down'].map((id, index) => el(document, 'button', { 'data-shortcut': id }, { left: 100 + index * 60, top: 700, width: 56, height: 44 }, tail));
+  const layout = L.mount({ document, window, storage: memoryStorage(), layoutId: 'screen', enabled: () => true, insets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+    floats: [{ id: 'screen.scroll', element: fab }], lists: [{ id: 'screen.keys', element: () => tail }] });
+  return { document, page, fab, tail, keys, layout };
+}
+
+test('the veil goes inside the fixed page that holds the controls, not over it', () => {
+  const r = appShaped();
+  r.layout.enter();
+  assert.equal(r.document.querySelector('.pcl-layer').parentElement, r.page);
+  assert.equal(r.document.querySelector('.pcl-bar').parentElement, r.document.body, 'the edit bar stays over every layer of the app');
+  r.layout.cancel();
+  assert.deepEqual([r.document.querySelector('.pcl-layer'), r.document.querySelector('.pcl-bar')], [null, null]);
+});
+
+test('a press that lands on the veil above a control still drags that control', () => {
+  const r = appShaped();
+  r.layout.enter();
+  const veil = r.document.querySelector('.pcl-veil');
+  fire(veil, 'pointerdown', { clientX: 345, clientY: 623, pointerId: 1 });
+  fire(veil, 'pointermove', { clientX: 245, clientY: 423, pointerId: 1 });
+  fire(veil, 'pointerup', { clientX: 245, clientY: 423, pointerId: 1 });
+  assert.deepEqual([box(r.fab).left, box(r.fab).top], [200, 400]);
+  fire(veil, 'pointerdown', { clientX: 128, clientY: 722, pointerId: 2 });
+  fire(veil, 'pointermove', { clientX: 260, clientY: 722, pointerId: 2 });
+  fire(veil, 'pointerup', { clientX: 260, clientY: 722, pointerId: 2 });
+  assert.deepEqual(r.tail.children.map(node => node.getAttribute('data-shortcut')), ['up', 'down', 'tab']);
 });

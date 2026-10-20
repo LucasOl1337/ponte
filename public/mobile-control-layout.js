@@ -176,12 +176,18 @@
       const px = name => (style ? parseFloat(style[name]) || 0 : 0);
       return { top: px('paddingTop'), right: px('paddingRight'), bottom: px('paddingBottom'), left: px('paddingLeft') };
     }
-    // The frame positions are stored against never counts the edit bar, so a
-    // button stays at the same pixel after Save or Cancel takes the bar away;
-    // area(true) adds the bar only to keep a dragged button out from under it.
+    // basis() is what positions are stored against: the screen minus the
+    // system insets, nothing that comes and goes (typing bar, edit bar), so a
+    // button stays at the same pixel after the composer closes or a reload.
+    // area() is where a button may actually sit: the frame minus avoid();
+    // area(true) also keeps a dragged button out from under the edit bar.
+    function basis() {
+      const port = viewport();
+      return { ...safeArea({ ...port, insets: insets() }), orientation: orientationOf(port.width, port.height) };
+    }
     function area(underBar) {
       const port = viewport();
-      const blockers = [...avoid(), ...(underBar && layer ? [layer.querySelector('.pcl-bar')] : [])].filter(visible).map(rectOf);
+      const blockers = [...avoid(), ...(underBar && layer ? [layer.bar] : [])].filter(visible).map(rectOf);
       return { ...safeArea({ ...port, insets: insets(), avoid: blockers }), orientation: orientationOf(port.width, port.height) };
     }
     function clearStyle(element) {
@@ -194,6 +200,43 @@
     }
     const ancestors = element => { const chain = []; for (let node = element; node && node !== doc; node = node.parentElement) chain.push(node); return chain; };
     const floatOf = target => { const chain = ancestors(target); return floats.find(item => chain.includes(item.element)) || null; };
+    // The veil must sit in the same stacking context as the controls: the app
+    // puts them inside a fixed page with its own z-index, and a veil on <body>
+    // over that page would take every touch. The host is the nearest ancestor
+    // holding every control that starts a stacking context (else <body>).
+    function stackingContext(element) {
+      const style = win.getComputedStyle ? win.getComputedStyle(element) : null;
+      if (!style) return false;
+      const position = style.position || 'static', z = style.zIndex;
+      return position === 'fixed' || position === 'sticky' || (position !== 'static' && z !== undefined && z !== '' && z !== 'auto')
+        || (style.transform && style.transform !== 'none') || (style.isolation === 'isolate');
+    }
+    function layerHost() {
+      if (options.layerParent) return options.layerParent;
+      const members = [...floats.map(item => item.element), ...lists.map(list => rootOf(list))].filter(Boolean);
+      if (!members.length) return doc.body;
+      for (const node of ancestors(members[0])) {
+        if (node === doc.body || node === doc.documentElement) break;
+        if (members.every(member => ancestors(member).includes(node)) && node !== members[0] && stackingContext(node)) return node;
+      }
+      return doc.body;
+    }
+    // A press is matched to a control by where it lands too, not only by the
+    // event target: whatever covers a control while arranging, it still moves.
+    function hitAt(x, y) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const inside = element => { const r = rectOf(element); return x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height; };
+      const float = floats.filter(item => visible(item.element) && inside(item.element)).pop();
+      if (float) return { float, entry: null };
+      for (const list of lists) {
+        if (!rootOf(list)) continue;
+        const node = itemsOf(list).find(element => visible(element) && inside(element));
+        if (!node) continue;
+        const id = list.idOf(node);
+        return ID_RE.test(String(id)) && !list.locked.includes(id) ? { float: null, entry: { list, id, element: node } } : null;
+      }
+      return null;
+    }
     function listItemOf(target) {
       for (const node of ancestors(target)) {
         const list = lists.find(entry => rootOf(entry) && ancestors(node).includes(entry.root) && Array.from(itemsOf(entry)).includes(node));
@@ -208,7 +251,7 @@
       floats.forEach(item => clearStyle(item.element));
       const state = current();
       if (!enabled() || (!draft && isEmpty(state))) return;
-      const zone = area(), reach = layer ? area(true) : zone, saved = state.pos[zone.orientation];
+      const zone = basis(), reach = area(!!layer), saved = state.pos[zone.orientation];
       const placed = shown.filter(item => saved[item.id]);
       const sizes = new Map(placed.map(item => [item.id, rectOf(item.element)]));
       placed.forEach(item => setBox(item.element, { ...sizes.get(item.id), left: zone.left, top: zone.top }));
@@ -269,7 +312,7 @@
     }
     const domOrder = list => itemsOf(list).map(element => list.idOf(element)).filter(id => ID_RE.test(String(id)) && !list.locked.includes(id));
     function storeFloat(item, box) {
-      const zone = area();
+      const zone = basis();
       draft.pos[zone.orientation][item.id] = toFraction(box, zone);
     }
     function storeList(list) { draft.order[list.id] = domOrder(list); }
@@ -317,8 +360,8 @@
         button('↓', 'down', t('Mover para baixo')), button('→', 'right', t('Mover para a direita')), before, after);
       const status = node('p', 'pcl-status', { role: 'status', 'aria-live': 'polite' });
       bar.append(first, second, status);
-      element.append(node('div', 'pcl-veil', { 'aria-hidden': 'true' }), bar);
-      return Object.assign(element, { status, before, after });
+      element.append(node('div', 'pcl-veil', { 'aria-hidden': 'true' }));
+      return Object.assign(element, { status, before, after, bar });
     }
     function onLayerClick(event) {
       const action = event.target.closest && event.target.closest('[data-pcl]');
@@ -332,8 +375,9 @@
     // control's own handler (no shortcut, no scroll, no key sent to the PC).
     function swallow(event) { event.preventDefault(); event.stopPropagation(); if (event.stopImmediatePropagation) event.stopImmediatePropagation(); }
     function onDown(event) {
-      if (layer && layer.contains(event.target)) return;
-      const float = floatOf(event.target), entry = float ? null : listItemOf(event.target);
+      if (onBar(event)) return;
+      let float = floatOf(event.target), entry = float ? null : listItemOf(event.target);
+      if (!float && !entry) ({ float = null, entry = null } = hitAt(event.clientX, event.clientY) || {});
       swallow(event);
       if (!float && !entry) return;
       const element = float ? float.element : entry.element;
@@ -368,8 +412,11 @@
     // Outside the edit bar the page is inert while arranging: a press is a
     // move or nothing. The typing bar and the bottom nav sit above the veil,
     // so Send, a nav tab or a locked key must not act either.
-    function onCompat(event) { if (!(layer && layer.contains(event.target))) swallow(event); }
-    function onClick(event) { if (!(layer && layer.contains(event.target))) swallow(event); }
+    // Only the edit bar keeps its own presses; the veil is just a cover, a press
+    // on it is matched to the control underneath (hitAt).
+    function onBar(event) { return !!(layer && layer.bar.contains(event.target)); }
+    function onCompat(event) { if (!onBar(event)) swallow(event); }
+    function onClick(event) { if (!onBar(event)) swallow(event); }
     function onKey(event) { if (event.key === 'Escape') { swallow(event); cancel(); } }
     function enter() {
       if (layer || !enabled()) return false;
@@ -377,15 +424,18 @@
       lists.forEach(list => { rootOf(list); list.entry = domOrder(list); });
       opener = doc.activeElement || null;
       layer = buildLayer();
-      (options.layerParent || doc.body).appendChild(layer);
+      layerHost().appendChild(layer);
+      // The bar stays on <body>, over every layer of the app; only the veil
+      // goes under the controls.
+      doc.body.appendChild(layer.bar);
       doc.body.setAttribute('data-control-layout-editing', 'true');
-      layer.addEventListener('click', onLayerClick);
+      layer.bar.addEventListener('click', onLayerClick);
       editListen(doc, 'pointerdown', onDown); editListen(doc, 'pointermove', onMove);
       for (const name of ['pointerup', 'pointercancel']) editListen(doc, name, onUp);
       for (const name of ['touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup']) editListen(doc, name, onCompat);
       editListen(doc, 'click', onClick); editListen(doc, 'keydown', onKey); editListen(doc, 'contextmenu', onClick);
       selected = ''; apply('enter');
-      const first = layer.querySelector('[data-pcl="save"]');
+      const first = layer.bar.querySelector('[data-pcl="save"]');
       if (first && first.focus) first.focus();
       return true;
     }
@@ -393,7 +443,7 @@
       if (!layer) return;
       while (editListeners.length) { const [target, name, handler] = editListeners.pop(); target.removeEventListener(name, handler, { capture: true }); }
       if (drag) { drag.element.removeAttribute('data-pcl-dragging'); drag = null; }
-      layer.remove ? layer.remove() : layer.parentElement.removeChild(layer);
+      for (const part of [layer.bar, layer]) part.remove ? part.remove() : part.parentElement && part.parentElement.removeChild(part);
       layer = null; draft = null; selected = '';
       doc.body.removeAttribute('data-control-layout-editing');
       apply(reason || 'cancel');
