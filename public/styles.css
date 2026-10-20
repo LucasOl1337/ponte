@@ -372,6 +372,14 @@ body[data-current-page=tela] .bottom-nav{backdrop-filter:none;background:#24291f
   .screen-scroll{flex-direction:row}
   .screen-scroll .screen-fab+.screen-fab{border-top:0;border-left:1px solid #454e38}
 }
+/* Landscape with the typing bar open leaves ~115px above it on a 390px-tall
+   phone: the column (scroll, keyboard, ⌘, mic) would run off the top of the
+   screen, so it becomes the same row as in portrait, under the workspace strip. */
+@media (orientation:landscape) and (max-height:600px){
+  body[data-screen-composer=true] .screen-fabs{flex-direction:row;align-items:center}
+  body[data-screen-composer=true] .screen-scroll{flex-direction:row}
+  body[data-screen-composer=true] .screen-scroll .screen-fab+.screen-fab{border-top:0;border-left:1px solid #454e38}
+}
 /* Messages on the screen are glanceable, not furniture: they sit at the top
    (below the workspace strip, black band in portrait), take two lines at most,
    let touches through to the PC, leave after a reading time and on the first
@@ -532,4 +540,10 @@ body[data-keyboard-open=true] .terminal-page{padding-bottom:20px}
 .screen-fabs .shortcut-super{width:44px;height:44px;min-width:44px;padding:0;border-radius:50%;background:#24291fe6;border:1px solid #454e38;color:#c3d5af;box-shadow:0 6px 24px #0008;font-size:0;display:flex;align-items:center;justify-content:center}
 .screen-fabs .shortcut-super::before{content:"⌘";font-size:20px;line-height:1}
 .screen-fabs .shortcut-super[aria-expanded=true]{background:var(--lime);border-color:var(--lime);color:#222a18}
-.screen-fabs .shortcut-palette{top:calc(8px + env(safe-area-inset-top) + var(--remote-viewport-top,0px));bottom:auto;max-height:calc(var(--remote-viewport-height,100vh) - var(--screen-composer-h,0px) - 24px);max-width:560px;margin:0 auto;text-align:left}
+/* It never covers the rail: the ⌘ that closes it, the keyboard and the mic stay
+   reachable, and a tap meant for them never lands on a shortcut that would run
+   on the PC. In portrait the rail is a row 96px above the bottom (plus the open
+   typing bar), so the palette ends above it; in landscape the rail is a column
+   on the right edge (10px + the 46px mic), so the palette stops left of it. */
+.screen-fabs .shortcut-palette{top:calc(8px + env(safe-area-inset-top) + var(--remote-viewport-top,0px));bottom:auto;left:8px;right:8px;max-height:calc(var(--remote-viewport-height,100vh) - var(--screen-composer-h,0px) - 172px - env(safe-area-inset-bottom));max-width:560px;text-align:left}
+@media (orientation:landscape){.screen-fabs .shortcut-palette{right:calc(64px + env(safe-area-inset-right));max-height:calc(var(--remote-viewport-height,100vh) - var(--screen-composer-h,0px) - 24px)}}

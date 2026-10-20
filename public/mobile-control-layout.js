@@ -255,14 +255,17 @@
     // ---- Edit mode: only entered on purpose, always leaves with one tap ----
     const editListeners = [];
     const editListen = (target, name, handler) => { target.addEventListener(name, handler, { capture: true, passive: false }); editListeners.push([target, name, handler]); };
-    const selectable = () => [...floats.filter(item => visible(item.element)).map(item => ({ key: `f:${item.id}`, element: item.element })),
+    // A float may carry a label: a host element (the ⌘ wraps its whole
+    // palette) has no name of its own and its text would be every item in it.
+    const selectable = () => [...floats.filter(item => visible(item.element)).map(item => ({ key: `f:${item.id}`, element: item.element, label: item.label })),
       ...lists.flatMap(list => (rootOf(list), itemsOf(list)).filter(element => visible(element) && !list.locked.includes(list.idOf(element)))
         .map(element => ({ key: `l:${list.id}:${list.idOf(element)}`, element })))];
     function markSelection() {
       for (const entry of selectable()) entry.element.setAttribute('data-pcl-selected', String(!!layer && entry.key === selected));
       if (!layer) return;
       const entry = selectable().find(item => item.key === selected);
-      const name = entry ? entry.element.getAttribute('aria-label') || entry.element.getAttribute('title') || entry.element.textContent : '';
+      const named = entry && (typeof entry.label === 'function' ? entry.label() : entry.label);
+      const name = entry ? named || entry.element.getAttribute('aria-label') || entry.element.getAttribute('title') || entry.element.textContent : '';
       layer.status.textContent = entry ? t('Selecionado: {name}').replace('{name}', String(name).trim()) : t('Arraste um botão ou escolha com Próximo.');
       const isList = selected.startsWith('l:');
       layer.before.hidden = !isList; layer.after.hidden = !isList;

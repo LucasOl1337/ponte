@@ -1550,7 +1550,7 @@ const controlLayout = window.PonteControlLayout?.mount({
     { id: 'screen.monitor', element: $('#screen-switch-monitor') },
     { id: 'screen.rotate', element: $('#screen-rotate') },
     { id: 'screen.keyboard', element: $('#screen-keyboard') },
-    { id: 'screen.shortcuts', element: $('#shortcut-host') },
+    { id: 'screen.shortcuts', element: $('#shortcut-host'), label: () => `⌘ ${t("Atalhos")}` },
     { id: 'screen.dictate', element: $('#screen-dictate') },
   ].filter(item => item.element),
   lists: [{

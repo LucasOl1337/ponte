@@ -23,6 +23,10 @@ body[data-control-layout-editing=true] .screen-fabs>*,body[data-control-layout-e
    again on Save or Cancel. */
 body[data-control-layout-editing=true][data-screen-composer=true] #screen-switch-monitor,
 body[data-control-layout-editing=true][data-screen-composer=true] #screen-rotate{display:flex}
+/* The bar lives in the layer's stacking context (z 44): an agent notice (z 101)
+   arriving while arranging would sit on Save and take its tap. It waits; the
+   dot on Terminais still says something finished. */
+body[data-control-layout-editing=true] .agent-notice{visibility:hidden;pointer-events:none}
 [data-pcl-dragging=true]{opacity:.85;cursor:grabbing;box-shadow:0 0 0 6px #d5f88833}
 @media (orientation:landscape) and (max-height:500px){.pcl-bar{flex-direction:row;flex-wrap:wrap;align-items:center;max-width:none}.pcl-row:first-child .pcl-button{flex:none}.pcl-status{flex:1 1 100%}}
 @media (prefers-reduced-motion:reduce){[data-pcl-dragging=true]{box-shadow:none}}

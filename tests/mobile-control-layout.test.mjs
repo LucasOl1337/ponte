@@ -294,6 +294,22 @@ test('the arrow buttons nudge the selected control by 8px', () => {
   assert.match(r.document.querySelector('.pcl-status').textContent, /Botão scroll/);
 });
 
+test('a host control is named by its label, not by every item it wraps', () => {
+  const { document, window } = makeLayoutDom();
+  const host = el(document, 'div', { id: 'shortcut-host' }, { left: 300, top: 400, width: 44, height: 44 });
+  const palette = el(document, 'div', {}, null, host);
+  palette.textContent = 'Tela cheiaSuper + FFechar janelaSuper + W';
+  const layout = L.mount({ document, window, storage: memoryStorage({}), layoutId: 'screen', insets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+    floats: [{ id: 'screen.shortcuts', element: host, label: () => '⌘ Atalhos' }] });
+  window.flush();
+  layout.enter();
+  fire(document.querySelector('[data-pcl="next"]'), 'click');
+  const status = document.querySelector('.pcl-status').textContent;
+  assert.equal(status, 'Selecionado: ⌘ Atalhos');
+  assert.doesNotMatch(status, /Tela cheia/);
+  layout.destroy();
+});
+
 test('a broken storage does not break the screen', () => {
   const throwing = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('full'); }, removeItem() { throw new Error('denied'); } };
   const r = rig({ storage: throwing });
