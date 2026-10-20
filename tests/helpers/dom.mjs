@@ -5,6 +5,7 @@ const voidTags = new Set(['meta','link','img','input','br','hr','source','use'])
 class Events {
   listeners = new Map();
   addEventListener(name,callback) { const entries=this.listeners.get(name)||[]; entries.push(callback); this.listeners.set(name,entries); }
+  removeEventListener(name,callback) { const entries=this.listeners.get(name)||[]; const at=entries.indexOf(callback); if(at>=0)entries.splice(at,1); }
   dispatchEvent(event) { event.target ||= this; for(const callback of this.listeners.get(event.type)||[]) callback(event); return true; }
 }
 class Element extends Events {
@@ -17,6 +18,14 @@ class Element extends Events {
     this.classList={contains:name=>(this.attrs.class||'').split(/\s+/).includes(name),toggle:(name,force)=>{const classes=new Set((this.attrs.class||'').split(/\s+/).filter(Boolean));const add=force===undefined?!classes.has(name):force;if(add)classes.add(name);else classes.delete(name);this.attrs.class=[...classes].join(' ');return add;},add:(...names)=>names.forEach(name=>this.classList.toggle(name,true)),remove:(...names)=>names.forEach(name=>this.classList.toggle(name,false))};
   }
   get id(){return this.attrs.id||'';}
+  get className(){return this.attrs.class||'';}
+  set className(value){this.attrs.class=String(value);}
+  get children(){return this.nodes.filter(node=>typeof node!=='string');}
+  get isConnected(){let node=this;while(node.parentElement)node=node.parentElement;return node===this.ownerDocument;}
+  appendChild(child){child.remove();child.parentElement=this;this.nodes.push(child);return child;}
+  append(...children){children.forEach(child=>typeof child==='string'?this.nodes.push(child):this.appendChild(child));}
+  insertBefore(child,ref){if(!ref)return this.appendChild(child);child.remove();child.parentElement=this;this.nodes.splice(this.nodes.indexOf(ref),0,child);return child;}
+  remove(){const parent=this.parentElement;if(!parent)return;const at=parent.nodes.indexOf(this);if(at>=0)parent.nodes.splice(at,1);this.parentElement=null;}
   get dataset(){return Object.fromEntries(Object.entries(this.attrs).filter(([key])=>key.startsWith('data-')).map(([key,value])=>[key.slice(5).replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase()),value]));}
   get textContent(){return this.nodes.map(node=>typeof node==='string'?node:node.textContent).join('');}
   set textContent(value){this.nodes=[String(value)];if(this.tagName==='TITLE')this.ownerDocument.titleEvents.push({title:String(value),lang:this.ownerDocument.documentElement?.lang});}
@@ -28,6 +37,7 @@ class Element extends Events {
   matches(selector){return selector.split(',').some(part=>{part=part.trim();const tag=/^[\w-]+/.exec(part);if(tag&&this.tagName!==tag[0].toUpperCase())return false;const id=/#([\w-]+)/.exec(part);if(id&&id[1]!==this.id)return false;for(const m of part.matchAll(/\.([\w-]+)/g))if(!this.classList.contains(m[1]))return false;for(const m of part.matchAll(/\[([\w-]+)(?:=["']?([^\]"']+)["']?)?\]/g))if(!(m[1] in this.attrs)||(m[2]!==undefined&&this.attrs[m[1]]!==m[2]))return false;return true;});}
   querySelectorAll(selector){const result=[];const visit=element=>{for(const child of element.nodes){if(typeof child==='string')continue;if(child.matches(selector))result.push(child);visit(child);}};visit(this);return result;}
   querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
+  contains(node){while(node){if(node===this)return true;node=node.parentElement;}return false;}
   closest(selector){let current=this;while(current){if(current.matches(selector))return current;current=current.parentElement;}return null;}
   focus(){this.ownerDocument.activeElement=this;}
   blur(){if(this.ownerDocument.activeElement===this)this.ownerDocument.activeElement=null;}
@@ -37,15 +47,15 @@ class Element extends Events {
   showModal(){this.open=true;}
   close(){this.open=false;}
   click(){
-    const event = { type: 'click', target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    const event = { type: 'click', target: this, defaultPrevented: false, stopped: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; }, stopImmediatePropagation() { this.stopped = true; } };
     let current = this;
     let reachedDoc = false;
-    while (current) {
+    while (current && !event.stopped) {
       current.dispatchEvent(event);
       if (current === this.ownerDocument) reachedDoc = true;
       current = current.parentElement;
     }
-    if (!reachedDoc && this.ownerDocument) {
+    if (!reachedDoc && !event.stopped && this.ownerDocument) {
       this.ownerDocument.dispatchEvent(event);
     }
   }
@@ -60,6 +70,6 @@ function parse(source,parent,document){
  }
 }
 export function makeDocument(html){
- const document=new Element('document',null);document.ownerDocument=document;document.titleEvents=[];document.hidden=false;document.getElementById=id=>document.querySelector('#'+id);parse(html,document,document);document.documentElement=document.querySelector('html');document.body=document.querySelector('body');Object.defineProperty(document,'title',{get:()=>document.querySelector('title').textContent,set:value=>{document.querySelector('title').textContent=value;}});return document;
+ const document=new Element('document',null);document.ownerDocument=document;document.titleEvents=[];document.hidden=false;document.getElementById=id=>document.querySelector('#'+id);document.createElement=tag=>new Element(tag,document,{});parse(html,document,document);document.documentElement=document.querySelector('html');document.body=document.querySelector('body');Object.defineProperty(document,'title',{get:()=>document.querySelector('title').textContent,set:value=>{document.querySelector('title').textContent=value;}});return document;
 }
 export function makeWindow(){const window=new Events();window.matchMedia=()=>({matches:false});window.scrollTo=()=>{};window.isSecureContext=true;return window;}

@@ -505,6 +505,7 @@ function setTargetNode(id) {
   if (next === targetNode) return;
   const restart = !!liveSession || liveWanted;
   targetNode = next;
+  shortcuts?.refresh();
   if (state) delete state.dailywork; dailyworkReview = null; $('#dailywork-review').close(); $('#dailywork-result').textContent = ''; renderDailyWork();
   // Everything on screen belonged to the other device: start clean there.
   stopLive(); cancelSnapshot(); clearScreenImage(); setScreenStatus('idle');
@@ -967,7 +968,8 @@ function navigate(page) {
   if (nextScreen && !wasScreen) liveWanted = true;
   setPageLocation(page);
   $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
-  if (!nextScreen) closeScreenComposer();
+  if (page !== 'tela' && controlLayout?.editing()) controlLayout.cancel();
+  if (!nextScreen) { closeScreenComposer(); closeShortcuts(); }
   renderVisiblePage();
   // Usage is applied on entry, not while the user is tapping the same row.
   const keyBar = {dev:'dev',terminais:'term',tela:'screen'}[page];
@@ -1000,6 +1002,7 @@ function syncRemoteViewport() {
   document.documentElement.style.setProperty('--remote-viewport-height',`${height}px`);
   document.documentElement.style.setProperty('--remote-viewport-top',`${window.visualViewport?.offsetTop || 0}px`);
   applyScreenZoom();
+  controlLayout?.refresh();
 }
 window.visualViewport?.addEventListener('resize',syncRemoteViewport);
 window.visualViewport?.addEventListener('scroll',syncRemoteViewport);
@@ -1510,13 +1513,58 @@ function screenPreviewBox() {
   return { left: rect.left || 0, top: rect.top || 0, width: w, height: h };
 }
 function screenControlBoxes() {
-  return ['.screen-fabs', '#screen-workspaces', '#node-badge'].map(selector => {
+  const own = ['.screen-fabs', '#screen-workspaces', '#node-badge'].map(selector => {
     const element = $(selector);
     if (!element || element.hidden) return null;
     const rect = element.getBoundingClientRect?.();
     return rect && rect.width > 0 && rect.height > 0 ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
   }).filter(Boolean);
+  // Buttons the owner moved are position:fixed on their own, outside the rail.
+  return [...own, ...(controlLayout?.boxes() || []).map(({ left, top, width, height }) => ({ left, top, width, height }))];
 }
+// Omarchy Super shortcuts and the "Abrir terminal com Pi" preset
+// (public/mobile-shortcuts.js). Each combo is one keyboard.combo action: the
+// server presses and releases it in a single call, so nothing stays held.
+const shortcuts = window.PonteShortcuts && $('#shortcut-host') ? window.PonteShortcuts.mountShortcuts($('#shortcut-host'), {
+  send: async request => { if (!await actionResult(request.type, { combo: request.combo })) throw new Error(t('Não foi possível concluir a ação.')); },
+  openPreset: async request => {
+    if ((request.node || '') !== targetNode) throw new Error('TARGET_CHANGED');
+    const session = await (await api(request.path, { method: request.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...request.body, ...devSessionSize() }) })).json();
+    toast(t('Abrindo {title}…', { title: session.title }));
+    terminalSessions.push(session); selectTerminal(session.id); terminalPaused = false; navigate('terminais');
+  },
+  target: () => connected && token ? { id: targetNode, name: targetName() || t('Este PC') } : null,
+  storage: (() => { try { return localStorage; } catch { return null; } })(),
+  onStatus: () => document.body.setAttribute('data-shortcuts-open', String(!($('#shortcut-palette')?.hidden ?? true))),
+}) : null;
+$('#shortcut-host')?.addEventListener('click', () => document.body.setAttribute('data-shortcuts-open', String(!($('#shortcut-palette')?.hidden ?? true))));
+function closeShortcuts() { if (!($('#shortcut-palette')?.hidden ?? true)) shortcuts?.close(); document.body.setAttribute('data-shortcuts-open', 'false'); }
+// Editable spots of the phone's floating controls (public/mobile-control-layout.js).
+const controlLayout = window.PonteControlLayout?.mount({
+  layoutId: 'screen',
+  t,
+  window,
+  document,
+  floats: [
+    { id: 'screen.scroll', element: $('#screen-scroll') },
+    { id: 'screen.monitor', element: $('#screen-switch-monitor') },
+    { id: 'screen.rotate', element: $('#screen-rotate') },
+    { id: 'screen.keyboard', element: $('#screen-keyboard') },
+    { id: 'screen.shortcuts', element: $('#shortcut-host') },
+    { id: 'screen.dictate', element: $('#screen-dictate') },
+  ].filter(item => item.element),
+  lists: [{
+    id: 'screen.keys',
+    element: () => $('#screen-key-row .key-tail'),
+    locked: KEY_HEAD,
+    catalog: () => keyTailIds('screen', keyBarState.screen.ctx || 'desk', keyBarState.screen.menu || 0),
+  }],
+  avoid: () => [$('#bottom-nav'), $('#screen-composer:not([hidden])'), $('#screen-workspaces'), $('#node-badge')].filter(Boolean),
+  onChange: ({ reason }) => {
+    if (['save', 'cancel', 'reset'].includes(reason)) renderKeyBar('screen');
+    requestAnimationFrame(applyScreenZoom);
+  },
+});
 function centerScreenPan() {
   const bounds = screenPanBounds(screenPreviewBox(), screenScale > 1.001 ? screenPanInsets : screenFitInsets, screenBaseW * screenScale, screenBaseH * screenScale);
   screenPanX = centerPan(bounds.x);
@@ -3128,10 +3176,12 @@ function openScreenComposer({ automatic = false, requestNativeKeyboard = false }
   screenInput.focus({ preventScroll: true });
   if (requestNativeKeyboard) requestNativeScreenKeyboard();
   measureScreenComposer();
+  controlLayout?.refresh();
 }
 function closeScreenComposer() {
   clearTimeout(keyboardCheckTimer);
   if (!screenComposerOpen()) return;
+  if (controlLayout?.editing()) controlLayout.cancel();
   $('#screen-composer').hidden = true;
   $('#screen-composer-tools').hidden = true;
   $('#screen-input-more').setAttribute('aria-pressed', 'false');
@@ -3221,6 +3271,13 @@ $('#screen-keyboard').addEventListener('click', () => {
 $('#screen-input-close').addEventListener('click', closeScreenComposer);
 $('#screen-input-fill').addEventListener('click', fillScreenText);
 $('#screen-input-send').addEventListener('click', sendScreenEnter);
+// Deliberate entry into the arrange mode: nothing in normal use moves a button.
+$('#screen-arrange')?.addEventListener('click', () => {
+  $('#screen-composer-tools').hidden = true;
+  $('#screen-input-more').setAttribute('aria-pressed', 'false');
+  closeShortcuts();
+  if (!controlLayout?.enter()) toast(t('Organize os botões no celular.'));
+});
 $('#screen-input-more').addEventListener('click', () => {
   const open = $('#screen-composer-tools').hidden;
   $('#screen-composer-tools').hidden = !open;
@@ -4523,6 +4580,8 @@ function renderKeyBar(bar) {
   }
   const sheet = $('.key-sheet', root);
   if (sheet) sheet.scrollTop = sheetScroll;
+  // Saved order of the movable keys (public/mobile-control-layout.js); no onChange, no loop.
+  if (bar === 'screen') controlLayout?.apply();
 }
 function keyBarEnable(bar, ready) {
   const root = keyBarElement(bar);

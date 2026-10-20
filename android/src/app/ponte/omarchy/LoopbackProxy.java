@@ -22,7 +22,8 @@ public final class LoopbackProxy implements Closeable {
     public static final long MAX_BODY = 26L * 1024 * 1024;
     private static final Set<String> STATIC_PATHS = new HashSet<>(Arrays.asList(
         "/", "/index.html", "/app.js", "/i18n.js", "/styles.css", "/sw.js", "/manifest.webmanifest",
-        "/icon.svg", "/icon-192.png", "/icon-512.png", "/progress.html", "/progress.js", "/progress.json"));
+        "/icon.svg", "/icon-192.png", "/icon-512.png", "/progress.html", "/progress.js", "/progress.json",
+        "/mobile-shortcuts.js", "/mobile-shortcuts.css", "/mobile-control-layout.js", "/mobile-control-layout.css"));
     private static final Set<String> FORWARD_HEADERS = new HashSet<>(Arrays.asList(
         "authorization", "content-type", "accept", "accept-language", "range", "accept-encoding", "if-none-match"));
     private static final Set<String> RESPONSE_HEADERS = new HashSet<>(Arrays.asList(

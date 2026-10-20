@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { makeDocument,makeWindow } from './helpers/dom.mjs';
 const read = name => readFile(new URL(`../public/${name}`,import.meta.url),'utf8');
-const [html,runtime,app,progressHTML,progressScript,progressJSON] = await Promise.all(['index.html','i18n.js','app.js','progress.html','progress.js','progress.json'].map(read));
+const [html,runtime,app,progressHTML,progressScript,progressJSON,controlLayoutScript] = await Promise.all(['index.html','i18n.js','app.js','progress.html','progress.js','progress.json','mobile-control-layout.js'].map(read));
 const fixture={hostname:'test-desktop',windows:[{address:'0x123',title:'Notes <private>',class:'editor',workspace:{id:1,name:'1'}}],activeWindow:{address:'0x123',title:'Notes <private>',workspace:{id:1}},workspaces:[{id:1,name:'1',windows:1},{id:-99,name:'special:scratchpad',windows:0}],monitors:[{name:'TEST-1',width:1920,height:1080,focused:true}],volume:{value:0.3,muted:false},capabilities:{keyboard:true,mouse:true,screenshot:true,live:true,audio:true},warnings:[]};
 function harness({stored={},page=html,runApp=false,response}={}){
  const document=makeDocument(page),window=makeWindow();const saved=new Map(Object.entries(stored));const calls=[];let timer=0;
@@ -17,7 +17,7 @@ const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 test('English is the fixed first-run language even on a Portuguese browser; keys and HTML bindings are complete',()=>{
  const h=harness();assert.equal(h.i18n.language,'en');assert.equal(h.document.documentElement.lang,'en');assert.equal(h.document.title,'Ponte — your Omarchy, within reach');assert.equal(h.el('.nav-item[data-nav="voz"]').textContent.trim(),'Voice');assert.equal(h.el('#screen-dictate').getAttribute('aria-label'),'Dictate to the PC');assert.equal(h.el('#open-screen').textContent.trim(),'Open screen');
  for(const name of ['data-i18n','data-i18n-aria-label','data-i18n-placeholder','data-i18n-title','data-i18n-alt','data-i18n-content'])for(const el of h.document.querySelectorAll(`[${name}]`))assert.ok(Object.hasOwn(h.i18n.messages,el.getAttribute(name)),el.getAttribute(name));
- for(const source of [app,progressScript])for(const match of source.matchAll(/\b(?:t|h)\((['"])(.*?)\1/g))assert.ok(Object.hasOwn(h.i18n.messages,match[2]),match[2]);
+ for(const source of [app,progressScript,controlLayoutScript])for(const match of source.matchAll(/\b(?:t|h)\((['"])(.*?)\1/g))assert.ok(Object.hasOwn(h.i18n.messages,match[2]),match[2]);
 });
 
 test('Portuguese selection persists across reload, synchronizes the selector, and sets DOM locale before title',()=>{

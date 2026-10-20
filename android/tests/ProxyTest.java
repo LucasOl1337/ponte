@@ -380,6 +380,8 @@ public final class ProxyTest {
             check("pt-BR".equals(remote.language.get()), "language preference reaches the server unchanged");
             remote.redirect.set(false);
             check(raw(proxy, request(proxy, "GET", "/i18n.js", "")).startsWith("HTTP/1.1 200"), "translation module can load through native transport");
+            for (String asset : new String[] {"/mobile-shortcuts.js", "/mobile-shortcuts.css", "/mobile-control-layout.js", "/mobile-control-layout.css"})
+                check(raw(proxy, request(proxy, "GET", asset, "")).startsWith("HTTP/1.1 200"), "phone module " + asset + " loads through native transport");
             HttpURLConnection live = (HttpURLConnection) new URL(proxy.origin() + "/api/stream?monitor=DP-1").openConnection(); live.setReadTimeout(3000);
             try (InputStream input = live.getInputStream()) {
                 check(remote.streamOpened.await(2, TimeUnit.SECONDS), "upstream stream opened");
