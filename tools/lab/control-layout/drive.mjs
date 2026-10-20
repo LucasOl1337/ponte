@@ -48,9 +48,11 @@ const overlap = (a, b) => a && b && a.left < b.left + b.width && b.left < a.left
 async function phone(width, height, { clear = false } = {}) {
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: true, screenOrientation: width > height ? { type: 'landscapePrimary', angle: 90 } : { type: 'portraitPrimary', angle: 0 } });
   await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-  if (clear) await evaluate('localStorage.clear()');
+  const ready = async () => { for (let i = 0; i < 50; i++) { await sleep(100); if (await evaluate('document.body?.dataset.labReady === "true"').catch(() => false)) return; } };
+  // A fresh tab may still be about:blank (no origin, no localStorage): load the lab first.
+  if (clear) { await send('Page.navigate', { url: pageUrl }); await ready(); await evaluate('localStorage.clear()'); }
   await send('Page.navigate', { url: pageUrl });
-  for (let i = 0; i < 50; i++) { await sleep(100); if (await evaluate('document.body?.dataset.labReady === "true"').catch(() => false)) break; }
+  await ready();
   await sleep(250);
 }
 // Every visible float sits inside the viewport, off the bottom nav and the
