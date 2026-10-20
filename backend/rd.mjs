@@ -531,6 +531,7 @@ export function createRemoteDesktop({
     captureExit(info) {
       if (this.ended) return;
       this.failures++;
+      log.error?.(`[rd] capture exited ${JSON.stringify({ sessionId: this.id, failures: this.failures, code: info.code ?? null, signal: info.signal ?? null, errorCode: info.error?.code ?? null })}`);
       if (this.failures > 3) { log.error?.('[rd] capture keeps failing'); refuse(this.ws, 'CAPTURE_FAILED', 1011); return; }
       setTimeout(() => { if (!this.ended) { this.metrics.restarts++; this.capture.restart({}); } }, 300 * this.failures).unref?.();
     }

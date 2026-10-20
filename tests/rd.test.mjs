@@ -159,6 +159,68 @@ function inputRig(t, options = {}) {
   return { rd, logs, open };
 }
 
+test('capture exits log safe reasons before retries and capture keeps failing, without changing recovery', async t => {
+  const errors = [], restarts = [];
+  let exit, capture;
+  const rig = inputRig(t, {
+    inputMode: 'off',
+    log: { info() {}, error: line => errors.push(line) },
+    makeCapture: options => {
+      exit = options.onExit;
+      capture = syntheticCapture(options);
+      capture.restart = changes => restarts.push(changes);
+      return capture;
+    },
+  });
+  const ws = await rig.open();
+  const sessionId = ws.sent.find(m => m.t === 'ready').sessionId;
+  const closes = [];
+  ws.on('close', code => closes.push(code));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const prefix = '[rd] capture exited ';
+  const records = () => errors.filter(line => line.startsWith(prefix)).map(line => JSON.parse(line.slice(prefix.length)));
+  const fail = (info, failures, code, signal, errorCode) => {
+    const count = records().length;
+    exit(info);
+    assert.equal(records().length, count + 1, 'each exit must report its reason before any retry or refusal');
+    assert.deepEqual(records().at(-1), { sessionId, failures, code, signal, errorCode });
+  };
+
+  fail({ code: 1, signal: null, stderr: 'PRIVATE_STDERR' }, 1, 1, null, null);
+  t.mock.timers.tick(299);
+  assert.equal(restarts.length, 0);
+  t.mock.timers.tick(1);
+  assert.equal(restarts.length, 1);
+  capture.start({ monitor: 'LAB-1', width: 960, height: 540, fps: 30, kbps: 600 });
+  // A video unit resets the consecutive-failure counter, not just the log.
+  fail({ code: null, signal: 'SIGKILL' }, 1, null, 'SIGKILL', null);
+  t.mock.timers.tick(299);
+  assert.equal(restarts.length, 1);
+  t.mock.timers.tick(1);
+  assert.equal(restarts.length, 2);
+  fail({ code: null, error: Object.assign(new Error('PRIVATE_MESSAGE'), { code: 'ENOENT', path: 'PRIVATE_PATH' }) }, 2, null, null, 'ENOENT');
+  t.mock.timers.tick(599);
+  assert.equal(restarts.length, 2);
+  t.mock.timers.tick(1);
+  assert.equal(restarts.length, 3);
+  fail({ code: 0, signal: null }, 3, 0, null, null);
+  t.mock.timers.tick(899);
+  assert.equal(restarts.length, 3);
+  t.mock.timers.tick(1);
+  assert.equal(restarts.length, 4);
+  assert.equal(ws.readyState, 'open');
+  fail({ code: 1, signal: null }, 4, 1, null, null);
+  assert.equal(errors.at(-1), '[rd] capture keeps failing');
+  assert.deepEqual(ws.sent.at(-1), { t: 'error', code: 'CAPTURE_FAILED' });
+  assert.deepEqual(closes, [1011]);
+  assert.equal(errors.join('\n').includes('PRIVATE'), false);
+  const count = errors.length;
+  exit({ code: 1 });
+  t.mock.timers.tick(1200);
+  assert.equal(errors.length, count, 'an ended session neither logs nor retries');
+  assert.equal(restarts.length, 4);
+});
+
 test('a view-only session never steals the holder, and an input-unavailable session owns nothing', async t => {
   const inputs = [];
   const options = {
