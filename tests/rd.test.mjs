@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
@@ -323,6 +324,7 @@ test('RD relay accounts early and fragmented keys, observes only target acks, an
   assert.equal(relay.targetObserved.injected, 3);
   assert.equal(relay.targetObserved.discarded.duplicate_down, 1);
   assert.equal(relay.complete, false, 'last target snapshot is not a guaranteed final total');
+  assert.equal(Object.hasOwn(relay, 'connectionError'), false, 'successful relays keep the existing summary');
   assert.equal(target.input.injected, 3);
   assert.equal(target.input.pending, 0);
 });
@@ -338,6 +340,52 @@ test('a relay which cannot connect records early keys as relay_closed, with no t
   assert.equal(record.input.forwarded, 0);
   assert.equal(record.input.discarded.relay_closed, 1);
   assert.equal(record.targetObserved, null);
+  assert.equal(record.reason, 'connect_failed');
+  assert.deepEqual(record.connectionError, { stage: 'tcp', code: 'ECONNREFUSED', status: null });
+  assert.deepEqual(c.texts, [{ t: 'error', code: 'MESH_PEER_UNREACHABLE' }]);
+  assert.equal(c.closed.code, 1011);
+});
+
+test('relay connect_failed distinguishes refused, invalid, closed and timed-out handshakes without logging peer data', async t => {
+  for (const [name, response, expected, protocol = 'ws'] of [
+    ['refused', 'HTTP/1.1 403 PRIVATE_REASON\r\nX-Private: PRIVATE_HEADER\r\n\r\nPRIVATE_BODY', { stage: 'upgrade', code: null, status: 403 }],
+    ['bad accept', 'HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: PRIVATE_ACCEPT\r\n\r\n', { stage: 'upgrade', code: 'WS_BAD_ACCEPT', status: null }],
+    ['oversized', 'PRIVATE_HEADER'.repeat(1500), { stage: 'upgrade', code: 'WS_HANDSHAKE_TOO_LARGE', status: null }],
+    ['closed', '', { stage: 'upgrade', code: 'WS_HANDSHAKE_CLOSED', status: null }],
+    ['timeout', null, { stage: 'upgrade', code: 'ETIMEDOUT', status: null }],
+    ['tls closed', '', { stage: 'tls', code: 'ECONNRESET', status: null }, 'wss'],
+  ]) await t.test(name, async t => {
+    const sockets = new Set();
+    let attempts = 0, received = '';
+    const target = net.createServer(socket => {
+      attempts++;
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+      socket.once('data', data => {
+        received += data.toString();
+        if (response !== null) socket.end(response);
+      });
+    });
+    await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
+    t.after(() => { for (const socket of sockets) socket.destroy(); return new Promise(resolve => target.close(resolve)); });
+    const logs = [];
+    const pc = await rdApp(t, { log: { info: line => logs.push(line), error: line => logs.push(line) } }, {
+      routeRd: async () => ({ url: `${protocol}://127.0.0.1:${target.address().port}/PRIVATE_PATH?token=PRIVATE_QUERY`, token: 'PRIVATE_PEER_TOKEN' }),
+    });
+    const c = await client(pc.url);
+    await c.until(() => c.closed && closedRecords(logs).length, 'relay handshake failure');
+    const records = closedRecords(logs);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].reason, 'connect_failed');
+    assert.deepEqual(records[0].connectionError, expected);
+    assert.deepEqual(records[0].input, { received: 0, forwarded: 0, discarded: {}, unobserved: 0 });
+    assert.deepEqual(c.texts, [{ t: 'error', code: 'MESH_PEER_UNREACHABLE' }]);
+    assert.equal(c.closed.code, 1011);
+    assert.equal(attempts, 1, 'diagnostics must not retry the connection');
+    assert.equal(received.includes('PRIVATE_PEER_TOKEN'), false, 'no hello before the upgrade succeeds');
+    assert.equal(logs.join('\n').includes('PRIVATE'), false);
+    assert.equal(logs.join('\n').includes('127.0.0.1'), false);
+  });
 });
 
 test('the hello is required and checked: wrong token → PAIRING_REQUIRED and 1008; bad Origin → 403 before any upgrade', { skip: !canRun }, async t => {
