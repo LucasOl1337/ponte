@@ -245,20 +245,21 @@ export function connect(url, { ca, checkServerIdentity, headers = {}, maxMessage
       ? tls.connect({ host, port, rejectUnauthorized, ALPNProtocols: ['http/1.1'], ...(ca ? { ca } : {}), ...(checkServerIdentity ? { checkServerIdentity } : {}), ...(net.isIP(host) ? {} : { servername: host }) })
       : net.connect({ host, port });
     const key = randomBytes(16).toString('base64');
-    let response = Buffer.alloc(0), settled = false;
-    const timer = setTimeout(() => fail(new Error('WebSocket handshake timed out')), timeout);
+    let response = Buffer.alloc(0), settled = false, stage = 'tcp';
+    if (secure) socket.once('connect', () => { stage = 'tls'; });
+    const timer = setTimeout(() => fail(Object.assign(new Error('WebSocket handshake timed out'), { code: 'ETIMEDOUT' })), timeout);
     const cleanup = () => { clearTimeout(timer); socket.off('data', data); socket.off('error', fail); socket.off('close', closed); };
-    function fail(error) { if (settled) return; settled = true; cleanup(); socket.destroy(); reject(error); }
-    function closed() { fail(new Error('connection closed during the WebSocket handshake')); }
+    function fail(error) { if (settled) return; settled = true; cleanup(); socket.destroy(); reject(Object.assign(error, { stage })); }
+    function closed() { fail(Object.assign(new Error('connection closed during the WebSocket handshake'), { code: 'WS_HANDSHAKE_CLOSED' })); }
     function data(chunk) {
       response = Buffer.concat([response, chunk]);
       const end = response.indexOf('\r\n\r\n');
-      if (end < 0) { if (response.length > 16384) fail(new Error('handshake response too large')); return; }
+      if (end < 0) { if (response.length > 16384) fail(Object.assign(new Error('handshake response too large'), { code: 'WS_HANDSHAKE_TOO_LARGE' })); return; }
       const lines = response.subarray(0, end).toString('latin1').split('\r\n');
       const status = /^HTTP\/1\.1 (\d{3})/.exec(lines[0])?.[1];
       const fields = new Map(lines.slice(1).map(line => { const i = line.indexOf(':'); return [line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim()]; }));
       if (status !== '101') return fail(Object.assign(new Error(`WebSocket handshake refused: ${status || 'no status'}`), { status: Number(status) || 0 }));
-      if (fields.get('sec-websocket-accept') !== acceptKey(key)) return fail(new Error('bad Sec-WebSocket-Accept'));
+      if (fields.get('sec-websocket-accept') !== acceptKey(key)) return fail(Object.assign(new Error('bad Sec-WebSocket-Accept'), { code: 'WS_BAD_ACCEPT' }));
       settled = true; cleanup();
       resolve(new WebSocketConnection(socket, { client: true, maxMessage, head: response.subarray(end + 4) }));
     }
@@ -266,6 +267,7 @@ export function connect(url, { ca, checkServerIdentity, headers = {}, maxMessage
     socket.once('error', fail);
     socket.once('close', closed);
     socket.once(secure ? 'secureConnect' : 'connect', () => {
+      stage = 'upgrade';
       const extra = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join('');
       socket.write(`GET ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n${extra}\r\n`);
     });
