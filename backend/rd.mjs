@@ -250,13 +250,13 @@ export function createRemoteDesktop({
       const draining = new Set();
       const closeCode = code => (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1011) || (code >= 3000 && code <= 4999) ? code : 1001;
       const record = {
-        close(reason, code = 1001) {
+        close(reason, code = 1001, connectionError) {
           if (finished) return;
           finished = true;
           relays.delete(record);
           const lost = keys.received - forwarded - Object.values(keys.discarded).reduce((sum, count) => sum + count, 0);
           if (lost > 0) keys.discarded.relay_closed = lost;
-          log.info?.(`[rd] session closed ${JSON.stringify({ role: 'relay', sessionId, reason, input: { received: keys.received, forwarded, discarded: keys.discarded, unobserved: Math.max(0, forwarded - (targetObserved?.received || 0)) }, targetObserved, targetObservedAt, complete: false })}`);
+          log.info?.(`[rd] session closed ${JSON.stringify({ role: 'relay', sessionId, reason, input: { received: keys.received, forwarded, discarded: keys.discarded, unobserved: Math.max(0, forwarded - (targetObserved?.received || 0)) }, targetObserved, targetObservedAt, complete: false, connectionError })}`);
           if (ws.readyState === 'open') ws.close(closeCode(code), reason);
           if (upstream?.readyState === 'open') upstream.close(closeCode(code), reason);
         },
@@ -264,7 +264,17 @@ export function createRemoteDesktop({
       relays.add(record);
       ws.once('close', code => record.close('client_closed', code === 1006 ? 1001 : code));
       try { upstream = await connect(target.url, { ca: target.ca, checkServerIdentity: target.checkServerIdentity, timeout: 5000 }); }
-      catch (error) { refuse(ws, target.failure?.(error) || 'MESH_PEER_UNREACHABLE', 1011); record.close('connect_failed', 1011); return; }
+      catch (error) {
+        // Only bounded diagnostic fields, never the URL, token, message or TLS certificate.
+        const connectionError = {
+          stage: ['tcp', 'tls', 'upgrade'].includes(error?.stage) ? error.stage : null,
+          code: typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code) ? error.code : null,
+          status: Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? error.status : null,
+        };
+        refuse(ws, target.failure?.(error) || 'MESH_PEER_UNREACHABLE', 1011);
+        record.close('connect_failed', 1011, connectionError);
+        return;
+      }
       if (ws.readyState !== 'open') { upstream.terminate(); record.close('client_closed'); return; }
       ws.maxMessage = AUTHED_MAX_MESSAGE;
       upstream.once('close', code => {
