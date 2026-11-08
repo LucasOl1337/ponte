@@ -551,7 +551,7 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
 
   // The menu entry passes --notify: it has no terminal, so a failure becomes a notification.
   await writeFile(path.join(f.bin, 'notify-send'), await readFile(path.join(f.bin, 'tailscale'), 'utf8'), { mode: 0o755 });
-  await assert.rejects(f.cli(['rd', '--notify'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
+  await assert.rejects(f.cli(['rd', '--engine', 'legacy', '--notify'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
   const notified = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse).filter(call => call[0] === 'notify-send');
   assert.equal(notified.length, 1);
   assert.deepEqual(notified[0].slice(1, 3), ['--app-name=Ponte', 'Ponte Remoto']);
@@ -559,9 +559,9 @@ test('rd opens Chromium in --app mode on rd.html with its own profile, resolving
   assert.equal(notified[0].join(' ').includes(token), false, 'the key is not in the notification');
   await rm(path.join(f.bin, 'notify-send'));
 
-  await assert.rejects(f.cli(['rd'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
+  await assert.rejects(f.cli(['rd', '--engine', 'legacy'], { PONTE_CHROMIUM: 'ponte-no-such-browser' }), error => /Chromium was not found/.test(error.stderr));
   await writeFile(path.join(f.bin, 'chromium'), await readFile(path.join(f.bin, 'tailscale'), 'utf8'), { mode: 0o755 });
-  const opened = await f.cli(['rd']);
+  const opened = await f.cli(['rd', '--engine', 'legacy']);
   assert.match(opened.stdout, /Ctrl\+X/);
   assert.equal(opened.stdout.includes(token), false, 'the key is not printed');
   let calls = [];

@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Child-only Gliff SSH policy: trusted alias, strict host keys, no prompts."""
+import os
+from pathlib import Path
+import re
+import sys
+
+
+def main():
+    executable = os.environ.get('PONTE_RD_SSH', '')
+    alias = os.environ.get('PONTE_RD_ALIAS', '')
+    args = sys.argv[1:]
+    if not Path(executable).is_absolute() or Path(executable).resolve() == Path(__file__).resolve():
+        raise ValueError('Missing real SSH executable.')
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}', alias):
+        raise ValueError('Missing selected Ponte SSH alias.')
+    if '--' not in args:
+        raise ValueError('Unsupported Gliff SSH argv: expected destination separator.')
+    boundary = args.index('--')
+    if args[boundary + 1:boundary + 2] != [alias]:
+        raise ValueError('Use Ponte Remoto to select another device. This window is restricted to its selected alias.')
+    # Only the upstream transport options, never arbitrary -F/-J/-ProxyCommand.
+    options = args[:boundary]
+    index = 0
+    while index < len(options):
+        value = options[index]
+        if value in ('-G', '-T'):
+            index += 1
+        elif value == '-o' and index + 1 < len(options) and options[index + 1] in (
+                'Compression=no', 'IPQoS=lowdelay', 'StrictHostKeyChecking=accept-new'):
+            index += 2
+        else:
+            raise ValueError('Unsupported Gliff SSH option. Check upstream compatibility before connecting.')
+    # Options before upstream argv win even if it requests accept-new later.
+    policy = ['-o', 'StrictHostKeyChecking=yes', '-o', 'BatchMode=yes',
+              '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=15',
+              '-o', 'ServerAliveCountMax=2', '-o', 'RequestTTY=no']
+    os.execv(executable, [executable, *policy, *args])
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError) as error:
+        print(f'Ponte SSH: {error}', file=sys.stderr)
+        sys.exit(255)

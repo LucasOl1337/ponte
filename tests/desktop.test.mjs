@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 
 // The companion CLI/core require only stdlib. GUI tests are deliberately excluded:
 // npm test must never create a Qt window or contact a real Android device.
-for (const pattern of ['test_bridge.py', 'test_cli.py']) {
+for (const pattern of ['test_bridge.py', 'test_cli.py', 'test_rd.py']) {
   test(`desktop stdlib suite: ${pattern}`, { timeout: 120_000 }, async t => {
     try {
       await run('python3', ['--version'], { cwd: root, timeout: 5_000 });

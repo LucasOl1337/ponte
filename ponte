@@ -1420,9 +1420,16 @@ def rd_browser():
 
 
 def rd_main(argv):
-    """Open the remote desktop client: Chromium in --app mode with a profile of its own."""
-    parser = argparse.ArgumentParser(prog='ponte rd', description='Control a paired device (or this PC) from a desktop window: Chromium app with its own profile, Keyboard Lock in full screen. The window has a device picker.')
-    parser.add_argument('device', nargs='?', help='Device name or any of its ids (./ponte devices). Default: the first paired device online; this machine when none is paired. Use "self" for this machine.')
+    """Open native Gliff, or the explicitly selected web legacy client."""
+    parser = argparse.ArgumentParser(prog='ponte rd', description='Ponte Remoto: choose a configured SSH computer and open native Gliff. Paired web devices remain available with --engine legacy.')
+    parser.add_argument('device', nargs='?', help='SSH alias, ssh:ALIAS or configured display name. Omit to choose from a list. Legacy: any paired device id/name or self.')
+    parser.add_argument('--engine', choices=['gliff', 'legacy'], help='Default: gliff. legacy opens the unchanged Chromium client.')
+    parser.add_argument('--list', action='store_true', help='List configured SSH destinations as JSON, without connecting.')
+    parser.add_argument('--check', action='store_true', help='Check the selected SSH destination and Gliff dependencies without opening a window.')
+    parser.add_argument('--headless', action='store_true', help='Gliff: private output in the remote Hyprland session (not an isolated input/security session).')
+    parser.add_argument('--no-clipboard', action='store_true', help='Gliff: disable clipboard sharing.')
+    parser.add_argument('--video', choices=['gpu', 'cpu'], help='Gliff video pipeline, passed to upstream.')
+    parser.add_argument('--server-bin', default='gliff-server', help='Advanced: absolute remote server wrapper path, or gliff-server. Wrapper must support --version.')
     parser.add_argument('--monitor', help='Monitor to show first (e.g. DP-3).')
     parser.add_argument('--print-url', action='store_true', help='Only print the URL (it carries the pairing key).')
     parser.add_argument('--notify', action='store_true', help='Also report success or failure as a desktop notification (the menu entry uses it).')
@@ -1436,7 +1443,8 @@ def rd_main(argv):
         print(f"{verb} the app menu: {result['path']}" + (' (search "Ponte Remoto").' if args.install else '.'))
         return
     try:
-        rd_open(args)
+        from desktop.rd import open_remote
+        open_remote(args, paths()[0], rd_open)
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
         if args.notify:
             rd_notify(str(error))
