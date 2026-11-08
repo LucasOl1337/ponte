@@ -35,7 +35,13 @@ def main():
     policy = ['-o', 'StrictHostKeyChecking=yes', '-o', 'BatchMode=yes',
               '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=15',
               '-o', 'ServerAliveCountMax=2', '-o', 'RequestTTY=no']
-    os.execv(executable, [executable, *policy, *args])
+    # OpenSSH may spawn another ssh for ProxyJump. That is operator-owned SSH
+    # configuration, not another Gliff target, so restore PATH for its children.
+    shim_dir = str(Path(__file__).resolve().parent)
+    env = dict(os.environ)
+    env['PATH'] = os.pathsep.join(part for part in env.get('PATH', '').split(os.pathsep)
+                                if str(Path(part or '.').resolve()) != shim_dir)
+    os.execve(executable, [executable, *policy, *args], env)
 
 
 if __name__ == '__main__':

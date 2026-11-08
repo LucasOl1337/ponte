@@ -9,7 +9,7 @@
 
 ## Regras e prova
 
-Seletor nativo Zenity, título Ponte Remoto, tabela expansível com uma linha por destino, botão Conectar e Cancelar. Nenhum campo exige digitar hostname. Alias vem de config local, nunca do texto exibido. Erros do atalho aparecem em diálogo e notificação.
+Seletor nativo Zenity, título Ponte Remoto, tabela expansível com uma linha por destino, botão Conectar e Cancelar. Nenhum campo exige digitar hostname. Alias vem de config local, nunca do texto exibido. Erros do atalho aparecem em notificação. Na CLI também aparecem no stderr.
 
 O portão DOM checa_tela.py não se aplica a um diálogo GTK, sem navegador ou DOM. A lane Prova real deve medir/observar a janela em bancada em 1366×768 e 900×1000, confirmar ausência de corte horizontal, destino antes da dobra, cancelamento e rota legado. Captura e crítica visual pertencem à evidência dessa lane, não foram feitas nesta implementação.
 

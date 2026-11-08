@@ -108,6 +108,17 @@ class RemoteDesktopTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'no running Hyprland'):
                 rd.preflight(self.items[0], options())
 
+    @patch('desktop.rd.shutil.which', side_effect=lambda value: '/usr/bin/' + value)
+    def test_missing_remote_dependency_and_wrong_version(self, which):
+        with patch('desktop.rd.checked_run', side_effect=[result('gliff 0.4.1\n'), result(''), result(code=127)]):
+            with self.assertRaisesRegex(ValueError, 'gliff-server or Hyprland is unavailable'):
+                rd.preflight(self.items[0], options())
+        with patch('desktop.rd.checked_run', return_value=result('gliff 0.3.9\n')) as run:
+            with self.assertRaisesRegex(ValueError, 'supports Gliff 0.4.x'):
+                rd.preflight(self.items[0], options())
+            self.assertEqual(run.call_count, 1)
+        self.assertIn('authentication failed', rd.ssh_failure('Permission denied (publickey)'))
+
     def test_missing_dependency_is_clear(self):
         with patch('desktop.rd.shutil.which', return_value=None):
             with self.assertRaisesRegex(ValueError, 'Gliff is not installed'):
@@ -149,7 +160,9 @@ class RemoteDesktopTests(unittest.TestCase):
                 self.assertEqual(rd.choose(self.items), 'legacy')
             with patch('desktop.rd.subprocess.run', return_value=result('0\n')) as run:
                 self.assertEqual(rd.choose(self.items), self.items[0])
-                self.assertIn('--title=Ponte Remoto', run.call_args.args[0])
+                argv = run.call_args.args[0]
+                self.assertIn('--title=Ponte Remoto', argv)
+                self.assertLess(argv.index('--'), argv.index('Meu notebook'))
             with patch('desktop.rd.subprocess.run', return_value=result('notebook;id\n')):
                 with self.assertRaisesRegex(ValueError, 'Invalid picker'):
                     rd.choose(self.items)
@@ -167,7 +180,7 @@ class RemoteDesktopTests(unittest.TestCase):
             self.assertTrue(env['PATH'].startswith(str(rd.ROOT / 'desktop/rd-bin')))
             self.assertEqual(list(Path(env['XDG_CONFIG_HOME']).glob('gliff*')), [])
             self.session_dir = env['XDG_CONFIG_HOME']
-            kwargs['stderr'].write('connection lost')
+            kwargs['stderr'].write(b'connection lost')
             return result(code=3)
         with patch('desktop.rd.preflight', return_value=('/bin/gliff', '/bin/ssh')), patch('desktop.rd.subprocess.run', side_effect=child), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(ValueError, 'Gliff exited with code 3: connection lost'):
@@ -201,6 +214,13 @@ class SshWrapperTests(unittest.TestCase):
         process = self.invoke(['-G', '--', 'notebook'])
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertIn('StrictHostKeyChecking=yes', json.loads(process.stdout))
+
+    def test_real_ssh_children_do_not_reenter_gliff_shim(self):
+        self.real.write_text('#!/usr/bin/env python3\nimport os\nprint(os.environ["PATH"])\n')
+        self.env['PATH'] = str(self.wrapper.parent) + os.pathsep + self.env['PATH']
+        process = self.invoke(['-G', '--', 'notebook'])
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertNotIn(str(self.wrapper.parent), process.stdout.split(os.pathsep))
 
     def test_other_destination_or_option_rejected(self):
         process = self.invoke(['-T', '--', 'other', 'gliff-server', '--stdio'])

@@ -116,7 +116,7 @@ def choose(items):
         command = [zenity, '--list', '--title=Ponte Remoto', '--text=Escolha o computador para controlar.',
                    '--width=720', '--height=480', '--ok-label=Conectar', '--cancel-label=Cancelar',
                    '--column=ID', '--column=Aparelho', '--column=Destino SSH', '--column=Motor',
-                   '--hide-column=1', '--print-column=1', '--no-markup']
+                   '--hide-column=1', '--print-column=1', '--no-markup', '--']
         for row in rows:
             command.extend(row)
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
@@ -233,7 +233,7 @@ def launch(item, args):
         return
     # Ephemeral config prevents upstream tabs from reconnecting other personal hosts.
     # The selected alias is also enforced by the child-only SSH wrapper.
-    with tempfile.TemporaryDirectory(prefix='ponte-gliff-') as directory, tempfile.TemporaryFile(mode='w+t') as log:
+    with tempfile.TemporaryDirectory(prefix='ponte-gliff-') as directory, tempfile.TemporaryFile() as log:
         env = dict(os.environ, XDG_CONFIG_HOME=directory, PONTE_RD_SSH=ssh, PONTE_RD_ALIAS=item['alias'],
                    PATH=str(ROOT / 'desktop/rd-bin') + os.pathsep + os.environ.get('PATH', ''))
         original = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config')))
@@ -245,7 +245,7 @@ def launch(item, args):
         if result.returncode:
             log.seek(0, os.SEEK_END)
             log.seek(max(0, log.tell() - 3000))
-            detail = clean_label(log.read())
+            detail = clean_label(log.read().decode('utf-8', errors='replace'))
             raise ValueError(f'Gliff exited with code {result.returncode}: {detail}. Retry the same destination, or choose --engine legacy explicitly.')
 
 
