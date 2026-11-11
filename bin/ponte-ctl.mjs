@@ -246,6 +246,8 @@ async function resolveNode(client, value) {
   }
   if (device.self) return { id: null, name: device.name };
   const ponte = (device.routes || []).find(route => route.via === 'ponte');
+  // A Windows machine of windows.hosts: the home node itself answers for it.
+  if (!ponte && device.can?.control?.via === 'windows') return { id: (device.ids || []).find(id => String(id).startsWith('ssh:')) || device.id, name: device.name };
   if (!ponte) throw new CliError('DEVICE_NOT_PONTE', `${device.name} does not run Ponte: reach it with terminals create --agent ssh --host ALIAS instead of --node.`, 2);
   if (!paired(device)) throw new CliError('MESH_PEER_NOT_PAIRED', `${device.name} is on the tailnet but not paired with this device: ponte mesh pair ${device.name}, then approve it there.`, 2);
   return { id: device.id, name: device.name };

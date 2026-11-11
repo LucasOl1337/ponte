@@ -31,6 +31,26 @@ export function sshHosts(value) {
   return hosts;
 }
 
+// Windows machines shown and controlled through the small agent of
+// tools/windows-agent (backend/windows.mjs), reached over SSH by alias.
+export const WINDOWS_AGENT_PORT = 47811;
+// config.windows.hosts: [{ host: ALIAS, label?, port? }]. The agent's token
+// lives in <configDir>/windows/<ALIAS>.token (0600), never in the config.
+export function windowsHosts(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 8) throw new Error('windows.hosts must be a list of at most 8 SSH aliases.');
+  const hosts = value.map(entry => {
+    const { host, label, port } = typeof entry === 'string' ? { host: entry } : entry || {};
+    if (typeof host !== 'string' || !SSH_HOST_PATTERN.test(host)) throw new Error('Each windows.hosts entry needs an SSH alias.');
+    if (label !== undefined && (typeof label !== 'string' || !label.trim() || label.length > 40 || /[\u0000-\u001f\u007f<>]/.test(label))) throw new Error(`The label of Windows host ${host} must be 1–40 plain characters.`);
+    if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) throw new Error(`The port of Windows host ${host} must be 1–65535.`);
+    return { host, label: label === undefined ? host : label.trim(), port: port ?? WINDOWS_AGENT_PORT };
+  });
+  if (new Set(hosts.map(item => item.host)).size !== hosts.length) throw new Error('windows.hosts lists an alias twice.');
+  return hosts;
+}
+
+
 // What kind of computer this node is (pc, notebook, server), shown in the
 // device list of every node. Unset: guessed from a system battery.
 function nodeKind(value) {
@@ -67,6 +87,7 @@ export function runtimeSettings(config = {}, env = process.env) {
     nativeTls: null,
     sshHosts: sshHosts(config.ssh?.hosts),
     nodeKind: nodeKind(config.node?.kind),
+    windowsHosts: windowsHosts(config.windows?.hosts),
   };
   if (!Array.isArray(settings.trustedHosts) || settings.trustedHosts.some(value => typeof value !== 'string')) throw new Error('trustedHosts must be an array of hostnames.');
   const tls = config.nativeTls;

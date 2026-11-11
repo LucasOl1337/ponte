@@ -27,6 +27,7 @@ import { acceptUpgrade, rejectUpgrade } from './backend/ws.mjs';
 import { createRemoteDesktop } from './backend/rd.mjs';
 import { createFleet } from './backend/fleet.mjs';
 import { createDevices } from './backend/devices.mjs';
+import { createWindowsTargets } from './backend/windows.mjs';
 export { isTailscaleIpv4Bind } from './backend/config.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -226,7 +227,12 @@ export async function createApp(options = {}) {
     enabled: !!settings?.nativeTls && env.PONTE_MESH !== '0', ...options.meshOptions,
   });
   const fleet = options.fleet || createFleet({ env, dataDir: initialized.dataDir, mesh, terminals, sshHosts: options.sshHosts || settings?.sshHosts, ...options.fleetOptions });
-  const devices = options.devices || createDevices({ env, mesh, fleet, ...options.devicesOptions });
+  const devicesBase = options.devices || createDevices({ env, mesh, fleet, ...options.devicesOptions });
+  // Windows machines (windows.hosts): screen and input through their agent, over SSH.
+  const windows = options.windows || createWindowsTargets({ hosts: settings?.windowsHosts || [], configDir: path.dirname(defaultPaths(env).configFile), dataDir: initialized.dataDir, env });
+  const devices = windows.size ? { ...devicesBase, list: async (...args) => windows.decorate(await devicesBase.list(...args)) } : devicesBase;
+  const windowsLive = new Map();
+  const liveFor = target => { if (!windowsLive.has(target)) windowsLive.set(target, createLiveStreaming(windows.liveSource(target))); return windowsLive.get(target); };
   // The owner token, or a paired node's token over the tailnet listener only
   // (bound to that node's address). The RD WebSocket reuses this.
   function authenticate(token, req) {
@@ -333,6 +339,30 @@ export async function createApp(options = {}) {
       revoked: () => mesh.forget(node),
     };
   });
+
+  // What a Windows machine answers: the screen, the pointer and the keyboard.
+  // Everything else is refused with a code the phone already knows.
+  async function serveWindows(req, res, target, pathname, query) {
+    if (pathname === '/api/state' && req.method === 'GET') {
+      json(res, 200, await limits.only(`win-state:${target.host}`, 2, () => windows.state(target, { version: uiVersion, mesh: mesh.active() ? { ...mesh.view(), target: `ssh:${target.host}` } : null }))); return;
+    }
+    if (pathname === '/api/stream' && req.method === 'GET') { await liveFor(target).stream(req, res, query); return; }
+    if (pathname === '/api/screenshot' && req.method === 'GET') {
+      const bytes = await limits.only(`win-shot:${target.host}`, 1, () => windows.screenshot(target, query.get('monitor') ?? undefined, query.has('scale') ? Number(query.get('scale')) : undefined));
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': bytes.length, 'Cache-Control': 'no-store' }); res.end(bytes); return;
+    }
+    if ((pathname === '/api/action' || pathname === '/api/power') && req.method === 'POST') {
+      if (String(req.headers['content-type']).split(';', 1)[0].trim() !== 'application/json') throw new ApiError(415, 'JSON_REQUIRED');
+      const body = await readBody(req, 24 * 1024);
+      let value; try { value = JSON.parse(body.toString('utf8')); } catch { throw new ApiError(400, 'INVALID_JSON'); }
+      json(res, 200, await limits.action(() => windows.action(target, value))); return;
+    }
+    if (pathname === '/api/textinput' && req.method === 'GET') { json(res, 200, { available: false, focused: null, context: null }); return; }
+    if (pathname === '/api/terminals' && req.method === 'GET') { json(res, 200, { available: false, sessions: [] }); return; }
+    if (pathname === '/api/agents' && req.method === 'GET') { json(res, 200, { items: [], counts: {}, scannedAt: Date.now() }); return; }
+    if (pathname === '/api/audio' && req.method === 'GET') { json(res, 200, { recordings: [] }); return; }
+    throw new ApiError(409, 'DEVICE_NOT_PONTE', { name: target.label });
+  }
 
   async function serveFile(res, file, mime) {
     const metadata = await lstat(file);
@@ -457,6 +487,11 @@ export async function createApp(options = {}) {
       if (caller.kind === 'peer' && meshRoute) throw new ApiError(403, 'MESH_OWNER_ONLY');
       // A device name or any of its ids (ADR 0002) becomes the mesh id here;
       // a 16-hex id goes on untouched, as it always did.
+      const windowsTarget = nodes[0] && !meshRoute ? windows.byNode(nodes[0]) : null;
+      if (windowsTarget) {
+        if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
+        await serveWindows(req, res, windowsTarget, pathname, query); return;
+      }
       if (nodes[0] && nodes[0] !== mesh.id && !/^[a-f0-9]{16}$/.test(nodes[0])) nodes[0] = await devices.node(nodes[0]) || mesh.id;
       if (nodes[0] && nodes[0] !== mesh.id) {
         if (meshRoute) throw new ApiError(400, 'MESH_INVALID_REQUEST');
@@ -737,6 +772,8 @@ export async function createApp(options = {}) {
       await Promise.resolve(desktop.close?.()).catch(() => {});
       await audio.close?.();
       await mesh.close?.();
+      windows.close();
+      for (const item of windowsLive.values()) item.close();
       await closed;
     })();
     return closingPromise;
