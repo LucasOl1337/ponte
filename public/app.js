@@ -2168,7 +2168,8 @@ function startLive() {
   if (!monitor) return;
   stopLive(); cancelSnapshot();
   const choice = LIVE_PROFILES[$('#live-quality').value] ? $('#live-quality').value : 'auto';
-  const wantsVideo = (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) && videoSupported() && Date.now() >= videoBlockedUntil;
+  // A Windows machine (backend/windows.mjs) only sends JPEG frames.
+  const wantsVideo = (LIVE_PROFILES[choice].auto || LIVE_PROFILES[choice].video) && state?.os !== 'windows' && videoSupported() && Date.now() >= videoBlockedUntil;
   if (wantsVideo && LIVE_PROFILES[choice].auto && autoChooser.mode === 'jpeg') {
     const session = {monitor,attempt:0,failures:0,hasFrame:false,rendering:false,pendingFrame:null,region:null,refreshing:false,adapter:null};
     liveSession = session;

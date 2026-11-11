@@ -1466,6 +1466,10 @@
     "en": "{name} does not run Ponte: it can be reached by SSH, not controlled.",
     "pt": "{name} não roda a Ponte: dá para chegar por SSH, não controlar."
   },
+  "WINDOWS_AGENT_UNAVAILABLE": {
+    "en": "{name} is on, but its Ponte screen helper is not answering.",
+    "pt": "{name} está ligado, mas o ajudante de tela da Ponte não está respondendo."
+  },
   "RD_PEER_CONTROL": {
     "en": "{name} is controlling this screen through Ponte.",
     "pt": "{name} está controlando esta tela pela Ponte."
