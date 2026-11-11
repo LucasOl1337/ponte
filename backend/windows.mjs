@@ -112,7 +112,9 @@ export function createWindowsTargets({ hosts = [], configDir, dataDir, env = pro
       await mkdir(socketDir, { recursive: true, mode: 0o700 });
       target.socket = path.join(socketDir, `${target.host}.sock`);
       await rm(target.socket, { force: true });
-      const child = spawn('ssh', ['-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
+      // Its own connection: with ControlMaster auto the forward would go to a
+      // shared master and this ssh would exit at once, leaving nothing to watch.
+      const child = spawn('ssh', ['-N', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
         '-o', 'StreamLocalBindUnlink=yes', '-o', 'ConnectTimeout=8', '-L', `${target.socket}:127.0.0.1:${target.port}`, target.host], { stdio: ['ignore', 'ignore', 'pipe'], env });
       let stderr = '';
       child.stderr?.on('data', chunk => { stderr = (stderr + chunk).slice(-500); });
