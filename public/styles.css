@@ -743,7 +743,6 @@ body[data-screen-keyboard=true] .screen-monitor-field{display:flex;order:-1}
   .screen-head{display:contents}
   .screen-machine,.screen-totals,.screen-monitors{display:none}
   .screen-monitor-field{display:flex;order:-1}
-  .screen-workspaces{right:calc(64px + env(safe-area-inset-right));max-width:calc(100% - 72px - env(safe-area-inset-right))}
   .screen-fabs{position:fixed;right:10px;bottom:8px;z-index:45;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0;border:0;background:none}
   .screen-fab,.screen-mic,.screen-fabs .shortcut-super{width:44px;height:44px;min-height:44px;border-radius:50%;background:rgba(22,26,23,.94);box-shadow:0 0 0 1px var(--line2),0 6px 24px #0008;color:var(--text)}
   .screen-fabs .screen-fab span,.screen-fabs .screen-mic span,.screen-fabs .shortcut-super span:not(.shortcut-glyph){display:none}
