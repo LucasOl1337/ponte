@@ -3,10 +3,11 @@ import net from 'node:net';
 import os from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, lstat, open, readdir, rename, realpath, stat } from 'node:fs/promises';
+import { mkdir, lstat, open, readdir, rename, realpath, stat, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 import { SSH_HOST_PATTERN } from './config.mjs';
+import { createMissionCapabilities, missionFiles, missionWorker, requestPattern } from './mission-runtime.mjs';
 
 export const TERMINAL_LIMIT = 4;
 export const TERMINAL_TEXT_LIMIT = 64 * 1024;
@@ -149,6 +150,7 @@ export function createTerminals(dataDir, options = {}) {
   const shellDirectory = path.isAbsolute(env.HOME || '') ? env.HOME : os.homedir();
   const projectsDirectory = options.projectsDir || path.join(shellDirectory, 'Projects');
   const sshHosts = (options.sshHosts || []).filter(item => SSH_HOST_PATTERN.test(item?.host || '')).map(({ host, label }) => ({ host, label: label || host }));
+  const missions = options.missions || createMissionCapabilities({ env, hosts: sshHosts });
   const directory = path.join(dataDir, 'terminals');
   const socketPath = path.join(directory, 'tmux.sock');
   const registryPath = path.join(directory, 'sessions.json');
@@ -169,12 +171,12 @@ export function createTerminals(dataDir, options = {}) {
     if (!dir.isDirectory() || await realpath(directory) !== path.resolve(directory)) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
     const info = await privateFile(registryPath);
     if (!info) return;
-    if (!info.isFile() || info.size > 4096) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+    if (!info.isFile() || info.size > 512 * 1024) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
     const handle = await open(registryPath, constants.O_RDONLY | constants.O_NOFOLLOW);
     let saved;
     try { saved = JSON.parse(await handle.readFile('utf8')); } finally { await handle.close(); }
-    if (saved.schemaVersion !== 1 || !Array.isArray(saved.sessions) || saved.sessions.length > TERMINAL_LIMIT || saved.sessions.some(item => !item || !idPattern.test(item.id) || !panePattern.test(item.paneId) || !windowPattern.test(item.windowId) || !titlePattern.test(item.title)) || new Set(saved.sessions.map(item => item.id)).size !== saved.sessions.length) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
-    registry = saved.sessions.map(({ id, title, paneId, windowId }) => ({ id, title, paneId, windowId }));
+    if (saved.schemaVersion !== 1 || !Array.isArray(saved.sessions) || saved.sessions.length > 100 || saved.sessions.some(item => !item || !idPattern.test(item.id) || !panePattern.test(item.paneId) || !windowPattern.test(item.windowId) || !(item.mission ? typeof item.title === 'string' && item.title.length <= 100 && requestPattern.test(item.mission.requestId || '') : titlePattern.test(item.title))) || new Set(saved.sessions.map(item => item.id)).size !== saved.sessions.length) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
+    registry = saved.sessions;
   }
 
   async function save() {
@@ -221,17 +223,23 @@ export function createTerminals(dataDir, options = {}) {
 
   async function sessions(prune = true) {
     const panes = await probe(socketPath) ? parsePanes(await command(['-N', 'list-panes', '-a', '-F', format])) : [];
-    const remaining = registry.filter(item => panes.some(pane => pane.name === `ponte_${item.id}`));
+    const remaining = registry.filter(item => item.mission || panes.some(pane => pane.name === `ponte_${item.id}`));
     if (prune) {
       liveSessionCount = new Set(panes.map(pane => pane.name)).size;
       if (remaining.length !== registry.length) { registry = remaining; await save(); }
     }
-    return remaining.map(item => {
+    return Promise.all(remaining.map(async item => {
       const matches = panes.filter(pane => pane.name === `ponte_${item.id}`);
       const pane = matches.length === 1 && matches[0];
       const valid = pane && pane.paneId === item.paneId && pane.windowId === item.windowId;
-      return { ...item, valid, cols: valid ? pane.cols : 0, rows: valid ? pane.rows : 0, inMode: valid ? pane.inMode : false };
-    });
+      let mission = item.mission;
+      if (mission) {
+        let live = {};
+        try { live = JSON.parse(await readFile(missionFiles(directory, item.id).state, 'utf8')); } catch {}
+        mission = { ...mission, status: valid ? live.status || 'starting' : 'ended', updatedAt: live.updatedAt || mission.createdAt, effectiveModel: live.effectiveModel || null, effectiveProvider: live.effectiveProvider || null, nativeId: live.nativeId || null };
+      }
+      return { ...item, mission, valid, cols: valid ? pane.cols : 0, rows: valid ? pane.rows : 0, inMode: valid ? pane.inMode : false };
+    }));
   }
 
   async function target(id, available, prune = true) {
@@ -243,8 +251,9 @@ export function createTerminals(dataDir, options = {}) {
   }
 
   const shellQuote = value => `'${value.replace(/'/g, "'\\''")}'`;
-  const summary = ({ id, title, cols, rows, inMode }) => ({
+  const summary = ({ id, title, cols, rows, inMode, mission }) => ({
     id, title, cols, rows, inMode,
+    ...(mission ? { mission } : {}),
     attachCommand: `env -u TMUX -u TMUX_PANE tmux -u -S ${shellQuote(socketPath)} -f /dev/null attach-session -t ${shellQuote(`=ponte_${id}`)}`,
   });
 
@@ -332,29 +341,45 @@ export function createTerminals(dataDir, options = {}) {
 
   // One new tmux session: a shell, or `program args` through the agent
   // launcher, in the folder `directory()` resolves, numbered 1-4.
-  function spawnSession({ cols, rows, program, args, label, directory: resolveDirectory, agentTitle, typed }) {
+  function spawnSession({ cols, rows, program, args, label, directory: resolveDirectory, agentTitle, typed, mission }) {
       return run(async available => {
         if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
-        await sessions();
+        if (mission && !requestPattern.test(mission.requestId || '')) throw new ApiError(400, 'INVALID_MISSION');
+        const current = await sessions();
+        const fingerprint = mission && createHash('sha256').update(JSON.stringify(mission)).digest('hex');
+        const previous = mission && current.find(item => item.mission?.requestId === mission.requestId);
+        if (previous) {
+          if (previous.mission.fingerprint !== fingerprint) throw new ApiError(409, 'MISSION_REQUEST_CONFLICT');
+          return summary(previous);
+        }
         if (liveSessionCount >= TERMINAL_LIMIT) throw new ApiError(409, 'TERMINAL_LIMIT_REACHED');
-        const directory = await resolveDirectory();
+        if (mission) mission = await missions.validate(mission);
+        const cwd = await resolveDirectory();
         if (program && !await exists(program, env)) throw new ApiError(503, 'AGENT_UNAVAILABLE', { agent: agentTitle });
-        const id = randomBytes(12).toString('hex');
+        const id = mission ? createHash('sha256').update(mission.requestId).digest('hex').slice(0, 24) : randomBytes(12).toString('hex');
         // One number per slot, whatever runs in it: Claude 1, Terminal 2, Codex 3.
         const number = [1, 2, 3, 4].find(number => !registry.some(item => item.title.endsWith(` ${number}`)));
-        const title = `${label} ${number}`;
-        const launch = program ? ['--', ...agentLauncher, program, ...args] : [];
+        const title = mission ? mission.prompt.replace(/\s+/g, ' ').trim().slice(0, 100) : `${label} ${number}`;
+        const files = mission && missionFiles(directory, id);
+        if (mission) {
+          // A persisted launch receipt prevents an uncertain server restart from
+          // launching the same inference again, even before registry.save().
+          try { await writeFile(files.config, JSON.stringify({ ...mission, files }), { mode: 0o600, flag: 'wx' }); }
+          catch (error) { if (error.code === 'EEXIST') throw new ApiError(409, 'MISSION_LAUNCH_UNCERTAIN'); throw error; }
+        }
+        const launch = mission ? ['--', process.execPath, missionWorker, files.config] : program ? ['--', ...agentLauncher, program, ...args] : [];
+        const metadata = mission && { machine: mission.machine, harness: mission.harness, model: mission.model, provider: mission.provider, directory: mission.directory, requestId: mission.requestId, fingerprint, createdAt: Date.now(), origin: 'manual' };
         let pane;
         try {
           const output = await command([
             'start-server', ';', 'set-option', '-g', 'set-clipboard', 'off',
             ';', 'set-option', '-g', 'history-limit', '1000', ';', 'set-option', '-g', 'status', 'off',
-            ';', 'new-session', '-d', '-P', '-F', format, '-s', `ponte_${id}`, '-n', 'terminal', '-c', directory, '-x', String(cols), '-y', String(rows), ...launch,
+            ';', 'new-session', '-d', '-P', '-F', format, '-s', `ponte_${id}`, '-n', 'terminal', '-c', cwd, '-x', String(cols), '-y', String(rows), ...launch,
           ]);
           const parsed = parsePanes(output);
           [pane] = parsed;
           if (parsed.length !== 1 || pane.name !== `ponte_${id}`) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
-          registry.push({ id, title, paneId: pane.paneId, windowId: pane.windowId });
+          registry.push({ id, title, paneId: pane.paneId, windowId: pane.windowId, ...(metadata ? { mission: metadata } : {}) });
           await save();
           // A shell's first line is typed like the composer does; the pty holds
           // it until the shell reads its input, then Enter runs it.
@@ -364,11 +389,12 @@ export function createTerminals(dataDir, options = {}) {
           await discardNewSession(id);
           throw error;
         }
-        return summary({ id, title, ...pane });
+        return summary({ id, title, ...pane, ...(metadata ? { mission: { ...metadata, status: 'starting' } } : {}) });
       });
   }
 
   return {
+    missionCatalog(machine) { return missions.catalog(machine); },
     // The most recently changed project folders, by name only, for the phone
     // to offer as the new session's folder. It never needs tmux.
     async projects() {
@@ -380,10 +406,14 @@ export function createTerminals(dataDir, options = {}) {
       return { projects: dated.filter(Boolean).sort((a, b) => b.changed - a.changed || a.name.localeCompare(b.name)).slice(0, PROJECT_LIMIT).map(item => item.name), hosts: sshHosts };
     },
     list() {
-      return run(async available => ({ available, sessions: available ? (await sessions(false)).filter(item => item.valid).map(summary) : [], limit: TERMINAL_LIMIT }), 'read');
+      return run(async available => ({ available, sessions: available ? (await sessions(false)).filter(item => item.valid || item.mission).map(summary) : [], limit: TERMINAL_LIMIT }), 'read');
     },
     create(value) {
-      const { cols, rows } = dimensions(value, ['agent', 'prompt', 'project', 'host']);
+      const { cols, rows } = dimensions(value, ['agent', 'prompt', 'project', 'host', 'mission']);
+      if (value.mission) {
+        if (Object.keys(value).some(k => !['cols', 'rows', 'mission'].includes(k))) throw new ApiError(400, 'INVALID_MISSION');
+        return spawnSession({ cols, rows, mission: value.mission, directory: async () => shellDirectory });
+      }
       const start = sessionStart(value, sshHosts);
       const { program } = agents[start.agent];
       const args = start.host ? [start.host] : start.prompt === undefined ? [] : [start.prompt];
@@ -410,7 +440,16 @@ export function createTerminals(dataDir, options = {}) {
     // alternate-screen flag; without it the answer is the plain text as always.
     read(id, options = {}) {
       validateId(id);
+      return (async () => {
+      await run(async () => {}, 'read');
       const since = typeof options.since === 'string' && hashPattern.test(options.since) ? options.since : null;
+      if (registry.some(item => item.id === id && item.mission)) return run(async () => {
+        const item = (await sessions(false)).find(item => item.id === id);
+        let text = '';
+        try { text = await readFile(missionFiles(directory, id).output, 'utf8'); } catch {}
+        const hash = createHash('sha256').update(text + JSON.stringify(item.mission)).digest('base64url').slice(0, 22);
+        return { ...summary(item), hash, ...(since === hash ? { unchanged: true } : { text }) };
+      }, 'read');
       if (options.format === 'ansi') return readAnsi(id, since);
       return run(async available => {
         if (!available) throw new ApiError(503, 'TERMINAL_UNAVAILABLE');
@@ -440,10 +479,11 @@ export function createTerminals(dataDir, options = {}) {
         const hash = createHash('sha256').update(text).digest('base64url').slice(0, 22);
         return since === hash ? { ...summary(item), hash, unchanged: true } : { ...summary(item), hash, text };
       }, 'read');
+      })();
     },
     input(id, value) {
       validateId(id);
-      fields(value, ['text', 'key', 'enter'], 'INVALID_TERMINAL_INPUT');
+      fields(value, ['text', 'key', 'enter', 'requestId'], 'INVALID_TERMINAL_INPUT');
       const textInput = Object.hasOwn(value, 'text');
       const keyInput = Object.hasOwn(value, 'key');
       // Exactly one of text/key; `enter` is an optional flag that goes with text
@@ -456,6 +496,20 @@ export function createTerminals(dataDir, options = {}) {
       if (keyInput && (typeof value.key !== 'string' || !Object.hasOwn(keys, value.key))) throw new ApiError(400, 'KEY_NOT_ALLOWED');
       return run(async available => {
         const item = await target(id, available);
+        if (item.mission) {
+          if (!textInput || value.enter !== true || !requestPattern.test(value.requestId || '')) throw new ApiError(400, 'INVALID_MISSION');
+          const files = missionFiles(directory, id);
+          const live = JSON.parse(await readFile(files.state, 'utf8'));
+          if (live.handled?.includes(value.requestId)) return { ok: true, duplicate: true };
+          if (live.status !== 'ready' || !live.nativeId) throw new ApiError(409, 'MISSION_NOT_READY');
+          let queued;
+          try { queued = JSON.parse(await readFile(files.inbox, 'utf8')); } catch {}
+          if (queued?.requestId === value.requestId) return { ok: true, duplicate: true };
+          if (queued) throw new ApiError(409, 'MISSION_NOT_READY');
+          await writeFile(files.inbox + '.new', JSON.stringify({ prompt: value.text, requestId: value.requestId }), { mode: 0o600 });
+          await rename(files.inbox + '.new', files.inbox);
+          return { ok: true };
+        }
         if (item.inMode) throw new ApiError(409, 'TERMINAL_IN_COPY_MODE');
         if (textInput) await pasteText(item, value.text, value.enter === true);
         else await sendToPane(item, ['send-keys', '-t', item.paneId, keys[value.key]]);

@@ -1,4 +1,10 @@
 export const messages = {
+  INVALID_MISSION: { en: 'Check the mission, destination and model before starting.', pt: 'Confira missão, destino e modelo antes de iniciar.' },
+  MISSION_OPTION_UNAVAILABLE: { en: 'This harness/model is not configured on the selected machine.', pt: 'Este harness/modelo não está configurado na máquina selecionada.' },
+  MISSION_DESTINATION_UNAVAILABLE: { en: 'Cannot reach the selected machine or read its capabilities. No fallback was used.', pt: 'Não foi possível acessar a máquina selecionada ou ler suas capacidades. Nenhum destino alternativo foi usado.' },
+  MISSION_REQUEST_CONFLICT: { en: 'This request already belongs to another mission. Refresh before starting again.', pt: 'Este pedido já pertence a outra missão. Atualize antes de iniciar novamente.' },
+  MISSION_LAUNCH_UNCERTAIN: { en: 'A launch was already attempted. Check existing sessions before creating another mission.', pt: 'Já houve uma tentativa de início. Confira as sessões existentes antes de criar outra missão.' },
+  MISSION_NOT_READY: { en: 'Wait for the current response or inspect the session error before continuing.', pt: 'Aguarde a resposta atual ou confira o erro da sessão antes de continuar.' },
   "INVALID_AGENT_QUERY": {
     "en": "Invalid conversation cursor or wait time.",
     "pt": "Cursor de conversa ou tempo de espera inválido."
