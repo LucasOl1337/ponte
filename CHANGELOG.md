@@ -2,6 +2,14 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.52 (2026-11-14)
+
+- **Dev por missões e sessões.** Composer principal de texto/voz revisável, máquina, harness, modelo/provedor e diretório explícitos antes de iniciar. Catálogo vem da configuração real do destino, com validação no servidor e sem fallback para outra máquina. Preferências e rascunho sobrevivem ao retorno e reload.
+- **Uma fonte, a de Terminais.** IDs estáveis e requisições idempotentes evitam duplo lançamento. Missões mostram estado, modelo efetivo quando informado pelo harness, atividade e saída persistida. Terminais encaminha a continuação estruturada ao Dev, sem interpretar texto como shell. Encerrar mantém o histórico da missão.
+- **Jcode sem depender do modelo do daemon compartilhado.** Execução in-process com seleção explícita, retomada pelo ID nativo e conferência do modelo/provedor. Prova local inofensiva respondeu `PONTE_OK` em dois turnos com o mesmo ID, `cx/gpt-6-astra-xhigh` e `9router-sherlocker` confirmados por evento nativo e snapshot. Nenhuma missão de prova em PCs de terceiros.
+- Provas de criação, duplicidade, opção indisponível, destino sem fallback, reconexão, saída persistida, sessão encerrada versus falha, ditado editável e rascunho. Browser na bancada confirmou retorno e reload da sessão real. Capturas em 412x915, 1366x768 e 900x1000, crítica e ajuste do CTA. Áudio sintético passou pelo endpoint de transcrição existente, sem usar microfone do PC. Microfone físico e prova no Redmi seguem janela coordenada.
+- Release web/server sobre alpha.51, preservando Início, Tela e RD. Sem novo asset fora da allowlist do APK alpha.49, sem alteração de configuração privada ou instalação de harness.
+
 ## 0.1.0-alpha.51 (2026-11-14)
 
 - **Tela por monitor, com Janelas no contexto.** Seletor explícito por posição/output, workspaces pelo vínculo do compositor, busca/filtro de janelas na Tela e alias `#janelas`. Monitor removido interrompe controle e conserva o último quadro identificado. Escolher preview não envia foco ao PC, ações explícitas validam o monitor esperado.
