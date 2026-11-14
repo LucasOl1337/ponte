@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
-  <meta name="theme-color" content="#151714">
+  <meta name="theme-color" content="#0F1210">
   <meta name="description" content="Your Omarchy within reach. Control your PC, manage windows and send audio from your phone." data-i18n-content="Seu Omarchy ao alcance da mão. Controle seu PC, organize janelas e envie áudio pelo celular.">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon-192.png">
@@ -57,6 +57,7 @@
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
     <symbol id="i-rotate" viewBox="0 0 24 24"><rect x="4" y="3" width="11" height="18" rx="2"/><path d="M19 8a4 4 0 0 1 2 3.5V17a2 2 0 0 1-2 2h-3"/><path d="M17.5 16.5 16 19l2.5 1.5"/></symbol>
     <symbol id="i-monitors" viewBox="0 0 24 24"><rect x="2" y="5" width="13" height="9" rx="1.5"/><path d="M9 14v3M6 17h6"/><path d="M15 9h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-6"/><path d="m17 15 2 2-2 2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></symbol>
   </defs></svg>
   <div class="app-shell">
@@ -83,9 +84,8 @@
       </section>
       <div id="paired-app" hidden>
         <section id="page-inicio" class="page" data-page="inicio">
-          <div class="home-heading"><h1 data-i18n="Suas máquinas">Your machines</h1><p data-i18n="Escolha uma máquina para ver a tela.">Choose a machine to view its screen.</p></div>
+          <div class="home-heading"><div><h1 data-i18n="Suas máquinas">Your machines</h1><p id="home-machines-status" role="status" aria-live="polite"></p></div><button type="button" class="icon-button subtle" id="home-machines-refresh" aria-label="Refresh machines" data-i18n-aria-label="Atualizar máquinas"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button></div>
           <section id="home-machines" class="home-machines" aria-label="Machines" data-i18n-aria-label="Máquinas">
-            <div class="home-machines-heading"><p id="home-machines-status" role="status" aria-live="polite"></p><button type="button" class="icon-button subtle" id="home-machines-refresh" aria-label="Refresh machines" data-i18n-aria-label="Atualizar máquinas"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button></div>
             <div id="home-machines-list" class="home-machines-list"></div>
             <p id="home-machines-error" class="inline-error" role="alert" hidden></p>
           </section>

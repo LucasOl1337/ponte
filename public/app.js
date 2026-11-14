@@ -267,17 +267,20 @@ function renderHomeMachines() {
   const machines = homeMachines();
   $('#home-machines-refresh').disabled = devicesBusy || machineSelection !== null;
   $('#home-machines-list').setAttribute('aria-busy', String(machineSelection !== null));
-  $('#home-machines-status').textContent = machineSelection !== null ? t('Conectando à máquina…') : devicesBusy ? t('Atualizando máquinas…') : t('Máquina atual: {name}', {name:targetName() || t('Conectando…')});
+  const reachable = machines.filter(device => device.status === 'online').length, using = targetName() || t('Conectando…');
+  $('#home-machines-status').textContent = machineSelection !== null ? t('Conectando à máquina…') : devicesBusy ? t('Atualizando máquinas…') : machines.length ? t('{online} de {total} online · {name} em uso', {online:reachable,total:machines.length,name:using}) : t('Máquina atual: {name}', {name:using});
   const error = machineSelectionError || (devicesError ? t('Não foi possível atualizar as máquinas. Tente novamente.') : '');
   $('#home-machines-error').hidden = !error;
   $('#home-machines-error').textContent = error;
   $('#home-machines-list').innerHTML = machines.map(device => {
     const current = targetNode ? device.id === targetNode : device.self;
     const available = device.status !== 'offline' && device.can?.screen?.ok;
-    const label = available ? t('Ver tela') : device.status === 'offline' ? t('Offline') : device.can?.pair?.ok ? t('Conectar') : t('Aguardando conexão');
+    const pairable = !available && device.status !== 'offline' && device.can?.pair?.ok;
+    const label = available ? t('Ver tela') : device.status === 'offline' ? t('Indisponível') : pairable ? t('Conectar') : t('Aguardando conexão');
     const disabled = machineSelection !== null || (!available && !device.can?.pair?.ok);
-    const status = deviceWord('status', device.status);
-    return `<button type="button" class="home-machine${current ? ' current' : ''}" data-home-machine="${escaped(device.id)}" ${disabled ? 'disabled' : ''} ${current ? 'aria-current="true"' : ''} aria-label="${escaped(t('{action}: {name}', {action:label,name:device.name}))}">${icon('monitor')}<span class="home-machine-info"><strong>${escaped(device.name)}</strong><span><i class="device-dot ${escaped(device.status)}" aria-hidden="true"></i>${escaped(status)}${current ? ` · ${h('Atual')}` : ''}</span></span><span class="home-machine-action">${escaped(label)}</span>${icon('arrow')}</button>`;
+    const word = deviceWord('status', device.status);
+    const status = current && available ? t('Conectada agora') : device.status === 'offline' ? t('Offline') : word.charAt(0).toLocaleUpperCase(i18n.locale) + word.slice(1);
+    return `<button type="button" class="home-machine${current ? ' current' : ''}${available || pairable ? '' : ' off'}" data-home-machine="${escaped(device.id)}" ${disabled ? 'disabled' : ''} ${current ? 'aria-current="true"' : ''} aria-label="${escaped(t('{action}: {name}', {action:label,name:device.name}))}"><i class="device-dot ${escaped(device.status)}" aria-hidden="true"></i><span class="home-machine-info"><strong>${escaped(device.name)}</strong><span>${escaped(status)}</span></span><span class="home-machine-action">${escaped(label)}${available || pairable ? icon('chevron') : ''}</span></button>`;
   }).join('') || `<p class="home-machines-empty">${escaped(devicesBusy || !deviceList ? t('Procurando máquinas…') : t('Nenhuma máquina com tela disponível. Confira as conexões.'))}</p>`;
 }
 async function selectMachine(id, page = 'tela') {

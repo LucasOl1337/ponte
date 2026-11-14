@@ -5,6 +5,9 @@
   // Portuguese source messages are stable translation keys. English is the global default.
   const english = {
   "Conectar": "Connect",
+  "{online} de {total} online · {name} em uso": "{online} of {total} online · using {name}",
+  "Conectada agora": "Connected now",
+  "Indisponível": "Unavailable",
   "Suas máquinas": "Your machines",
   "Máquinas": "Machines",
   "Escolha uma máquina para ver a tela.": "Choose a machine to view its screen.",
