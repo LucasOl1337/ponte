@@ -123,8 +123,7 @@ test('Home disables offline screen machines, explains empty lists and uses exist
   h.run('deviceList.devices = []; renderMesh()');
   assert.match(h.el('#home-machines-list').textContent, /No machine with a screen available/);
   assert.equal(h.el('#home-machines-connect').disabled, false);
-  h.el('#home-machines-connect').click();
-  assert.equal(h.el('#home-tools').open, true);
+  assert.equal(h.el('#home-machines-connect').tagName, 'SUMMARY');
 });
 
 test('Home keeps the current target during a pending selection and ignores double taps', async () => {

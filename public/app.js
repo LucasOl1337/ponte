@@ -294,7 +294,7 @@ $('#home-machines-list').addEventListener('click', event => {
   else if (device?.can?.pair?.ok) void meshAction('mesh.pair', {peer:device.id});
 });
 $('#home-machines-refresh').addEventListener('click', () => { machineSelectionError = ''; void loadDevices({force:true, deep:true}); });
-$('#home-machines-connect').addEventListener('click', () => { $('#home-tools').open = true; $('#devices-card').scrollIntoView?.({block:'start'}); void loadDevices({force:true}); });
+$('#home-machines-connect').addEventListener('click', () => { void loadDevices({force:true}); });
 const meshSelf = () => deviceList?.home || meshInfo?.self || null;
 const meshPeer = id => (meshInfo?.peers || []).find(peer => peer.id === id) || null;
 const homeId = () => meshSelf()?.id || '';

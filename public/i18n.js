@@ -10,7 +10,7 @@
   "Escolha uma máquina para ver a tela.": "Choose a machine to view its screen.",
   "Atualizar máquinas": "Refresh machines",
   "Conexões e outros aparelhos": "Connections and other devices",
-  "Mais controles e conexões": "More controls and connections",
+  "Controles e conexões": "Controls and connections",
   "Conectando à máquina…": "Connecting to machine…",
   "Atualizando máquinas…": "Refreshing machines…",
   "Máquina atual: {name}": "Current machine: {name}",
