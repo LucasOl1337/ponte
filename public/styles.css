@@ -784,3 +784,72 @@ body[data-screen-keyboard=true] .screen-monitor-field{display:flex;order:-1}
   .screen-monitors{padding:0 0 12px}
   .screen-windows-panel{grid-column:2;grid-row:2;max-height:none;padding:0 16px 16px}
 }
+
+/* Dev: Nova missão em grade 2×2 e as sessões sempre à vista, com a conta contra
+   o teto de quatro. No celular a lista fica sob o formulário; a partir de
+   960px vira a coluna da esquerda e o seletor da barra sai. */
+.dev-page{--dev-bg:#0B0E0C;--dev-fg:#DCE3D8;gap:8px;padding:8px 16px calc(var(--nav-h) + 8px + env(safe-area-inset-bottom));background:var(--bg)}
+.dev-bar{gap:8px}
+.dev-bar select{height:44px;padding:0 12px;border:1px solid var(--line2);border-radius:12px;background:var(--surface);font-size:14px}
+.dev-bar #dev-new{flex:none;padding:0 12px;border-radius:12px;font-size:14px}
+.dev-creating .dev-bar{display:none}
+.dev-tool{border-radius:12px;font-size:14px;font-weight:600}
+.dev-size{font-size:12px}
+.dev-context{padding:0;font-size:14px;line-height:1.4}
+.dev-screen{border-radius:14px}
+.dev-empty{border-color:var(--line2);border-radius:14px}
+.dev-live{color:var(--ink)}
+.dev-cursor{color:var(--ink)}
+
+.dev-new-panel{gap:8px;padding:0;border:0;border-radius:0;background:none}
+.dev-new-panel h2{margin:4px 0;font-size:22px;font-weight:600;letter-spacing:0}
+.dev-new-panel .hint{font-size:14px;line-height:1.4;color:var(--muted)}
+.dev-new-panel .hint:empty{display:none}
+.dev-config-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.dev-config-wide{grid-column:auto}
+.dev-config-grid label{gap:0;padding:8px 12px 2px;border:1px solid var(--border);border-radius:14px;background:var(--surface);font-size:14px;line-height:1.4}
+.dev-config-grid label:focus-within{border-color:var(--lime)}
+.dev-config-grid input,.dev-config-grid select{height:40px;min-height:40px;padding:0;border:0;border-radius:0;background:none;outline:none;font-size:16px;text-overflow:ellipsis}
+.dev-config-grid input{font-family:ui-monospace,"JetBrains Mono","DejaVu Sans Mono",monospace;font-size:14px}
+.dev-config-grid select option{background:var(--surface);color:var(--text)}
+
+.dev-composer{gap:8px}
+.dev-composer>label{font-size:14px}
+#dev-input{padding:12px 16px;border-color:var(--line2);border-radius:14px;background:var(--surface);font-size:16px;line-height:1.5}
+#dev-input:focus{border-color:var(--lime);outline:none}
+.dev-creating .dev-composer{flex:none;min-height:0}
+.dev-creating #dev-input{flex:none;min-height:120px;max-height:220px}
+.dev-actions{gap:8px}
+.dev-actions .dev-tool{width:48px;min-width:48px;height:48px;border:1px solid var(--line2);background:var(--surface)}
+.dev-actions .button.small{min-height:48px;border-radius:12px;font-size:14px}
+.dev-actions .button.primary{font-size:16px;font-weight:600}
+.dev-actions .button.primary:disabled{background:var(--surface2);color:var(--faint);opacity:1}
+
+.dev-missions{flex:none;border:0}
+.dev-creating .dev-missions{order:10}
+.dev-missions-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:12px 0 8px}
+.dev-missions-head h2{margin:0;font-size:16px;font-weight:600;letter-spacing:0}
+.dev-missions-head span{font-size:14px;color:var(--muted);white-space:nowrap}
+#dev-mission-list{display:grid;gap:8px;max-height:none;overflow:visible}
+.dev-mission-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:12px;align-items:center;min-height:64px;padding:10px 12px 10px 16px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
+.dev-mission-row:hover{background:var(--surface2)}
+.dev-mission-row.selected{border-color:var(--lime);background:var(--lime-1)}
+.dev-mission-row .device-dot{grid-column:1;grid-row:1/span 3;width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.dev-mission-row .device-dot.online{background:var(--lime);box-shadow:0 0 0 3px var(--lime-1)}
+.dev-mission-row svg{grid-column:3;grid-row:1/span 3;width:18px;height:18px;color:var(--faint)}
+.dev-mission-row strong,.dev-mission-row span,.dev-mission-row small{grid-column:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
+.dev-mission-row strong{grid-row:1;font-size:16px;font-weight:600;line-height:1.4}
+.dev-mission-row span{grid-row:2;font-size:14px;line-height:1.4}
+.dev-mission-row small{grid-row:3;font-size:14px;line-height:1.4}
+@media(max-width:959px),(max-height:600px){
+  .dev-page:not(.dev-creating) .dev-missions{display:none}
+}
+@media(min-width:701px) and (min-height:601px){
+  .dev-page{left:88px;padding:16px 24px}
+}
+@media(min-width:960px) and (min-height:601px){
+  .dev-page{padding-left:344px}
+  .dev-page .dev-missions{position:absolute;left:0;top:0;bottom:0;width:320px;padding:8px 16px 16px;border-right:1px solid var(--border);overflow-y:auto}
+  .dev-bar select{display:none}
+  .dev-creating>.dev-new-panel,.dev-creating>.dev-composer,.dev-creating>.dev-status{width:100%;max-width:640px}
+}

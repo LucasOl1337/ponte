@@ -36,6 +36,7 @@
   "Nova missão": "New mission",
   "Carregando…": "Loading…",
   "Suas sessões": "Your sessions",
+  "{count} de 4 ativas": "{count} of 4 active",
   "O que vamos fazer?": "What shall we work on?",
   "Máquina": "Machine",
   "Este nó Ponte": "This Ponte node",

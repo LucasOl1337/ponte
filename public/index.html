@@ -174,10 +174,10 @@
             <button type="button" class="dev-tool dev-font" id="dev-font-down" aria-label="Smaller text" data-i18n-aria-label="Texto menor">A−</button><button type="button" class="dev-tool dev-font" id="dev-font-up" aria-label="Larger text" data-i18n-aria-label="Texto maior">A+</button>
             <button id="dev-size" class="dev-size" type="button" disabled title="Fit the session to the phone" data-i18n-title="Ajustar a sessão ao celular"></button>
           </div>
-          <details class="dev-missions" id="dev-missions"><summary id="dev-missions-count" data-i18n="Suas sessões">Your sessions</summary><div id="dev-mission-list"></div></details>
+          <section class="dev-missions" id="dev-missions" aria-labelledby="dev-missions-title"><div class="dev-missions-head"><h2 id="dev-missions-title" data-i18n="Sessões">Sessions</h2><span id="dev-missions-count"></span></div><div id="dev-mission-list"></div></section>
           <p id="dev-context" class="dev-context" role="status" hidden></p>
           <div id="dev-new-panel" class="dev-new-panel" hidden>
-            <h2 data-i18n="O que vamos fazer?">What shall we work on?</h2>
+            <h2 data-i18n="Nova missão">New mission</h2>
             <div class="dev-config-grid">
               <label><span data-i18n="Máquina">Machine</span><select id="dev-machine"><option value="self" data-i18n="Este nó Ponte">This Ponte node</option></select></label>
               <label><span>Harness</span><select id="dev-harness" disabled><option value="" data-i18n="Carregando…">Loading…</option></select></label>

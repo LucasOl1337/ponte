@@ -4426,8 +4426,9 @@ function devRenderSessions() {
   $('#dev-size').hidden = devCreating || !!mission;
   $('#dev-context').hidden = devCreating || !session;
   $('#dev-context').textContent = session ? `${devMissionSummary(session)}${mission ? ` · ${mission.directory}` : ''}` : '';
-  $('#dev-missions-count').textContent = t('Suas sessões') + ` (${devSessions.length})`;
-  $('#dev-mission-list').innerHTML = devSessions.map(s => `<button type="button" class="dev-mission-row${s.id === devId ? ' selected' : ''}" data-dev-session="${escaped(s.id)}"><strong>${escaped(s.title)}</strong><span>${escaped(devMissionSummary(s))}</span>${s.mission ? `<small>${escaped(new Date(s.mission.updatedAt || s.mission.createdAt).toLocaleTimeString(i18n.locale, {hour:'2-digit',minute:'2-digit',timeZone:'America/Sao_Paulo'}))} · ${escaped(s.mission.origin === 'manual' ? t('Minha missão') : t('Automática'))}</small>` : ''}</button>`).join('');
+  // The count is against the same ceiling of four live terminals the Store enforces.
+  $('#dev-missions-count').textContent = t('{count} de 4 ativas', {count: devSessions.filter(s => s.mission?.status !== 'ended').length});
+  $('#dev-mission-list').innerHTML = devSessions.map(s => `<button type="button" class="dev-mission-row${s.id === devId && !devCreating ? ' selected' : ''}" data-dev-session="${escaped(s.id)}"><i class="device-dot${s.mission?.status === 'ended' ? '' : ' online'}" aria-hidden="true"></i><svg aria-hidden="true"><use href="#i-chevron"/></svg><strong>${escaped(s.title)}</strong><span>${escaped(devMissionSummary(s))}</span>${s.mission ? `<small>${escaped(new Date(s.mission.updatedAt || s.mission.createdAt).toLocaleTimeString(i18n.locale, {hour:'2-digit',minute:'2-digit',timeZone:'America/Sao_Paulo'}))} · ${escaped(s.mission.origin === 'manual' ? t('Minha missão') : t('Automática'))}</small>` : ''}</button>`).join('');
   keyBarEnable('dev', !!devId && !mission && !devCreating);
   keyBarUpdate('dev', sessionContext(devSessions.find(session => session.id === devId)), null);
   $('#dev-font-down').disabled = devFont <= DEV_FONT_MIN; $('#dev-font-up').disabled = devFont >= DEV_FONT_MAX;
@@ -4663,7 +4664,7 @@ $('#dev-session').addEventListener('change', event => { devSelect(event.target.v
 $('#dev-size').addEventListener('click', () => devRefit(true));
 $('#dev-status').addEventListener('click', () => devStatus(''));
 $('#dev-new').addEventListener('click', devNewMission);
-$('#dev-mission-list').addEventListener('click', event => { const row = event.target.closest('[data-dev-session]'); if (row) { devSelect(row.dataset.devSession); $('#dev-missions').open = false; updateDevNavigation(); } });
+$('#dev-mission-list').addEventListener('click', event => { const row = event.target.closest('[data-dev-session]'); if (row) { devSelect(row.dataset.devSession); updateDevNavigation(); } });
 $('#dev-machine').addEventListener('change', () => { savePreference(devPreference('machine'), $('#dev-machine').value); devLoadProjects(true); });
 $('#dev-harness').addEventListener('change', () => { savePreference(devPreference(`${$('#dev-machine').value}-harness`), $('#dev-harness').value); devRenderAgents(); });
 $('#dev-model').addEventListener('change', () => { const machine = $('#dev-machine').value, harness = $('#dev-harness').value, model = devCatalog?.harnesses.find(h => h.id === harness)?.models[Number($('#dev-model').value)]; if (model) savePreference(devPreference(`${machine}-${harness}-model`), `${model.provider}|${model.id}`); });
