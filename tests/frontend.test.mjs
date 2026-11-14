@@ -314,6 +314,45 @@ test('1x frame: an ultrawide in portrait fits clear of the controls without shri
   assert.ok((xb.min + xb.max) / 2 + wide.w <= landscapeRail.left, 'image ends left of the rail');
 });
 
+// The case on a phone lying down (844x390 viewport, a 1920x1080 monitor with
+// workspaces 1 and 2): the button rail hugs the right edge and used to sit on
+// top of workspace 2. Boxes are the ones measured in the lab.
+test('landscape phone: the workspace strip stands beside the button rail and the image keeps its height', async () => {
+  const m = mappingContext();
+  const plain = value => JSON.parse(JSON.stringify(value));
+  const preview = { left: 0, top: 56, width: 844, height: 334 };
+  const rail = { left: 790, top: 44, width: 44, height: 338 };
+  const stripColumn = { left: 728, top: 64, width: 52, height: 100 };
+  const overlaps = (a, b) => a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
+  const workspaceTwo = { left: stripColumn.left + 4, top: stripColumn.top + 52, width: 44, height: 44 };
+  assert.equal(overlaps(workspaceTwo, rail), false, 'workspace 2 is clear of the rail');
+  assert.ok(stripColumn.left + stripColumn.width <= rail.left, 'the strip ends left of the rail');
+  const frame = plain(m.screenFrame(preview, { w: 1920, h: 1080 }, [rail, stripColumn]));
+  assert.deepEqual([Math.round(frame.w), Math.round(frame.h)], [594, 334], 'the image still fills the preview height');
+  const bounds = m.screenPanBounds(preview, frame.fit, frame.w, frame.h);
+  assert.ok((bounds.x.min + bounds.x.max) / 2 + frame.w <= stripColumn.left, 'the image ends left of the strip');
+  // The same strip laid as a row beside the rail is a wide bar on the top
+  // edge: the image gives up that band and comes out smaller (476x268 here).
+  const stripRow = { left: 680, top: 64, width: 100, height: 52 };
+  const shrunk = plain(m.screenFrame(preview, { w: 1920, h: 1080 }, [rail, stripRow]));
+  assert.ok(shrunk.h < frame.h - 40, `a row strip costs image height (${Math.round(shrunk.w)}x${Math.round(shrunk.h)})`);
+  // The stylesheet is what puts the strip there, only on a short landscape
+  // screen and only while the typing bar is closed.
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const start = css.lastIndexOf('@media(orientation:landscape) and (max-height:600px){');
+  const block = css.slice(start, css.indexOf('\n}\n', start));
+  assert.match(block, /\.screen-fabs\{position:fixed;right:10px;/);
+  assert.match(block, /\.screen-fab,\.screen-mic,\.screen-fabs \.shortcut-super\{width:44px;height:44px;/);
+  assert.match(block, /body:not\(\[data-screen-composer=true\]\) \.screen-workspaces\{right:64px;flex-direction:column;/);
+  assert.match(css, /\.screen-workspace\{min-width:44px;height:44px;/);
+  // With the typing bar open the rail becomes a row; it must sit above the bar
+  // and below the strip, so the bar goes down to the edge the hidden nav frees.
+  assert.match(block, /body\[data-current-page=tela\]\[data-screen-composer=true\]:not\(\[data-keyboard-open=true\]\) \.screen-composer\{bottom:env\(safe-area-inset-bottom\)\}/);
+  const stripTop = { left: 736, top: 64, width: 100, height: 52 };
+  const railRow = { left: 596, top: 165, width: 238, height: 44 };
+  assert.equal(overlaps(stripTop, railRow), false, 'with the typing bar open the row sits under the strip');
+});
+
 test('zoomed pan overscrolls by the control insets so no PC pixel is stuck under a button', () => {
   const m = mappingContext();
   const insets = { top: 58, right: 0, bottom: 75, left: 0 };

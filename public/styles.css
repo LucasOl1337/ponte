@@ -750,8 +750,16 @@ body[data-screen-keyboard=true] .screen-monitor-field{display:flex;order:-1}
   .screen-scroll .screen-fab,.screen-scroll .screen-fab+.screen-fab{border-radius:0;background:none;box-shadow:none}
   .screen-scroll .screen-fab+.screen-fab{border-top:1px solid var(--line2)}
   #screen-switch-monitor{display:grid}
+  /* A coluna de botões ocupa a borda direita. A faixa de workspaces vira coluna
+     ao lado dela, na margem que a imagem deixa livre, sem ficar sob os botões. */
+  body:not([data-screen-composer=true]) .screen-workspaces{right:64px;flex-direction:column;max-width:none;max-height:calc(100% - 16px);overflow-x:hidden;overflow-y:auto}
   body[data-screen-composer=true] .screen-fabs,body[data-screen-composer=true] .screen-scroll{flex-direction:row}
   body[data-screen-composer=true] .screen-scroll .screen-fab+.screen-fab{border-top:0;border-left:1px solid var(--line2)}
+  /* Deitado a navegação some, então o compositor desce até a borda. A altura
+     que sobra deixa a linha de botões abaixo da faixa de workspaces. */
+  body[data-current-page=tela][data-screen-composer=true]:not([data-keyboard-open=true]) .screen-composer{bottom:env(safe-area-inset-bottom)}
+  body[data-current-page=tela][data-screen-composer=true]:not([data-screen-keyboard=true]) .viewer-page{bottom:calc(env(safe-area-inset-bottom) + var(--screen-composer-h,0px))}
+  body[data-current-page=tela][data-screen-composer=true]:not([data-keyboard-open=true]) .screen-fabs{bottom:calc(8px + env(safe-area-inset-bottom) + var(--screen-composer-h,0px))}
 }
 /* Janela larga: a Tela ocupa o espaço ao lado do trilho. */
 @media(min-width:701px) and (min-height:601px){
