@@ -853,3 +853,5 @@ body[data-screen-keyboard=true] .screen-monitor-field{display:flex;order:-1}
   .dev-bar select{display:none}
   .dev-creating>.dev-new-panel,.dev-creating>.dev-composer,.dev-creating>.dev-status{width:100%;max-width:640px}
 }
+/* Sessão aberta: o campo vazio fica baixo para a saída ter a altura; cresce ao digitar. */
+.dev-page:not(.dev-creating) #dev-input:placeholder-shown{max-height:88px}
