@@ -169,7 +169,7 @@
       const mods = MODIFIERS.map(name => `<button type="button" class="shortcut-mod" data-mod="${name}" aria-pressed="${draft.has(name)}">${name}</button>`).join('');
       const keys = KEYS.map(key => `<option value="${key}">${escape(KEY_LABELS[key] || key)}</option>`).join('');
       host.innerHTML =
-        `<button type="button" class="shortcut-super" data-shortcut-super aria-expanded="${!!open}" aria-controls="shortcut-palette"><span class="shortcut-glyph" aria-hidden="true">⌘</span> <span>Atalhos</span></button>` +
+        `<button type="button" class="shortcut-super" data-shortcut-super aria-label="Atalhos" aria-expanded="${!!open}" aria-controls="shortcut-palette"><span class="shortcut-glyph" aria-hidden="true">⌘</span> <span>Atalhos</span></button>` +
         `<div id="shortcut-palette" class="shortcut-palette" role="dialog" aria-label="Atalhos do sistema"${open ? '' : ' hidden'}>` +
         `<div class="shortcut-heading"><strong>Atalhos</strong><button type="button" data-shortcut-new>Novo</button><button type="button" data-shortcut-close aria-label="Fechar atalhos">Fechar</button></div>` +
         `<p class="shortcut-status" data-shortcut-status aria-live="polite"></p>` +
@@ -214,7 +214,10 @@
         const item = catalog.items().find(item => item.id === data.edit);
         editing = item ? { ...item, ...parseCombo(item.combo) } : { label: 'Novo atalho', key: 'F' };
         draft.clear(); (editing.modifiers || ['Super']).forEach(m => draft.add(m));
-        render(true); host.querySelector('[data-shortcut-name]').focus(); return;
+        // A new shortcut opens with the placeholder name selected, so the first
+        // key replaces it. An existing name is never selected: typing there
+        // would wipe a name the person chose.
+        render(true); const name = host.querySelector('[data-shortcut-name]'); name.focus(); if (!item) name.select?.(); return;
       }
       if (flag('data-shortcut-cancel')) { editing = null; render(true); return; }
       if (flag('data-shortcut-remove')) {

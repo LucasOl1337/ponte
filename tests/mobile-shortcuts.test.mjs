@@ -164,6 +164,28 @@ test('Super button opens a palette; a tap sends one keyboard.combo and never typ
   assert.ok(sent.every(action => action.type === 'keyboard.combo'));
 });
 
+// On the phone the field opened with the caret before "Novo atalho": typing
+// "teste" gave "testeNovo atalho". The placeholder name is selected so the
+// first key replaces it; a name the person already chose is left alone.
+test('a new shortcut opens with its placeholder name selected; editing an existing one never selects it', async () => {
+  const S = await loadShortcuts(), store = new Map();
+  const host = makeDocument('<html><body><div id="host"></div></body></html>').getElementById('host');
+  S.mountShortcuts(host, { send: async () => {}, target: () => null, storage: { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) } });
+  host.querySelector('[data-shortcut-new]').click();
+  let name = host.querySelector('[data-shortcut-name]');
+  assert.equal(name.value, 'Novo atalho');
+  assert.equal(name.ownerDocument.activeElement, name, 'the name field has focus');
+  assert.equal(name.selected, true, 'the placeholder name is selected');
+  host.querySelector('[data-shortcut-cancel]').click();
+  host.querySelector('[data-edit="fullscreen"]').click();
+  name = host.querySelector('[data-shortcut-name]');
+  assert.equal(name.value, 'Tela cheia');
+  assert.equal(name.ownerDocument.activeElement, name);
+  assert.notEqual(name.selected, true, 'an existing name is not selected');
+  // The ⌘ button names itself: as an icon-only round button it has no visible text.
+  assert.equal(host.querySelector('[data-shortcut-super]').getAttribute('aria-label'), 'Atalhos');
+});
+
 test('editor edits/removes, rejects duplicates and reports storage or send failures honestly', async () => {
   const S = await loadShortcuts(), store = new Map();
   const host = makeDocument('<html><body><div id="host"></div></body></html>').getElementById('host');

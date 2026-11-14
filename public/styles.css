@@ -745,7 +745,10 @@ body[data-screen-keyboard=true] .screen-monitor-field{display:flex;order:-1}
   .screen-monitor-field{display:flex;order:-1}
   .screen-fabs{position:fixed;right:10px;bottom:8px;z-index:45;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0;border:0;background:none}
   .screen-fab,.screen-mic,.screen-fabs .shortcut-super{width:44px;height:44px;min-height:44px;border-radius:50%;background:rgba(22,26,23,.94);box-shadow:0 0 0 1px var(--line2),0 6px 24px #0008;color:var(--text)}
-  .screen-fabs .screen-fab span,.screen-fabs .screen-mic span,.screen-fabs .shortcut-super span:not(.shortcut-glyph){display:none}
+  /* Só o ícone aparece, mas o rótulo continua na árvore de acessibilidade:
+     com display:none o leitor de tela do celular perdia o nome do botão. */
+  .screen-fabs .screen-fab span,.screen-fabs .shortcut-super span:not(.shortcut-glyph){position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+  .screen-fabs .screen-mic span{display:none}
   .screen-scroll{display:flex;flex-direction:column;gap:0;border-radius:22px;background:rgba(22,26,23,.94);box-shadow:0 0 0 1px var(--line2),0 6px 24px #0008;overflow:hidden}
   .screen-scroll .screen-fab,.screen-scroll .screen-fab+.screen-fab{border-radius:0;background:none;box-shadow:none}
   .screen-scroll .screen-fab+.screen-fab{border-top:1px solid var(--line2)}

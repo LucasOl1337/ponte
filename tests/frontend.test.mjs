@@ -389,6 +389,33 @@ test('landscape phone with 331px or 304px of usable height: the button rail fits
   assert.equal(html.split('id="screen-monitor-select"').length - 1, 1);
 });
 
+// Lying down the rail shows icons only. On the phone the accessibility tree
+// gave Rotate, Type text and Atalhos no name at all: their labels were removed
+// with display:none. They are now clipped out of sight instead, which keeps
+// the text in the tree, and every icon button also carries an aria-label.
+test('landscape phone: the icon-only rail keeps an accessible name on every button', async () => {
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const shortcuts = await readFile(new URL('../public/mobile-shortcuts.js', import.meta.url), 'utf8');
+  const start = css.lastIndexOf('@media(orientation:landscape) and (max-height:600px){');
+  const block = css.slice(start, css.indexOf('\n}\n', start));
+  const rule = /\.screen-fabs \.screen-fab span,\.screen-fabs \.shortcut-super span:not\(\.shortcut-glyph\)\{([^}]*)\}/.exec(block);
+  assert.ok(rule, 'the rail hides the labels of rotate, keyboard and shortcuts with one rule');
+  assert.doesNotMatch(rule[1], /display:none|visibility:hidden/, 'the label is not removed from the accessibility tree');
+  assert.match(rule[1], /position:absolute;width:1px;height:1px;/);
+  assert.match(rule[1], /clip:rect\(0,0,0,0\)/);
+  // No other rule of the short landscape block removes those labels again.
+  const removed = [...block.matchAll(/([^{}]*)\{[^}]*display:none[^}]*\}/g)].map(match => match[1]).filter(selector => /screen-fab span|shortcut-super span/.test(selector));
+  assert.deepEqual(removed, []);
+  // The text the tree reads comes from the existing translation keys.
+  const line = html.split('\n').find(text => text.includes('class="screen-fabs"'));
+  for (const [id, label, text] of [['screen-rotate', 'Forçar paisagem', 'Girar'], ['screen-keyboard', 'Digitar no PC', 'Digitar']]) {
+    const button = new RegExp(`<button id="${id}"[^>]*data-i18n-aria-label="${label}"[^>]*>.*?<span data-i18n="${text}">`).exec(line);
+    assert.ok(button, `${id} has an aria-label and a translated label`);
+  }
+  assert.match(shortcuts, /data-shortcut-super aria-label="Atalhos" aria-expanded=/);
+});
+
 test('zoomed pan overscrolls by the control insets so no PC pixel is stuck under a button', () => {
   const m = mappingContext();
   const insets = { top: 58, right: 0, bottom: 75, left: 0 };

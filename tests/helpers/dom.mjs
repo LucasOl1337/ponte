@@ -40,6 +40,7 @@ class Element extends Events {
   contains(node){while(node){if(node===this)return true;node=node.parentElement;}return false;}
   closest(selector){let current=this;while(current){if(current.matches(selector))return current;current=current.parentElement;}return null;}
   focus(){this.ownerDocument.activeElement=this;}
+  select(){this.selected=true;}
   blur(){if(this.ownerDocument.activeElement===this)this.ownerDocument.activeElement=null;}
   pause(){this.paused=true;}
   load(){}
