@@ -964,7 +964,7 @@ test('a pinch survives the auto quality profile changing the frame resolution, a
   assert.equal(h.run('screenScale'), 1, 'ultrawide is a different monitor: zoom resets');
 });
 
-test('the screen shows Omarchy workspaces, lights the one on the streamed monitor, and a tap is Super+N that follows the workspace to its monitor', async () => {
+test('the screen only shows workspaces belonging to the explicitly selected monitor', async () => {
   const fixture = { ...powerFixture,
     workspaces: [{ id: 1, name: '1', windows: 2, monitor: 'HDMI-A-1' }, { id: 3, name: '3', windows: 1, monitor: 'DP-1' }, { id: 7, name: '7', windows: 0, monitor: 'HDMI-A-1' }],
     monitors: powerFixture.monitors.map((m, i) => ({ ...m, activeWorkspace: i === 0 ? 1 : 3 })) };
@@ -973,20 +973,21 @@ test('the screen shows Omarchy workspaces, lights the one on the streamed monito
   h.run("navigate('tela');connected=true;$('#monitor-select').value='HDMI-A-1';screenWorkspaceSignature='';renderScreenWorkspaces()");
   const strip = h.el('#screen-workspaces');
   const chips = [...h.all('[data-screen-workspace]')];
-  assert.deepEqual(chips.map(c => c.getAttribute('data-screen-workspace')), ['1', '2', '3', '4', '5', '7'], 'the familiar first five plus every live workspace');
+  assert.deepEqual(chips.map(c => c.getAttribute('data-screen-workspace')), ['1', '7'], 'only workspaces mapped to this monitor');
   assert.equal(chips[0].classList.contains('active'), true, 'workspace 1 is what HDMI-A-1 shows');
   assert.equal(chips.filter(c => c.classList.contains('active')).length, 1);
   assert.ok(chips[0].querySelector('i'), 'a dot marks workspaces with windows');
   assert.ok(!chips[1].querySelector('i'));
   h.calls.length = 0;
-  // Workspace 4 does not exist yet: focus it on the streamed monitor.
-  strip.dispatchEvent({ type: 'click', target: chips[3] });
+  strip.dispatchEvent({ type: 'click', target: chips[1] });
   await flushTicks();
   const actions = () => h.calls.filter(call => call.path === '/api/action').map(call => JSON.parse(call.options.body));
-  assert.deepEqual(actions(), [{ type: 'workspace.focus', id: 4, monitor: 'HDMI-A-1' }]);
-  // Workspace 3 lives on DP-1: the stream follows it there before focusing.
+  assert.deepEqual(actions(), [{ type: 'workspace.focus', id: 7, monitor: 'HDMI-A-1' }]);
   h.calls.length = 0;
-  strip.dispatchEvent({ type: 'click', target: chips[2] });
+  h.el('#screen-monitor-select').value = 'DP-1';
+  h.el('#screen-monitor-select').dispatchEvent({ type: 'change' });
+  assert.deepEqual(h.all('[data-screen-workspace]').map(c => c.dataset.screenWorkspace), ['3']);
+  strip.dispatchEvent({ type: 'click', target: h.all('[data-screen-workspace]')[0] });
   await flushTicks();
   assert.equal(h.el('#monitor-select').value, 'DP-1');
   assert.deepEqual(actions().filter(a => a.type === 'workspace.focus'), [{ type: 'workspace.focus', id: 3, monitor: 'DP-1' }]);
@@ -1150,7 +1151,7 @@ test('a drag on the stream never probes for a text field', async () => {
   assert.equal(h.el('#screen-composer').hidden, true);
 });
 
-test('floating buttons cycle the streamed monitor and toggle a forced landscape', async () => {
+test('monitor button opens the explicit selector without changing destination or desktop focus', async () => {
   const h = powerUiHarness();
   await flushTicks();
   h.run("navigate('tela');connected=true");
@@ -1158,11 +1159,14 @@ test('floating buttons cycle the streamed monitor and toggle a forced landscape'
   h.calls.length = 0;
   h.el('#screen-switch-monitor').click();
   await flushTicks();
+  assert.equal(h.el('#monitor-select').value, 'HDMI-A-1');
+  assert.equal(h.document.activeElement, h.el('#screen-monitor-select'));
+  assert.equal(h.calls.some(call => call.path === '/api/action'), false);
+  h.el('#screen-monitor-select').value = 'DP-1';
+  h.el('#screen-monitor-select').dispatchEvent({ type: 'change' });
+  await flushTicks();
   assert.equal(h.el('#monitor-select').value, 'DP-1');
-  assert.ok(h.calls.some(call => call.path.startsWith('/api/stream?monitor=DP-1')), 'the stream restarts on the next monitor');
-  assert.match(h.el('#toast').textContent, /DP-1 · 2560 × 1440/);
-  h.el('#screen-switch-monitor').click();
-  assert.equal(h.el('#monitor-select').value, 'HDMI-A-1', 'cycles back around');
+  assert.ok(h.calls.some(call => call.path.startsWith('/api/stream?monitor=DP-1')));
   const rotate = h.el('#screen-rotate');
   assert.equal(rotate.getAttribute('aria-pressed'), 'false');
   rotate.click();

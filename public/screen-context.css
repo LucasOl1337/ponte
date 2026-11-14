@@ -1,0 +1,19 @@
+.screen-context-bar{display:flex;gap:8px;align-items:center;padding:6px 8px;background:#10150e;flex:none;min-width:0;z-index:8}
+.screen-context-bar label{display:flex;align-items:center;gap:8px;flex:1;min-width:0;font-size:12px;color:#aeb7a4}
+.screen-context-bar select{width:100%;min-width:0;height:44px;padding:0 8px;border:1px solid #46513a;border-radius:10px;background:#1c2317;color:#eef2e7;font:inherit}
+.screen-context-bar button{min-height:44px;padding:0 14px;border-radius:10px;background:#28301f;color:#eef2e7}
+.screen-context-bar button[aria-expanded=true]{background:var(--lime);color:#202718}
+body[data-current-page=tela] .viewer-page .screen-card{display:flex;flex-direction:column}
+.screen-windows-panel{flex:none;max-height:38vh;overflow:auto;padding:8px 12px;background:#161d12;border-bottom:1px solid #46513a;overscroll-behavior:contain}
+.screen-windows-panel[hidden]{display:none}
+.screen-windows-panel .search-field{margin:0 0 6px;min-height:44px}
+.screen-windows-panel .window-workspaces{margin:0 0 6px;gap:6px}
+.screen-windows-panel .workspace{min-height:44px;min-width:44px}
+.screen-windows-panel .section-heading{margin:8px 0}
+.screen-windows-panel .section-heading h2{font-size:14px}
+.screen-windows-panel .window-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px}
+.screen-windows-panel .window-card{padding:8px;min-height:64px}
+.screen-windows-panel .window-details strong{font-size:13px}
+.screen-windows-panel .empty-state{padding:12px}
+.screen-workspace{min-width:44px;height:44px}
+@media(min-width:761px){body[data-current-page=tela] .screen-stage{flex:1;min-height:0}.screen-context-bar{grid-column:1/-1}.screen-windows-panel{grid-column:1/-1}}

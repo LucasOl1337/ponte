@@ -748,16 +748,19 @@ function renderState() {
       wolSection.hidden = true;
     }
   }
-  const monitors = state.monitors || [];
+  const monitors = window.PonteScreenContext.monitors(state);
   const nextMonitorSignature = JSON.stringify([monitors,i18n.language]);
   if (monitorSignature !== nextMonitorSignature) {
     monitorSignature = nextMonitorSignature;
     const selected = $('#monitor-select').value || savedPreference(monitorKey());
-    $('#monitor-select').innerHTML = monitors.length ? monitors.map(m => `<option value="${escaped(m.name)}">${escaped(m.name)} · ${Number(m.width)} × ${Number(m.height)}${m.focused ? t(" · em foco") : ''}</option>`).join('') : `<option value="">${escaped(t("Nenhum monitor disponível"))}</option>`;
+    $('#monitor-select').innerHTML = monitors.length ? monitors.map(m => `<option value="${escaped(m.name)}">${escaped(window.PonteScreenContext.label(state, m.name))} · ${Number(m.width)} × ${Number(m.height)}${m.focused ? t(" · em foco") : ''}</option>`).join('') : `<option value="">${escaped(t("Nenhum monitor disponível"))}</option>`;
     const next = monitors.find(m => m.name === selected) || monitors.find(m => m.focused) || monitors[0];
     if (next) { $('#monitor-select').value = next.name; if (!savedPreference(monitorKey())) savePreference(monitorKey(),next.name); }
     if (selected && next?.name !== selected) { liveWanted = false; stopLive(t("Monitor alterado. Inicie a transmissão do monitor escolhido.")); cancelSnapshot(); clearScreenImage(); }
     $('#viewer-monitor-name').textContent = next?.name || t("Nenhum monitor");
+    $('#screen-monitor-select').innerHTML = $('#monitor-select').innerHTML;
+    $('#screen-monitor-select').value = next?.name || '';
+    $('#screen-monitor-select').disabled = !monitors.length;
   }
   updateScreenButtons();
   reconcileLive();
@@ -771,6 +774,11 @@ function renderWorkspaces() {
   if (workspaceSignature === signature) return;
   workspaceSignature = signature;
   $('#home-workspaces').innerHTML = spaces.length ? spaces.map(ws => `<button class="workspace ${ws.id === active ? 'active' : ''}" data-workspace="${Number(ws.id)}" aria-label="${escaped(i18n.plural('Ir para área {workspace}, {count} janela','Ir para área {workspace}, {count} janelas',Number(ws.windows || 0),{workspace:ws.name || ws.id}))}" ${ws.id === active ? 'aria-current="true"' : ''}>${escaped(ws.name || ws.id)}${ws.windows ? `<i class="workspace-dot" aria-hidden="true"></i>` : ''}</button>`).join('') : `<p class="hint">${h("Nenhuma área de trabalho disponível.")}</p>`;
+}
+
+function renderWindowFilters() {
+  const spaces = window.PonteScreenContext.workspaces(state, $('#monitor-select').value);
+  if (chosenWorkspace !== 'all' && !spaces.some(ws => String(ws.id) === chosenWorkspace)) chosenWorkspace = 'all';
   $('#window-workspaces').innerHTML = `<button class="workspace ${chosenWorkspace === 'all' ? 'active' : ''}" data-filter="all" aria-pressed="${chosenWorkspace === 'all'}"><span class="workspace-label">${h("Todas")}</span></button>` + spaces.map(ws => `<button class="workspace ${String(ws.id) === chosenWorkspace ? 'active' : ''}" data-filter="${Number(ws.id)}" aria-pressed="${String(ws.id) === chosenWorkspace}" aria-label="${escaped(t('Filtrar área {workspace}',{workspace:ws.name || ws.id}))}">${escaped(ws.name || ws.id)}</button>`).join('');
 }
 
@@ -785,7 +793,8 @@ function appIcon(className) {
 function renderWindows() {
   if (!state) return;
   const query = $('#window-search').value.trim().toLocaleLowerCase(i18n.locale);
-  const windows = (state.windows || []).filter(window => (chosenWorkspace === 'all' || String(window.workspace?.id) === chosenWorkspace) && (!query || `${window.title} ${window.class}`.toLocaleLowerCase(i18n.locale).includes(query)));
+  renderWindowFilters();
+  const windows = window.PonteScreenContext.windows(state, $('#monitor-select').value).filter(window => (chosenWorkspace === 'all' || String(window.workspace?.id) === chosenWorkspace) && (!query || `${window.title} ${window.class}`.toLocaleLowerCase(i18n.locale).includes(query)));
   const activeAddress = state.activeWindow?.address;
   const signature = JSON.stringify([windows,activeAddress,query,chosenWorkspace,i18n.language]);
   if (signature === windowSignature) return;
@@ -861,19 +870,16 @@ function renderVisiblePage() {
   // empty when navigated to; after that only the visible page is refreshed.
   if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderScreenWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
   if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
-  else if (currentPage === 'janelas') { renderWorkspaces(); renderWindows(); }
-  else if (currentPage === 'tela') renderScreenWorkspaces();
+  else if (currentPage === 'tela') { renderScreenWorkspaces(); if (!$('#screen-windows-panel').hidden) renderWindows(); }
   if (currentPage === 'inicio') { loadStartProjects(); loadDevices(); renderFleet(); loadFleet(); }
 }
-// Omarchy lives on numbered workspaces (Super+1…0). The screen gets the same
-// row: the workspace the streamed monitor shows is lit, a dot marks the ones
-// with windows, and a tap is Super+N with the stream following.
+// Workspaces come from the compositor's monitor association, never an ID range.
 function renderScreenWorkspaces() {
   const monitor = selectedMonitor();
-  const active = monitor?.activeWorkspace ?? state?.activeWindow?.workspace?.id;
-  const spaces = state?.workspaces || [];
-  const ids = workspaceDropTargetIds(spaces, active);
-  const signature = JSON.stringify([ids, active, spaces.map(ws => [ws.id, ws.windows]), i18n.language]);
+  const active = monitor?.activeWorkspace;
+  const spaces = window.PonteScreenContext.workspaces(state, monitor?.name);
+  const ids = spaces.map(ws => ws.id);
+  const signature = JSON.stringify([monitor?.name, ids, active, spaces.map(ws => [ws.id, ws.windows]), i18n.language]);
   if (screenWorkspaceSignature === signature) return;
   screenWorkspaceSignature = signature;
   $('#screen-workspaces').innerHTML = ids.map(id => {
@@ -889,11 +895,7 @@ $('#screen-workspaces').addEventListener('click', async event => {
   const id = Number(chip.dataset.screenWorkspace);
   const target = (state?.workspaces || []).find(ws => Number(ws.id) === id);
   const select = $('#monitor-select');
-  // A workspace that lives on another monitor: follow it there, like the eye
-  // follows Super+N across monitors.
-  if (target?.monitor && target.monitor !== select.value && (state?.monitors || []).some(m => m.name === target.monitor)) {
-    select.value = target.monitor; select.dispatchEvent(new CustomEvent('change'));
-  }
+  if (!target || target.monitor !== select.value) { toast('A área mudou de monitor. Escolha novamente.', true); pollState(); return; }
   const ok = await action('workspace.focus', { id, monitor: select.value || undefined }, t('Área {workspace} em foco.',{workspace:id}));
   if (ok) renderScreenWorkspaces();
 });
@@ -918,7 +920,8 @@ let historyReady = false;
 
 function navigate(page) {
   if (page === 'controle') page = 'tela';
-  if (!['inicio','tela','terminais','dev','janelas','voz'].includes(page)) return;
+  if (page === 'janelas') { page = 'tela'; setWindowsPanel(true); }
+  if (!['inicio','tela','terminais','dev','voz'].includes(page)) return;
   const wasScreen = isScreenPage(currentPage), nextScreen = isScreenPage(page);
   if (currentPage !== page) resetRemoteInput();
   if (wasScreen && !nextScreen) leaveScreen();
@@ -997,9 +1000,9 @@ document.addEventListener('click', event => {
   const workspace = event.target.closest('[data-workspace]');
   if (workspace) action('workspace.focus',{id:Number(workspace.dataset.workspace)}, t('Área {workspace} em foco.',{workspace:workspace.textContent.trim()}));
   const filter = event.target.closest('[data-filter]');
-  if (filter) { chosenWorkspace = filter.dataset.filter; renderWorkspaces(); renderWindows(); }
+  if (filter) { chosenWorkspace = filter.dataset.filter; renderWindows(); }
   const windowButton = event.target.closest('[data-window]');
-  if (windowButton) action('window.focus',{address:windowButton.dataset.window}, t("Janela em foco no PC."));
+  if (windowButton) action('window.focus',{address:windowButton.dataset.window, monitor:$('#monitor-select').value}, t("Janela em foco no PC.")).then(ok => { if (ok) { setWindowsPanel(false); $('#screen-windows-toggle').focus(); } });
 });
 
 $('.brand').addEventListener('click', event => { event.preventDefault(); if(token) navigate('inicio'); });
@@ -2150,6 +2153,9 @@ $('#monitor-select').addEventListener('change',() => {
   screenScale = 1; screenPanX = screenPanY = 0;
   stopLive(); cancelSnapshot(); clearScreenImage();
   $('#viewer-monitor-name').textContent = $('#monitor-select').value || t("Monitor do PC");
+  $('#screen-monitor-select').value = $('#monitor-select').value;
+  chosenWorkspace = 'all';
+  renderScreenWorkspaces(); renderWindows();
   setScreenStatus('idle');
   if (restart) startLive();
 });
@@ -2565,16 +2571,23 @@ $('#screen-auto-keyboard').addEventListener('click', () => {
   setAutoKeyboard(!autoKeyboard);
   toast(autoKeyboard ? t("Teclado automático ligado: abre ao tocar num campo de texto.") : t("Teclado automático desligado: use o botão do teclado."));
 });
-// Cycle the streamed monitor; the select on Início stays the source of truth.
+function setWindowsPanel(open) {
+  $('#screen-windows-panel').hidden = !open;
+  $('#screen-windows-toggle').setAttribute('aria-expanded', String(open));
+  if (open) { closeShortcuts(); renderWindows(); }
+  requestAnimationFrame(() => { applyScreenZoom(); placeScreenStatus(); });
+}
+$('#screen-windows-panel').append(...$('#page-janelas').children);
+$('#page-janelas').remove();
+$('#screen-windows-toggle').addEventListener('click', () => setWindowsPanel($('#screen-windows-panel').hidden));
+$('#screen-monitor-select').addEventListener('change', event => {
+  $('#monitor-select').value = event.target.value;
+  $('#monitor-select').dispatchEvent(new CustomEvent('change'));
+});
 $('#screen-switch-monitor').addEventListener('click', () => {
-  const monitors = state?.monitors || [];
-  if (monitors.length < 2) { toast(t("Só um monitor disponível.")); return; }
-  const select = $('#monitor-select');
-  const index = monitors.findIndex(m => m.name === select.value);
-  const next = monitors[(index + 1) % monitors.length];
-  select.value = next.name;
-  select.dispatchEvent(new CustomEvent('change'));
-  toast(t('Monitor {name}',{name:`${next.name} · ${Number(next.width)} × ${Number(next.height)}`}));
+  const select = $('#screen-monitor-select');
+  select.focus();
+  try { select.showPicker(); } catch {}
 });
 // Force landscape through the native activity (ponte://orientation/…); a
 // second tap hands orientation back to the sensor. Browsers try the

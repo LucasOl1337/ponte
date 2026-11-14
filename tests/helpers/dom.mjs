@@ -1,5 +1,8 @@
 // Deliberately small DOM for deterministic interaction tests. This exercises the
 // shipped scripts without a browser, a live desktop, or microphone permission.
+import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
+const screenContext = readFileSync(new URL('../../public/screen-context.js', import.meta.url), 'utf8');
 const decode = value => value.replace(/&(amp|lt|gt|quot|#39);/g, (_,name) => ({amp:'&',lt:'<',gt:'>',quot:'"','#39':"'"}[name]));
 const voidTags = new Set(['meta','link','img','input','br','hr','source','use']);
 class Events {
@@ -72,4 +75,4 @@ function parse(source,parent,document){
 export function makeDocument(html){
  const document=new Element('document',null);document.ownerDocument=document;document.titleEvents=[];document.hidden=false;document.getElementById=id=>document.querySelector('#'+id);document.createElement=tag=>new Element(tag,document,{});parse(html,document,document);document.documentElement=document.querySelector('html');document.body=document.querySelector('body');Object.defineProperty(document,'title',{get:()=>document.querySelector('title').textContent,set:value=>{document.querySelector('title').textContent=value;}});return document;
 }
-export function makeWindow(){const window=new Events();window.matchMedia=()=>({matches:false});window.scrollTo=()=>{};window.isSecureContext=true;return window;}
+export function makeWindow(){const window=new Events();vm.runInNewContext(screenContext,{window});window.matchMedia=()=>({matches:false});window.scrollTo=()=>{};window.isSecureContext=true;return window;}

@@ -395,6 +395,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       activeWindow: windowInfo(get(0, null, 'ACTIVE_WINDOW_UNAVAILABLE')),
       monitors: get(1, [], 'MONITORS_UNAVAILABLE').map(m => ({
         id: m.id, name: String(m.name), width: m.width, height: m.height, focused: Boolean(m.focused),
+        x: Number(m.x) || 0, y: Number(m.y) || 0, disabled: Boolean(m.disabled),
         dpmsStatus: m.dpmsStatus !== undefined ? Boolean(m.dpmsStatus) : true,
         activeWorkspace: Number.isInteger(m.activeWorkspace?.id) ? m.activeWorkspace.id : null,
         model: m.model ? String(m.model) : (m.description ? String(m.description) : undefined),
@@ -550,10 +551,12 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         // when asked; an existing workspace keeps its own monitor.
         if (typeof value.monitor === 'string') {
           const workspaces = await readHypr('workspaces');
-          if (!workspaces.some(ws => Number(ws.id) === id)) {
-            const monitors = await readHypr('monitors');
-            const monitor = monitors.find(item => item.name === value.monitor);
-            if (!monitor || !validMonitorName(monitor.name)) throw new ApiError(400, 'INVALID_MONITOR');
+          const monitors = await readHypr('monitors');
+          const monitor = monitors.find(item => item.name === value.monitor);
+          if (!monitor || !validMonitorName(monitor.name)) throw new ApiError(400, 'INVALID_MONITOR');
+          const target = workspaces.find(ws => Number(ws.id) === id);
+          if (target && target.monitor !== value.monitor) throw new ApiError(409, 'WORKSPACE_MONITOR_CHANGED');
+          if (!target) {
             await placePointer({ x: (Number(monitor.x) || 0) + Math.floor(Number(monitor.width) / 2), y: (Number(monitor.y) || 0) + Math.floor(Number(monitor.height) / 2) });
           }
         }
@@ -564,7 +567,13 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       case 'window.focus': {
         if (typeof value.address !== 'string' || !/^0x[\da-f]{1,32}$/i.test(value.address)) throw new ApiError(400, 'INVALID_WINDOW');
         const windows = await readHypr('clients');
-        if (!windows.some(w => w.address === value.address)) throw new ApiError(404, 'WINDOW_CLOSED');
+        const target = windows.find(w => w.address === value.address);
+        if (!target) throw new ApiError(404, 'WINDOW_CLOSED');
+        if (value.monitor !== undefined) {
+          const monitor = (await readHypr('monitors')).find(m => m.name === value.monitor);
+          if (!monitor) throw new ApiError(400, 'INVALID_MONITOR');
+          if (target.monitor !== monitor.id) throw new ApiError(409, 'WINDOW_MONITOR_CHANGED');
+        }
         await run('hyprctl', ['dispatch', `hl.dsp.focus({ window = "address:${value.address}" })`]); break;
       }
       case 'window.moveToWorkspace': {

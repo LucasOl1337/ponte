@@ -135,6 +135,8 @@ export const messages = {
     "en": "Scale must be between 0.2 and 1.",
     "pt": "A escala deve estar entre 0,2 e 1."
   },
+  "WORKSPACE_MONITOR_CHANGED": { "en": "This workspace moved to another monitor. Choose again.", "pt": "A área mudou de monitor. Escolha novamente." },
+  "WINDOW_MONITOR_CHANGED": { "en": "This window moved to another monitor. Choose again.", "pt": "A janela mudou de monitor. Escolha novamente." },
   "INVALID_MONITOR": {
     "en": "Invalid monitor.",
     "pt": "Monitor inválido."
