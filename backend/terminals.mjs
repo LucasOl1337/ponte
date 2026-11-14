@@ -353,6 +353,7 @@ export function createTerminals(dataDir, options = {}) {
           return summary(previous);
         }
         if (liveSessionCount >= TERMINAL_LIMIT) throw new ApiError(409, 'TERMINAL_LIMIT_REACHED');
+        if (registry.length >= 100) throw new ApiError(409, 'TERMINAL_LIMIT_REACHED');
         if (mission) mission = await missions.validate(mission);
         const cwd = await resolveDirectory();
         if (program && !await exists(program, env)) throw new ApiError(503, 'AGENT_UNAVAILABLE', { agent: agentTitle });
@@ -368,7 +369,7 @@ export function createTerminals(dataDir, options = {}) {
           catch (error) { if (error.code === 'EEXIST') throw new ApiError(409, 'MISSION_LAUNCH_UNCERTAIN'); throw error; }
         }
         const launch = mission ? ['--', process.execPath, missionWorker, files.config] : program ? ['--', ...agentLauncher, program, ...args] : [];
-        const metadata = mission && { machine: mission.machine, harness: mission.harness, model: mission.model, provider: mission.provider, directory: mission.directory, requestId: mission.requestId, fingerprint, createdAt: Date.now(), origin: 'manual' };
+        const metadata = mission && { machine: mission.machine, machineName: mission.machineName, harness: mission.harness, model: mission.model, provider: mission.provider, directory: mission.directory, requestId: mission.requestId, fingerprint, createdAt: Date.now(), origin: 'manual' };
         let pane;
         try {
           const output = await command([
@@ -546,7 +547,7 @@ export function createTerminals(dataDir, options = {}) {
       return run(async available => {
         await target(id, available);
         await command(['kill-session', '-t', `=ponte_${id}`]);
-        registry = registry.filter(item => item.id !== id); await save();
+        registry = registry.filter(item => item.id !== id || item.mission); await save();
         return { ok: true };
       });
     },

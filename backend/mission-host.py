@@ -81,7 +81,7 @@ def main():
         return
     directory = validate(v)
     if v['action'] == 'validate':
-        print(json.dumps(dict(directory=directory)))
+        print(json.dumps(dict(directory=directory, machineName=socket.gethostname())))
         return
     env = dict(os.environ)
     for key in list(env):

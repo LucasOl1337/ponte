@@ -490,7 +490,11 @@ export async function createApp(options = {}) {
         if (caller.kind !== 'owner') throw new ApiError(403, 'MESH_OWNER_ONLY');
         await serveWindows(req, res, windowsTarget, pathname, query); return;
       }
-      if (nodes[0] && nodes[0] !== mesh.id && !/^[a-f0-9]{16}$/.test(nodes[0])) nodes[0] = await devices.node(nodes[0]) || mesh.id;
+      if (nodes[0] && nodes[0] !== mesh.id && !/^[a-f0-9]{16}$/.test(nodes[0])) {
+        const resolved = await devices.node(nodes[0]);
+        if (!resolved && pathname.startsWith('/api/terminals')) throw new ApiError(503, 'MISSION_DESTINATION_UNAVAILABLE');
+        nodes[0] = resolved || mesh.id;
+      }
       if (nodes[0] && nodes[0] !== mesh.id) {
         if (meshRoute) throw new ApiError(400, 'MESH_INVALID_REQUEST');
         const url = new URL(req.url, 'http://localhost');

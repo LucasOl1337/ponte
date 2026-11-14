@@ -2661,15 +2661,19 @@ let terminalClosingId = '';
 const terminalDrafts = new Map();
 function terminalVisible() { return currentPage === 'terminais' && !!token && !document.hidden && !nativePaused; }
 function terminalControls() {
+  const mission = terminalSessions.find(s => s.id === terminalId)?.mission;
   const ready = connected && terminalAvailable && !!terminalId && !terminalBusy;
-  $('#terminal-new').disabled = !connected || !terminalAvailable || terminalBusy || terminalSessions.length >= 4;
+  $('#terminal-new').disabled = !connected || !terminalAvailable || terminalBusy || terminalSessions.filter(s => s.mission?.status !== 'ended').length >= 4;
   $('#terminal-session').hidden = !terminalId;
   $('#terminal-select').disabled = terminalBusy || !terminalSessions.length;
   $('#terminal-pause').disabled = !terminalId;
   $('#terminal-pause').setAttribute('aria-pressed',String(terminalPaused));
   $('#terminal-pause').textContent = terminalPaused ? t('Retomar leitura') : t('Pausar leitura');
   $$('#terminal-send,#terminal-paste,#terminal-clear,#terminal-input,#terminal-close,#terminal-size').forEach(element => { element.disabled = !ready; });
-  keyBarEnable('term', ready);
+  if (mission) $$('#terminal-paste,#terminal-input,#terminal-size').forEach(element => { element.disabled = true; });
+  $('#terminal-send').textContent = t(mission ? 'Continuar no Dev' : 'Enviar');
+  $('#terminal-close').disabled = !ready || mission?.status === 'ended';
+  keyBarEnable('term', ready && !mission);
 }
 // Agents and terminals: one list for the agents running on the PC (from
 // /api/agents), plain terminal windows and this phone's Ponte sessions.
@@ -3206,6 +3210,7 @@ function growComposer() {
   box.style.height = `${Math.min(140, box.scrollHeight)}px`;
 }
 async function sendCommand(withEnter) {
+  if (terminalSessions.find(s => s.id === terminalId)?.mission) { savePreference(devPreference('session'), terminalId); savePreference(devPreference('mode'), 'session'); devId = terminalId; navigate('dev'); return; }
   const id = terminalId, box = $('#terminal-input'), text = box.value;
   if (!id || !text.trim() || terminalBusy) return;
   const result = await terminalMutation(`/terminals/${encodeURIComponent(id)}/input`, withEnter ? { text, enter: true } : { text });
@@ -4332,7 +4337,18 @@ function devGrid(width, height, cellWidth, cellHeight) {
 let devFont = Number(savedPreference('ponte-dev-font', String(DEV_FONT_DEFAULT)));
 if (!(devFont >= DEV_FONT_MIN && devFont <= DEV_FONT_MAX)) devFont = DEV_FONT_DEFAULT;
 let devId = '', devSessions = [], devHash = '', devHashId = '', devTimer, devGeneration = 0, devBusy = false;
-let devLastInput = 0, devIdleDelay = 1000, devFollow = true, devGridNow = null, devPane = null, devBox = '', devResizeTimer, devAgent = 'claude', devProjects = [], devHosts = [], devProjectsToken = '';
+let devLastInput = 0, devIdleDelay = 1000, devFollow = true, devGridNow = null, devPane = null, devBox = '', devResizeTimer;
+let devCreating = false, devCatalog = null, devCatalogKey = '', devCatalogGeneration = 0, devCatalogNode = '';
+const devPreference = name => `ponte-dev-${targetNode || 'home'}-${name}`;
+const devCurrent = () => devSessions.find(session => session.id === devId);
+const devRequestId = () => window.crypto?.getRandomValues ? Array.from(window.crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('') : `mission_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+function devStateLabel(status) { return t(({starting:'Iniciando…',working:'Em execução',ready:'Pronta para continuar',error:'Erro na execução',ended:'Encerrada'})[status] || 'Terminal'); }
+function devMissionSummary(session) {
+  const m = session.mission;
+  if (!m) return t('Outro terminal');
+  const machine = m.machineName || (m.machine === 'self' ? targetName() || t('Este nó Ponte') : m.machine.slice(4));
+  return `${machine} · ${m.harness} · ${m.effectiveModel || m.model} · ${m.effectiveProvider || m.provider} · ${devStateLabel(m.status)}`;
+}
 function devVisible() { return currentPage === 'dev' && !!token && !document.hidden && !nativePaused; }
 function devStatus(message, error = false) { dictationStatus($('#dev-status'), message, error); }
 // The character grid the screen box holds at the current font, or an estimate
@@ -4347,50 +4363,106 @@ function devMeasure() {
 }
 function devSessionSize() { return devMeasure() || {cols:40,rows:24}; }
 function devSortSessions(sessions) {
-  const rank = session => /^(Claude|Codex) /.test(session.title || '') ? 0 : 1;
-  return sessions.slice().sort((a, b) => rank(a) - rank(b) || String(a.title).localeCompare(String(b.title)));
+  const rank = session => session.mission ? 0 : /^(Claude|Codex) /.test(session.title || '') ? 1 : 2;
+  return sessions.slice().sort((a, b) => rank(a) - rank(b) || (b.mission?.createdAt || 0) - (a.mission?.createdAt || 0) || String(a.title).localeCompare(String(b.title)));
 }
 function devRenderSessions() {
   const select = $('#dev-session');
   select.innerHTML = devSessions.length ? devSessions.map(session => `<option value="${escaped(session.id)}">${escaped(session.title)}</option>`).join('') : `<option value="" data-i18n="Nenhuma sessão">${escaped(t('Nenhuma sessão'))}</option>`;
   select.value = devId;
-  const project = savedPreference('ponte-start-project') || devProjects[0] || '';
-  $('#dev-empty-label').textContent = t('Novo Claude em {project}',{project:project || '~'});
-  $('#dev-empty').hidden = !!devId;
-  ['#dev-open-pc','#dev-send','#dev-paste','#dev-dictate','#dev-attach'].forEach(selector => { $(selector).disabled = !devId; });
-  keyBarEnable('dev', !!devId);
+  const session = devCurrent(), mission = session?.mission;
+  $('#dev-empty').hidden = !!devId || devCreating;
+  $('#dev-new-panel').hidden = !devCreating;
+  $('#dev-new').setAttribute('aria-expanded', String(devCreating));
+  $('#page-dev').classList.toggle('dev-creating', devCreating);
+  $('#page-dev').classList.toggle('dev-structured', !!mission);
+  $('#dev-send').textContent = t(devCreating ? 'Iniciar missão' : 'Enviar');
+  $('#dev-input-label').textContent = t(devCreating ? 'Sua missão' : 'Continuar conversa');
+  $('#dev-send').disabled = devBusy || (devCreating ? !devCatalog : !devId || (!!mission && mission.status !== 'ready'));
+  $('#dev-dictate').disabled = devBusy || (!devCreating && !devId);
+  ['#dev-open-pc','#dev-paste','#dev-attach'].forEach(selector => { $(selector).disabled = !devId || devCreating || !!mission; $(selector).hidden = devCreating || !!mission; });
+  $('#dev-keys').hidden = devCreating || !!mission;
+  $('#dev-size').hidden = devCreating || !!mission;
+  $('#dev-context').hidden = devCreating || !session;
+  $('#dev-context').textContent = session ? `${devMissionSummary(session)}${mission ? ` · ${mission.directory}` : ''}` : '';
+  $('#dev-missions-count').textContent = t('Suas sessões') + ` (${devSessions.length})`;
+  $('#dev-mission-list').innerHTML = devSessions.map(s => `<button type="button" class="dev-mission-row${s.id === devId ? ' selected' : ''}" data-dev-session="${escaped(s.id)}"><strong>${escaped(s.title)}</strong><span>${escaped(devMissionSummary(s))}</span>${s.mission ? `<small>${escaped(new Date(s.mission.updatedAt || s.mission.createdAt).toLocaleTimeString(i18n.locale, {hour:'2-digit',minute:'2-digit',timeZone:'America/Sao_Paulo'}))} · ${escaped(s.mission.origin === 'manual' ? t('Minha missão') : t('Automática'))}</small>` : ''}</button>`).join('');
+  keyBarEnable('dev', !!devId && !mission && !devCreating);
   keyBarUpdate('dev', sessionContext(devSessions.find(session => session.id === devId)), null);
   $('#dev-font-down').disabled = devFont <= DEV_FONT_MIN; $('#dev-font-up').disabled = devFont >= DEV_FONT_MAX;
 }
 function devSelect(id) {
   devId = id; devHash = ''; devHashId = ''; devFollow = true;
   devPane = null; $('#dev-output').innerHTML = ''; devRenderSize(); $('#dev-live').hidden = true; keyBarState.dev.menu = 0;
-  if (id) savePreference('ponte-dev-session', id);
+  devCreating = !id;
+  savePreference(devPreference('mode'), id ? 'session' : 'draft');
+  if (id) savePreference(devPreference('session'), id);
+  $('#dev-input').value = savedPreference(devPreference(id || 'draft')) || ''; devGrow();
   devRenderSessions();
   renderKeyBar('dev');
 }
 async function devLoadSessions() {
+  const requestToken = token, node = targetNode;
   try {
     const listing = await (await api('/terminals',{timeout:8000})).json();
+    if (requestToken !== token || node !== targetNode) return;
     devSessions = devSortSessions(listing.sessions || []);
+    let pending;
+    try { pending = JSON.parse(savedPreference(devPreference('pending-create')) || 'null'); } catch {}
+    const reconciled = pending && devSessions.find(s => s.mission?.requestId === pending.requestId);
+    if (reconciled) { savePreference(devPreference('pending-create'), ''); savePreference(devPreference('draft'), ''); devSelect(reconciled.id); }
   } catch (error) { devStatus(error, true); return; }
   if (!devSessions.some(session => session.id === devId)) {
-    const saved = savedPreference('ponte-dev-session');
+    const saved = savedPreference(devPreference('session')) || savedPreference('ponte-dev-session');
     devSelect((devSessions.find(session => session.id === saved) || devSessions[0] || {}).id || '');
   } else devRenderSessions();
 }
-async function devLoadProjects() {
-  const key = `${token}|${targetNode}`;
-  if (!token || devProjectsToken === key) return;
-  const requestToken = devProjectsToken = key;
+async function devLoadProjects(force = false) {
+  const nodeKey = `${token}|${targetNode}`;
+  if (devCatalogNode !== nodeKey) {
+    devCatalogNode = nodeKey;
+    const saved = savedPreference(devPreference('machine')) || 'self';
+    $('#dev-machine').innerHTML = `<option value="self">${escaped(targetName() || t('Este nó Ponte'))}</option>${saved !== 'self' ? `<option value="${escaped(saved)}">${escaped(saved)}</option>` : ''}`;
+    $('#dev-machine').value = saved;
+  }
+  const machine = $('#dev-machine').value || savedPreference(devPreference('machine')) || 'self';
+  const key = `${token}|${targetNode}|${machine}`;
+  if (!token || (!force && devCatalogKey === key)) return;
+  const generation = ++devCatalogGeneration;
+  devCatalog = null; devCatalogKey = key;
+  $('#dev-harness').disabled = true; $('#dev-model').disabled = true;
+  $('#dev-catalog-status').textContent = t('Conferindo capacidades no destino…'); devRenderSessions();
   try {
-    const { projects, hosts } = await (await api('/terminals?projects=1',{timeout:8000})).json();
-    if (requestToken !== `${token}|${targetNode}` || !Array.isArray(projects)) return;
-    devProjects = projects; devHosts = Array.isArray(hosts) ? hosts : [];
-    if (devAgent === 'ssh' && !devHosts.length) devAgent = 'shell';
+    const catalog = await (await api(`/terminals?catalog=1&machine=${encodeURIComponent(machine)}`, {timeout:15000})).json();
+    if (generation !== devCatalogGeneration || key !== `${token}|${targetNode}|${machine}`) return;
+    if (!Array.isArray(catalog.harnesses) || catalog.machine !== machine) throw new Error(t('Catálogo indisponível neste nó.'));
+    devCatalog = catalog;
+    $('#dev-machine').innerHTML = catalog.machines.map(m => `<option value="${escaped(m.id)}">${escaped(m.id === 'self' ? `${targetName() || catalog.hostname} · Ponte` : m.label)}</option>`).join('');
+    $('#dev-machine').value = machine;
+    $('#dev-harness').innerHTML = catalog.harnesses.map(h => `<option value="${escaped(h.id)}">${escaped(h.id)}</option>`).join('');
+    const preferred = savedPreference(devPreference(`${machine}-harness`));
+    $('#dev-harness').value = catalog.harnesses.some(h => h.id === preferred) ? preferred : catalog.harnesses[0]?.id || '';
+    $('#dev-harness').disabled = !catalog.harnesses.length;
+    $('#dev-directories').innerHTML = catalog.directories.map(d => `<option value="${escaped(d)}"></option>`).join('');
+    $('#dev-project').value = savedPreference(devPreference(`${machine}-directory`)) || catalog.home;
+    $('#dev-catalog-status').textContent = catalog.harnesses.length ? t('Estas escolhas valem para a próxima missão.') : t('Nenhum harness com modelo configurado neste destino.');
     devRenderAgents();
-    devRenderSessions();
-  } catch { if (requestToken === `${token}|${targetNode}`) devProjectsToken = ''; }
+  } catch (error) { if (generation === devCatalogGeneration) { devCatalogKey = ''; i18n.write($('#dev-catalog-status'), error); } }
+  if (generation === devCatalogGeneration) devRenderSessions();
+}
+function devRenderAgents() {
+  const machine = $('#dev-machine').value, harness = $('#dev-harness').value;
+  const models = devCatalog?.harnesses.find(h => h.id === harness)?.models || [];
+  $('#dev-model').innerHTML = models.map((m, i) => `<option value="${i}">${escaped(m.id)} · ${escaped(m.provider)}</option>`).join('');
+  const preferred = savedPreference(devPreference(`${machine}-${harness}-model`));
+  const found = models.findIndex(m => `${m.provider}|${m.id}` === preferred);
+  $('#dev-model').value = String(Math.max(0, found)); $('#dev-model').disabled = !models.length;
+}
+function devNewMission() {
+  devCreating = true; devStatus('');
+  savePreference(devPreference('mode'), 'draft');
+  $('#dev-input').value = savedPreference(devPreference('draft')) || '';
+  devRenderSessions(); devLoadProjects(); devGrow();
 }
 // Output is polled only while Dev is on screen: fast for a few seconds after
 // each input, then 1 s, backing off to 3 s while nothing changes.
@@ -4410,6 +4482,7 @@ async function devRead(generation) {
     const since = devHash && devHashId === id ? `&since=${encodeURIComponent(devHash)}` : '';
     const view = await (await api(`/terminals/${encodeURIComponent(id)}?format=ansi${since}`,{timeout:8000})).json();
     if (generation !== devGeneration || id !== devId || requestToken !== token || !devVisible()) return;
+    if (view.mission && devCurrent()) { devCurrent().mission = view.mission; devRenderSessions(); }
     if (view.cols && view.rows) { devPane = {id, cols:view.cols, rows:view.rows}; devRenderSize(); }
     if (view.unchanged === true || typeof view.text !== 'string') devIdleDelay = Math.min(3000, Math.round(devIdleDelay * 1.5));
     else {
@@ -4432,7 +4505,8 @@ function updateDevNavigation() {
   const generation = ++devGeneration;
   if (!devVisible()) return;
   devApplyFont(); devLoadProjects();
-  devLoadSessions().then(() => { devRefit(true); devRead(generation); });
+  const draft = savedPreference(devPreference('mode')) === 'draft';
+  devLoadSessions().then(() => { if (draft && !savedPreference(devPreference('pending-create'))) devNewMission(); devRefit(true); devRead(generation); });
 }
 function devApplyFont() {
   $('#page-dev').style.setProperty('--dev-font', `${devFont}px`);
@@ -4464,7 +4538,7 @@ function devQueueResize() {
   clearTimeout(devResizeTimer);
   devResizeTimer = setTimeout(async () => {
     const id = devId, grid = devGridNow;
-    if (!id || !grid || !devVisible()) return;
+    if (!id || !grid || !devVisible() || devCreating || devCurrent()?.mission) return;
     const session = devSessions.find(item => item.id === id), pane = devPane && devPane.id === id ? devPane : session;
     if (pane && pane.cols === grid.cols && pane.rows === grid.rows) return;
     try {
@@ -4476,11 +4550,12 @@ function devQueueResize() {
   }, 300);
 }
 async function devInput(body) {
-  const id = devId;
+  const id = devId, requestToken = token, node = targetNode;
   if (!id || !connected || !token) return false;
   devLastInput = Date.now();
   try {
     await api(`/terminals/${encodeURIComponent(id)}/input`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if (id !== devId || requestToken !== token || node !== targetNode) return false;
     devStatus('');
     devFollow = true; devSchedule(devGeneration);
     return true;
@@ -4492,51 +4567,75 @@ async function devInput(body) {
 function devGrow() {
   const box = $('#dev-input');
   box.style.height = 'auto';
-  box.style.height = `${Math.min(box.scrollHeight || 0, 5 * 22 + 20)}px`;
+  box.style.height = `${Math.max(devCreating ? 128 : 88, Math.min(box.scrollHeight || 0, 220))}px`;
 }
 async function devSend(withEnter) {
   const box = $('#dev-input'), typed = box.value, text = typed.replace(/\r\n?/g,'\n').replace(/\n+$/,'');
+  if (devCreating) { if (withEnter) await devCreate(); return; }
   if (!devId || devBusy || !text.trim()) return;
   if (text.length > DEV_TEXT_LIMIT) { devStatus(t('Texto longo demais: até {max} caracteres.',{max:DEV_TEXT_LIMIT}), true); return; }
-  devBusy = true;
-  const sent = await devInput(withEnter ? {text, enter:true} : {text});
+  devBusy = true; devRenderSessions();
+  let requestId;
+  if (devCurrent()?.mission) {
+    let pending;
+    try { pending = JSON.parse(savedPreference(devPreference(`${devId}-pending`)) || 'null'); } catch {}
+    if (pending && pending.text !== text) { devBusy = false; devRenderSessions(); devStatus(t('Há um envio sem confirmação. Retome o texto original ou confira as sessões antes de iniciar outra missão.'), true); return; }
+    requestId = pending?.requestId || devRequestId();
+    savePreference(devPreference(`${devId}-pending`), JSON.stringify({requestId,text}));
+  }
+  const sent = await devInput(withEnter ? {text, enter:true, ...(requestId ? {requestId} : {})} : {text});
   devBusy = false;
-  if (sent && box.value === typed) { box.value = ''; devGrow(); }
+  if (sent && box.value === typed) { box.value = ''; savePreference(devPreference(devId), ''); savePreference(devPreference(`${devId}-pending`), ''); devGrow(); }
+  devRenderSessions();
 }
-async function devCreate(agent, project) {
-  if (devBusy || !connected || !token) return;
-  devBusy = true; devStatus('');
-  const body = {...devSessionSize(), agent};
-  if (project) body[agent === 'ssh' ? 'host' : 'project'] = project;
+async function devCreate() {
+  if (devBusy || !connected || !token || !devCatalog) return;
+  const machine = $('#dev-machine').value, harness = $('#dev-harness').value;
+  const model = devCatalog.harnesses.find(h => h.id === harness)?.models[Number($('#dev-model').value)];
+  const prompt = $('#dev-input').value.trim(), directory = $('#dev-project').value.trim();
+  if (!prompt || !model || devCatalog.machine !== machine) { devStatus(t('Escreva a missão e confira as escolhas.'), true); return; }
+  const selection = {machine,harness,model:model.id,provider:model.provider,directory,prompt};
+  let pending;
+  try { pending = JSON.parse(savedPreference(devPreference('pending-create')) || 'null'); } catch {}
+  if (pending && JSON.stringify(pending.selection) !== JSON.stringify(selection)) { devStatus(t('Há um envio sem confirmação. Retome o texto original ou confira as sessões antes de iniciar outra missão.'), true); return; }
+  pending = pending || { selection, requestId:devRequestId() };
+  savePreference(devPreference('pending-create'), JSON.stringify(pending));
+  devBusy = true; devStatus(''); devRenderSessions();
+  const requestToken = token, node = targetNode;
   try {
-    const session = await (await api('/terminals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-    devSessions = devSortSessions(devSessions.concat([session]));
-    $('#dev-new-panel').hidden = true; $('#dev-new').setAttribute('aria-expanded','false');
+    const session = await (await api('/terminals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...devSessionSize(),mission:{...selection,requestId:pending.requestId}}),timeout:20000})).json();
+    if (requestToken !== token || node !== targetNode) return;
+    savePreference(devPreference('pending-create'), ''); savePreference(devPreference('draft'), '');
+    savePreference(devPreference(`${machine}-harness`), harness);
+    savePreference(devPreference(`${machine}-${harness}-model`), `${model.provider}|${model.id}`);
+    savePreference(devPreference(`${machine}-directory`), directory);
+    devSessions = devSortSessions(devSessions.filter(s => s.id !== session.id).concat([session]));
     devSelect(session.id); devLastInput = Date.now(); devSchedule(devGeneration);
-  } catch (error) { devStatus(error, true); }
-  finally { devBusy = false; }
-}
-function devRenderAgents() {
-  $('#dev-ssh').hidden = !devHosts.length;
-  $$('[data-dev-agent]').forEach(button => button.setAttribute('aria-checked',String(button.dataset.devAgent === devAgent)));
-  fillPlaceSelect($('#dev-project'), devAgent, devProjects, devHosts);
+  } catch (error) {
+    if (requestToken === token && node === targetNode) {
+      if (['INVALID_MISSION','PROJECT_NOT_ALLOWED','MISSION_OPTION_UNAVAILABLE','MISSION_DESTINATION_UNAVAILABLE','TERMINAL_LIMIT_REACHED'].includes(error.errorCode)) savePreference(devPreference('pending-create'), '');
+      devStatus(error, true);
+    }
+  } finally { devBusy = false; devRenderSessions(); }
 }
 $('#dev-session').addEventListener('change', event => { devSelect(event.target.value); updateDevNavigation(); });
 $('#dev-size').addEventListener('click', () => devRefit(true));
 $('#dev-status').addEventListener('click', () => devStatus(''));
-$('#dev-new').addEventListener('click', () => { const panel = $('#dev-new-panel'); panel.hidden = !panel.hidden; $('#dev-new').setAttribute('aria-expanded',String(!panel.hidden)); devLoadProjects(); });
-$$('[data-dev-agent]').forEach(button => button.addEventListener('click', () => { devAgent = button.dataset.devAgent; devRenderAgents(); }));
-$('#dev-project').addEventListener('change', event => savePlace(devAgent, event.target.value));
-$('#dev-create').addEventListener('click', () => devCreate(devAgent, $('#dev-project').value));
-$('#dev-empty-start').addEventListener('click', () => devCreate('claude', savedPreference('ponte-start-project') || devProjects[0] || ''));
+$('#dev-new').addEventListener('click', devNewMission);
+$('#dev-mission-list').addEventListener('click', event => { const row = event.target.closest('[data-dev-session]'); if (row) { devSelect(row.dataset.devSession); $('#dev-missions').open = false; updateDevNavigation(); } });
+$('#dev-machine').addEventListener('change', () => { savePreference(devPreference('machine'), $('#dev-machine').value); devLoadProjects(true); });
+$('#dev-harness').addEventListener('change', () => { savePreference(devPreference(`${$('#dev-machine').value}-harness`), $('#dev-harness').value); devRenderAgents(); });
+$('#dev-model').addEventListener('change', () => { const machine = $('#dev-machine').value, harness = $('#dev-harness').value, model = devCatalog?.harnesses.find(h => h.id === harness)?.models[Number($('#dev-model').value)]; if (model) savePreference(devPreference(`${machine}-${harness}-model`), `${model.provider}|${model.id}`); });
+$('#dev-project').addEventListener('change', () => savePreference(devPreference(`${$('#dev-machine').value}-directory`), $('#dev-project').value));
+$('#dev-empty-start').addEventListener('click', devNewMission);
 $('#dev-send').addEventListener('click', () => devSend(true));
 $('#dev-paste').addEventListener('click', () => devSend(false));
-$('#dev-input').addEventListener('input', devGrow);
+$('#dev-input').addEventListener('input', () => { devGrow(); savePreference(devPreference(devCreating ? 'draft' : devId), $('#dev-input').value); });
 $('#dev-dictate').addEventListener('click', () => {
   toggleDictation($('#dev-dictate'), $('#dev-status'), async blob => {
     // As in Terminals: the transcript lands in the field to review, not in the agent.
     const text = await uploadDictation('/dictate', blob);
-    if (text) { const box = $('#dev-input'); box.value = box.value ? `${box.value} ${text}` : text; devGrow(); }
+    if (text) { const box = $('#dev-input'); box.value = box.value ? `${box.value} ${text}` : text; devGrow(); savePreference(devPreference(devCreating ? 'draft' : devId), box.value); }
     return text;
   });
 });

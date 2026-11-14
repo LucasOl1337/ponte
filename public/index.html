@@ -169,24 +169,32 @@
         <section id="page-dev" class="page dev-page" data-page="dev" hidden>
           <div class="dev-bar">
             <label class="sr-only" for="dev-session" data-i18n="Sessão de desenvolvimento">Development session</label><select id="dev-session"><option value="" data-i18n="Nenhuma sessão">No session</option></select>
-            <button type="button" class="dev-tool" id="dev-new" aria-expanded="false" aria-label="New session" data-i18n-aria-label="Nova sessão"><svg><use href="#i-plus"/></svg></button>
+            <button type="button" class="button small" id="dev-new" aria-expanded="false"><svg><use href="#i-plus"/></svg><span data-i18n="Nova missão">New mission</span></button>
             <button type="button" class="dev-tool" id="dev-open-pc" aria-label="Open on the PC" title="Open on the PC" data-i18n-aria-label="Abrir no PC" data-i18n-title="Abrir no PC"><svg><use href="#i-monitor"/></svg></button>
             <button type="button" class="dev-tool dev-font" id="dev-font-down" aria-label="Smaller text" data-i18n-aria-label="Texto menor">A−</button><button type="button" class="dev-tool dev-font" id="dev-font-up" aria-label="Larger text" data-i18n-aria-label="Texto maior">A+</button>
             <button id="dev-size" class="dev-size" type="button" disabled title="Fit the session to the phone" data-i18n-title="Ajustar a sessão ao celular"></button>
           </div>
+          <details class="dev-missions" id="dev-missions"><summary id="dev-missions-count" data-i18n="Suas sessões">Your sessions</summary><div id="dev-mission-list"></div></details>
+          <p id="dev-context" class="dev-context" role="status" hidden></p>
           <div id="dev-new-panel" class="dev-new-panel" hidden>
-            <div class="start-agents dev-agents" role="radiogroup" aria-label="Where to start" data-i18n-aria-label="Onde começar"><button type="button" class="start-agent" role="radio" data-dev-agent="claude" aria-checked="true">Claude</button><button type="button" class="start-agent" role="radio" data-dev-agent="codex" aria-checked="false">Codex</button><button type="button" class="start-agent" role="radio" data-dev-agent="shell" aria-checked="false" data-i18n="Terminal">Terminal</button><button type="button" class="start-agent" role="radio" data-dev-agent="ssh" aria-checked="false" id="dev-ssh" hidden>SSH</button></div>
-            <div class="dev-new-row"><label class="sr-only" for="dev-project" data-i18n="PASTA">FOLDER</label><select id="dev-project"><option value="" data-i18n="Pasta pessoal (~)">Home folder (~)</option></select><button type="button" class="button primary" id="dev-create" data-i18n="Criar">Create</button></div>
+            <h2 data-i18n="O que vamos fazer?">What shall we work on?</h2>
+            <div class="dev-config-grid">
+              <label><span data-i18n="Máquina">Machine</span><select id="dev-machine"><option value="self" data-i18n="Este nó Ponte">This Ponte node</option></select></label>
+              <label><span>Harness</span><select id="dev-harness" disabled><option value="" data-i18n="Carregando…">Loading…</option></select></label>
+              <label class="dev-config-wide"><span data-i18n="Modelo e provedor">Model and provider</span><select id="dev-model" disabled></select></label>
+              <label class="dev-config-wide"><span data-i18n="Diretório do projeto">Project directory</span><input id="dev-project" list="dev-directories" value="~" autocomplete="off" autocapitalize="off" spellcheck="false"><datalist id="dev-directories"></datalist></label>
+            </div>
+            <p class="hint" id="dev-catalog-status" role="status"></p>
           </div>
           <div class="dev-screen-wrap">
             <div id="dev-screen" class="dev-screen" tabindex="0" role="log" aria-label="Session output" data-i18n-aria-label="Saída da sessão"><div id="dev-measure" class="dev-measure" aria-hidden="true">MMMMMMMMMMMMMMMMMMMM</div><pre id="dev-output" class="dev-output"></pre></div>
-            <div id="dev-empty" class="dev-empty" hidden><button type="button" class="button primary" id="dev-empty-start"><svg aria-hidden="true"><use href="#i-code"/></svg> <span id="dev-empty-label"></span></button><p class="hint" data-i18n="Roda no PC, na pasta do projeto, como se você tivesse aberto lá.">Runs on the PC, in the project folder, as if you had opened it there.</p></div>
-            <p id="dev-status" class="hint dictate-status dev-status" role="status" hidden></p>
+            <div id="dev-empty" class="dev-empty" hidden><button type="button" class="button primary" id="dev-empty-start"><span id="dev-empty-label" data-i18n="Nova missão">New mission</span></button></div>
             <button type="button" id="dev-live" class="dev-live" hidden data-i18n="↓ ao vivo">↓ live</button>
           </div>
+          <p id="dev-status" class="hint dictate-status dev-status" role="status" hidden></p>
           <div id="dev-keys" class="key-bar dev-keys" data-key-bar="dev" role="toolbar" aria-label="Agent keys" data-i18n-aria-label="Teclas do agente"></div>
           <div class="dev-composer">
-            <label class="sr-only" for="dev-input" data-i18n="Mensagem para a sessão">Message to the session</label><textarea id="dev-input" rows="1" autocomplete="off" autocapitalize="sentences" spellcheck="true" maxlength="16000" placeholder="Talk to the agent…" data-i18n-placeholder="Fale com o agente…"></textarea>
+            <label for="dev-input" id="dev-input-label" data-i18n="Sua missão">Your mission</label><textarea id="dev-input" rows="4" autocomplete="off" autocapitalize="sentences" spellcheck="true" maxlength="16000" placeholder="Describe the result you want, or dictate and review it." data-i18n-placeholder="Descreva o resultado que quer, ou dite e revise."></textarea>
             <div class="dev-actions"><button type="button" class="dev-tool dictate-button" id="dev-dictate" aria-pressed="false" aria-label="Dictate" data-i18n-aria-label="Ditar"><svg><use href="#i-mic"/></svg></button><button type="button" class="dev-tool" id="dev-attach" aria-label="Attach image" data-i18n-aria-label="Anexar imagem"><svg><use href="#i-image"/></svg></button><input type="file" id="dev-file" accept="image/png,image/jpeg,image/webp" hidden><button type="button" class="button small" id="dev-paste" data-i18n="Colar">Paste</button><button type="button" class="button small primary" id="dev-send"><span data-i18n="Enviar">Send</span> <svg aria-hidden="true"><use href="#i-enter"/></svg></button></div>
           </div>
         </section>

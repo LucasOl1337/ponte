@@ -25,6 +25,7 @@ function harness({ sessions = [shell, claude], respond = () => null, window: ext
       calls.push({ path, method: options.method || 'GET', body: options.body });
       const custom = await respond(path, options);
       if (custom) return custom;
+      if (path.startsWith('/api/terminals?catalog=1')) { const machine = new URL(path, 'http://test').searchParams.get('machine'); return ok({ machine, hostname:'test-desktop', home:'/home/test', directories:['/home/test','/home/test/Projects/ponte'], machines:[{id:'self',label:'Local'},{id:'ssh:work-vm',label:'Work VM'}], harnesses:[{id:'jcode',models:[{id:'test-model',provider:'test-provider'}]}] }); }
       if (path === '/api/terminals' && (options.method || 'GET') === 'GET') return ok({ available: true, sessions: sessions.map(session => ({ ...session })), limit: 4 });
       if (path === '/api/terminals' && options.method === 'POST') return ok({ ...claude, id: 'abcdefabcdefabcdefabcdef', ...JSON.parse(options.body) });
       if (path === '/api/terminals?projects=1') return ok({ projects: ['ponte', 'demo'] });
@@ -34,7 +35,7 @@ function harness({ sessions = [shell, claude], respond = () => null, window: ext
     },
   });
   vm.runInContext(runtime, context); vm.runInContext(app, context);
-  return { document, window, calls, timers, saved, el: selector => document.querySelector(selector), run: source => vm.runInContext(source, context), writes: () => calls.filter(call => call.method !== 'GET'),
+  return { document, window, context, calls, timers, saved, el: selector => document.querySelector(selector), run: source => vm.runInContext(source, context), writes: () => calls.filter(call => call.method !== 'GET'),
     // Runs the timers queued with this delay (the 300 ms resize debounce), not the polling.
     fire: async ms => { const due = pending.filter(item => item.ms === ms); due.forEach(item => pending.splice(pending.indexOf(item), 1)); due.forEach(item => item.callback()); await flush(); } };
 }
@@ -138,14 +139,16 @@ test('new sessions start at the measured grid: Dev, Home and Terminals', async (
   const h = harness({ sessions: [], window: { innerWidth: 412, innerHeight: 915 } });
   await flush();
   h.run("navigate('dev')"); await flush();
-  assert.equal(h.el('#dev-empty').hidden, false);
-  assert.match(h.el('#dev-empty-label').textContent, /New Claude in ponte/);
+  assert.equal(h.el('#dev-new-panel').hidden, false);
+  assert.equal(h.el('#dev-input').disabled, false);
   // Measured box: 396×612 content at 7.2×15 px cells.
   const screen = h.el('#dev-screen'), probe = h.el('#dev-measure');
   screen.clientWidth = 412; screen.clientHeight = 624; probe.clientWidth = 144; probe.clientHeight = 15;
-  h.el('#dev-empty-start').click(); await flush();
+  h.el('#dev-input').value = 'Test mission';
+  h.el('#dev-send').click(); await flush();
   const created = h.writes().filter(call => call.path === '/api/terminals').map(call => JSON.parse(call.body));
-  assert.deepEqual(created[0], { cols: 55, rows: 40, agent: 'claude', project: 'ponte' });
+  assert.equal(created[0].cols, 55); assert.equal(created[0].rows, 40);
+  assert.deepEqual({...created[0].mission,requestId:undefined}, {machine:'self',harness:'jcode',model:'test-model',provider:'test-provider',directory:'/home/test',prompt:'Test mission',requestId:undefined});
   // Unmeasured (Dev never shown): an estimate from the window, never 40x24.
   const other = harness({ sessions: [], window: { innerWidth: 412, innerHeight: 915 } });
   await flush();
@@ -172,6 +175,70 @@ test('Open on the PC asks first, then calls the open route once', async () => {
   h.el('#dev-open-pc').click(); await flush();
   assert.equal(h.el('#dev-open-dialog').open, false);
   assert.equal(h.writes().filter(call => call.path.endsWith('/open')).length, 2);
+});
+
+test('mission creation double tap sends one reviewed request with explicit destination and model', async () => {
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const h = harness({sessions:[],respond:async (path, options) => {
+    if (path === '/api/terminals' && options.method === 'POST') { await waiting; return ok({...claude,mission:{...JSON.parse(options.body).mission,status:'working',createdAt:Date.now()}}); }
+  }});
+  await flush(); h.run("navigate('dev')"); await flush();
+  h.el('#dev-input').value = 'Reviewed mission';
+  h.el('#dev-send').click(); h.el('#dev-send').click(); await flush();
+  const calls = h.writes().filter(c => c.path === '/api/terminals');
+  assert.equal(calls.length,1);
+  const body = JSON.parse(calls[0].body).mission;
+  assert.equal(body.prompt,'Reviewed mission'); assert.equal(body.model,'test-model'); assert.equal(body.machine,'self'); assert.ok(body.requestId);
+  release(); await flush();
+  assert.equal(h.run('devId'),claude.id);
+  assert.equal(h.el('#dev-keys').hidden,true);
+});
+
+test('mission selection survives tab return and unavailable destination never creates locally', async () => {
+  const session = {...claude,mission:{machine:'self',harness:'jcode',model:'chosen',provider:'configured',status:'ready',createdAt:Date.now(),directory:'/work'}};
+  const h = harness({sessions:[session],respond:(path) => path.includes('machine=ssh%3Awork-vm') ? {ok:false,status:503,json:async()=>({error:{code:'MISSION_DESTINATION_UNAVAILABLE'}})} : null});
+  await flush(); h.run("navigate('dev')"); await flush();
+  assert.equal(h.run('devId'),session.id);
+  h.run("navigate('terminais'); navigate('dev')"); await flush();
+  assert.equal(h.run('devId'),session.id);
+  assert.equal(h.saved.get('ponte-dev-home-session'),session.id);
+  h.el('#dev-new').click(); h.el('#dev-machine').value='ssh:work-vm'; h.el('#dev-machine').dispatchEvent({type:'change'}); await flush();
+  h.el('#dev-input').value='Never fallback'; h.el('#dev-send').click(); await flush();
+  assert.equal(h.el('#dev-send').disabled,true);
+  assert.equal(h.writes().some(c=>c.path==='/api/terminals'),false);
+});
+
+test('dictation requests a microphone only on tap and edits the shared mission before sending', async () => {
+  const h = harness({sessions:[],respond:path=>path==='/api/dictate'?ok({text:'Esta é uma missão de teste',provider:'synthetic'}):null});
+  let requests=0, stopped=0, active;
+  h.context.navigator.mediaDevices={getUserMedia:async()=>{requests++;return {getTracks:()=>[{stop:()=>stopped++}]};}};
+  class Recorder { static isTypeSupported(){return true;} constructor(){active=this;this.state='inactive';this.mimeType='audio/webm';} start(){this.state='recording';} stop(){this.state='inactive';this.ondataavailable({data:new Blob(['synthetic audio fixture'])});this.onstop();} }
+  h.context.MediaRecorder=Recorder;h.window.MediaRecorder=Recorder;
+  await flush();h.run("navigate('dev')");await flush();
+  assert.equal(requests,0);
+  h.el('#dev-dictate').click();await flush();assert.equal(requests,1);assert.equal(active.state,'recording');
+  h.el('#dev-dictate').click();await flush();
+  assert.equal(h.el('#dev-input').value,'Esta é uma missão de teste');assert.ok(stopped>0);
+  assert.equal(h.writes().some(c=>c.path==='/api/terminals'),false);
+  h.el('#dev-input').value+=' revisada';h.el('#dev-send').click();await flush();
+  assert.equal(JSON.parse(h.writes().find(c=>c.path==='/api/terminals').body).mission.prompt,'Esta é uma missão de teste revisada');
+});
+
+test('new-mission draft and choices survive tab return and reload without creating a mission', async () => {
+  const h = harness(); await flush(); h.run("navigate('dev')"); await flush();
+  h.el('#dev-new').click();
+  h.el('#dev-input').value='Draft not sent';h.el('#dev-input').dispatchEvent({type:'input'});
+  h.el('#dev-project').value='/home/test/Projects/ponte';h.el('#dev-project').dispatchEvent({type:'change'});
+  h.el('#dev-harness').dispatchEvent({type:'change'});h.el('#dev-model').dispatchEvent({type:'change'});
+  h.run("navigate('terminais');navigate('dev')");await flush();
+  assert.equal(h.run('devCreating'),true);assert.equal(h.el('#dev-input').value,'Draft not sent');
+  assert.equal(h.el('#dev-project').value,'/home/test/Projects/ponte');
+  // Rebuild client state as a reload does, keeping only persisted preferences.
+  h.run("devId='';devCreating=false;devCatalog=null;devCatalogKey='';devCatalogNode='';updateDevNavigation()");await flush();
+  assert.equal(h.run('devCreating'),true);assert.equal(h.el('#dev-input').value,'Draft not sent');
+  assert.equal(h.el('#dev-project').value,'/home/test/Projects/ponte');assert.equal(h.el('#dev-harness').value,'jcode');
+  assert.equal(h.writes().some(c=>c.path==='/api/terminals'),false);
 });
 
 test('Claude Code symbols missing from phone fonts become one-cell look-alikes', () => {
@@ -276,13 +343,12 @@ test('SSH shows only where the device lists machines, swaps the folder list for 
   h.run("navigate('inicio')"); h.el('[data-start-agent="claude"]').click();
   assert.equal(h.el('#start-project-label').textContent, 'FOLDER');
   assert.deepEqual(h.el('#start-project').querySelectorAll('option').map(option => option.getAttribute('value')), ['', 'ponte']);
-  // Dev: the same choice in the new-session panel.
+  // Dev uses the selected machine's own capability catalog, not a bare SSH shell.
   h.run("navigate('dev')"); await flush();
   h.el('#dev-new').click(); await flush();
-  assert.equal(h.el('#dev-ssh').hidden, false);
-  h.el('#dev-ssh').click();
-  assert.equal(h.el('#dev-project').value, 'work-vm', 'the last machine is remembered');
-  h.el('#dev-create').click(); await flush();
+  h.el('#dev-machine').value = 'ssh:work-vm'; h.el('#dev-machine').dispatchEvent({type:'change'}); await flush();
+  assert.equal(h.el('#dev-project').value, '/home/test');
+  h.el('#dev-input').value = 'Test remote mission'; h.el('#dev-send').click(); await flush();
   const dev = h.writes().filter(call => call.path === '/api/terminals').map(call => JSON.parse(call.body)).at(-1);
-  assert.equal(dev.agent, 'ssh'); assert.equal(dev.host, 'work-vm'); assert.equal(dev.project, undefined);
+  assert.equal(dev.mission.machine, 'ssh:work-vm'); assert.equal(dev.mission.model, 'test-model'); assert.equal(dev.agent, undefined);
 });

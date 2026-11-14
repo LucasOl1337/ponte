@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFile, writeFile, rename, unlink, appendFile } from 'node:fs/promises';
+import { readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { setTimeout as wait } from 'node:timers/promises';
 import { missionCommand, nativePattern, requestPattern } from './mission-runtime.mjs';
@@ -18,7 +18,8 @@ async function print(text) {
   const clean = String(text).replace(/\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
   output = (output + clean).slice(-192 * 1024);
   process.stdout.write(clean);
-  await writeFile(files.output, output, { mode: 0o600 });
+  await writeFile(files.output + '.new', output, { mode: 0o600 });
+  await rename(files.output + '.new', files.output);
 }
 async function event(value) {
   const nativeId = value.session_id || value.thread_id || (value.type === 'session' ? value.id : null);
@@ -44,6 +45,7 @@ async function turn(request) {
   state.handled.push(request.requestId);
   state.status = 'working'; failed = false;
   await save();
+  await unlink(files.inbox).catch(() => {});
   await print(`\n› ${request.prompt}\n\n`);
   const { program, args } = await missionCommand({ ...config, action: 'run', prompt: request.prompt, resume: state.nativeId });
   child = spawn(program, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
@@ -68,7 +70,6 @@ while (true) {
   let request;
   try { request = JSON.parse(await readFile(files.inbox, 'utf8')); } catch {}
   if (request && requestPattern.test(request.requestId || '') && !state.handled.includes(request.requestId)) {
-    await unlink(files.inbox).catch(() => {});
     if (!state.nativeId || state.status === 'error') { await print('\nContinuação indisponível: confira a falha antes de retomar.\n'); }
     else await turn(request);
   }
