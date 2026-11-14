@@ -115,9 +115,15 @@ export function main(argv) {
   fs.mkdirSync(release,{recursive:true,mode:0o700});
   execFileSync('tar',['-x','-C',release],{input:execFileSync('git',['-C',source.checkout,'archive',target],{maxBuffer:128<<20})});
   const files=treeFiles(release);
-  const logs=execFileSync(process.execPath,['--test',...fs.readdirSync(path.join(release,'tests')).filter(f=>f.endsWith('.test.mjs')).map(f=>path.join(release,'tests',f))],{cwd:release,env:{...env,PONTE_CONFIG:path.join(release,'no-config.json')},maxBuffer:64<<20,timeout:240000});
   const planDir=path.join(os.homedir(),'.local/state/ponte/release-plans',target); fs.mkdirSync(planDir,{recursive:true,mode:0o700});
-  fs.writeFileSync(path.join(planDir,'tests.log'),logs,{mode:0o600});
+  const testEnv={...env,PONTE_CONFIG:path.join(release,'no-config.json')}; delete testEnv.NODE_TEST_CONTEXT;
+  try {
+    const logs=execFileSync(process.execPath,['--test',...fs.readdirSync(path.join(release,'tests')).filter(f=>f.endsWith('.test.mjs')).map(f=>path.join(release,'tests',f))],{cwd:release,env:testEnv,maxBuffer:64<<20,timeout:240000});
+    fs.writeFileSync(path.join(planDir,'tests.log'),logs,{mode:0o600});
+  } catch(error) {
+    fs.writeFileSync(path.join(planDir,'tests.log'),Buffer.concat([error.stdout || Buffer.alloc(0),error.stderr || Buffer.alloc(0)]),{mode:0o600});
+    throw Error(`Release tests failed. See ${path.join(planDir,'tests.log')}`);
+  }
   const dropInFile=path.join(os.homedir(),'.config/systemd/user',`${unit}.d`,'90-ponte-release.conf');
   const plan={target,version,release,files,source,dropInFile,dropIn:text,previousDropIn:existsContent(dropInFile),previousUnit:systemctl('cat',unit),inventory};
   verifyRelease(plan); verifySource(source);
