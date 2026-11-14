@@ -20,6 +20,7 @@ function fixture(t) {
 test('release inventory rejects modified source, new undeclared files and changed index', t=>{
   const {dir,git}=fixture(t), initial=snapshot(dir);
   verifySource(initial);
+  verifySource({files:initial.files.map(f=>({sha256:f.sha256,path:f.path})),status:initial.status,head:initial.head,checkout:initial.checkout});
   fs.writeFileSync(path.join(dir,'code'),'changed\n');
   assert.throws(()=>verifySource(initial),/changed since/);
   fs.writeFileSync(path.join(dir,'code'),'wip\n'); verifySource(initial);

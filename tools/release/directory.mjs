@@ -21,7 +21,7 @@ export function snapshot(checkout) {
 }
 export function verifySource(expected) {
   const actual = snapshot(expected.checkout);
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw Error('Source checkout changed since preservation inventory. Reconcile before deployment.');
+  if (actual.checkout !== expected.checkout || actual.head !== expected.head || actual.status !== expected.status || actual.files.length !== expected.files.length || actual.files.some((file,index) => file.path !== expected.files[index]?.path || file.sha256 !== expected.files[index]?.sha256)) throw Error('Source checkout changed since preservation inventory. Reconcile before deployment.');
 }
 export function verifyDeclared(checkout, source, baseCommit, declarations) {
   if (source.files.length !== Object.keys(declarations).length) throw Error('Every WIP file needs a declaration.');
