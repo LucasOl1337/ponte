@@ -15,6 +15,12 @@ canvas = {**window, 'address': '0xlabcanvas', 'title': 'Lab canvas', 'class': 'l
 active = next((c for c in clients + [canvas] if c['address'] == _lab.load().get('active')), window)
 if args[:1] == ['-j']:
     kind = args[1]
+    # Optional explicit topology for monitor removal and non-contiguous IDs.
+    try:
+        with open(os.path.join(_lab.LAB, 'desktop.json')) as f: desktop = json.load(f)
+    except (OSError, ValueError): desktop = {}
+    if kind in desktop:
+        print(json.dumps(desktop[kind])); sys.exit(0)
     if kind == 'monitors': print(json.dumps([m] + _lab.extra_monitors()))
     elif kind == 'devices': print(json.dumps({'mice': [{'name': 'ydotoold-virtual-device-1'}], 'keyboards': []}))
     elif kind == 'activewindow': print(json.dumps(active))

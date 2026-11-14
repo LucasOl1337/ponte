@@ -100,7 +100,7 @@ test('a Super shortcut leaves as one keyboard.combo with the pairing token, neve
   h.el('#shortcut-palette [data-combo="Super+F"]').click(); await h.settle();
   h.el('#shortcut-palette [data-combo="Super+Shift+1"]').click(); await h.settle();
   const sent = h.calls.filter(call => call.path === '/api/action');
-  assert.deepEqual(sent.map(call => JSON.parse(call.body)), [{ type: 'keyboard.combo', combo: 'Super+F' }, { type: 'keyboard.combo', combo: 'Super+Shift+1' }]);
+  assert.deepEqual(sent.map(call => JSON.parse(call.body)), [{ type: 'keyboard.combo', combo: 'Super+F', monitor: 'TEST-1' }, { type: 'keyboard.combo', combo: 'Super+Shift+1', monitor: 'TEST-1' }]);
   assert.equal(h.actions().some(action => action.type === 'keyboard.text'), false, 'the word Super is never typed');
 });
 

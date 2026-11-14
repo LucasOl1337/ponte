@@ -1,4 +1,21 @@
 'use strict';
+(function (root) {
+  const monitors = state => (state?.monitors || []).filter(m => !m.disabled).slice().sort((a, b) => (a.x || 0) - (b.x || 0) || (a.y || 0) - (b.y || 0) || a.name.localeCompare(b.name));
+  const workspaces = (state, name) => (state?.workspaces || []).filter(ws => !!name && ws.monitor === name && Number.isInteger(ws.id) && ws.id > 0).sort((a, b) => a.id - b.id);
+  function windows(state, name) {
+    const monitor = monitors(state).find(m => m.name === name);
+    if (!monitor) return [];
+    const ids = new Set(workspaces(state, name).map(ws => ws.id));
+    return (state?.windows || []).filter(w => w.monitor === monitor.id || (w.monitor == null && ids.has(w.workspace?.id)));
+  }
+  function label(state, name) {
+    const list = monitors(state), index = list.findIndex(m => m.name === name), monitor = list[index];
+    if (!monitor) return 'Nenhum monitor';
+    const position = list.length === 3 ? ['Esquerda', 'Centro', 'Direita'][index] : list.length === 2 ? ['Esquerda', 'Direita'][index] : `Monitor ${index + 1}`;
+    return `${monitor.label || position} · ${name}`;
+  }
+  root.PonteScreenContext = { monitors, workspaces, windows, label };
+})(typeof window !== 'undefined' ? window : globalThis);
 const i18n = window.PonteI18n;
 const t = i18n.t;
 const h = i18n.html;
@@ -736,7 +753,6 @@ function renderState() {
   $('#mute-button').setAttribute('aria-label', muted ? t("Ativar som do PC") : t("Silenciar som do PC"));
   $('#mute-button').setAttribute('aria-pressed', String(muted));
   $('#mute-button').innerHTML = icon(muted ? 'muted' : 'volume');
-  renderVisiblePage();
   const wolSection = $('#power-wol-section');
   if (wolSection) {
     if (state.wakeOnLan?.mac) {
@@ -754,14 +770,16 @@ function renderState() {
     monitorSignature = nextMonitorSignature;
     const selected = $('#monitor-select').value || savedPreference(monitorKey());
     $('#monitor-select').innerHTML = monitors.length ? monitors.map(m => `<option value="${escaped(m.name)}">${escaped(window.PonteScreenContext.label(state, m.name))} · ${Number(m.width)} × ${Number(m.height)}${m.focused ? t(" · em foco") : ''}</option>`).join('') : `<option value="">${escaped(t("Nenhum monitor disponível"))}</option>`;
-    const next = monitors.find(m => m.name === selected) || monitors.find(m => m.focused) || monitors[0];
+    const next = monitors.find(m => m.name === selected) || (!selected && (monitors.find(m => m.focused) || monitors[0]));
     if (next) { $('#monitor-select').value = next.name; if (!savedPreference(monitorKey())) savePreference(monitorKey(),next.name); }
-    if (selected && next?.name !== selected) { liveWanted = false; stopLive(t("Monitor alterado. Inicie a transmissão do monitor escolhido.")); cancelSnapshot(); clearScreenImage(); }
-    $('#viewer-monitor-name').textContent = next?.name || t("Nenhum monitor");
+    else if (monitors.length) { $('#monitor-select').innerHTML = '<option value="">Escolha um monitor</option>' + $('#monitor-select').innerHTML; $('#monitor-select').value = ''; }
+    if (selected && next?.name !== selected) { liveWanted = false; stopLive(); cancelSnapshot(); setScreenStatus('paused', 'Monitor desconectado. Escolha um monitor para continuar.'); }
+    $('#viewer-monitor-name').textContent = screenImageMonitor || next?.name || t("Nenhum monitor");
     $('#screen-monitor-select').innerHTML = $('#monitor-select').innerHTML;
     $('#screen-monitor-select').value = next?.name || '';
     $('#screen-monitor-select').disabled = !monitors.length;
   }
+  renderVisiblePage();
   updateScreenButtons();
   reconcileLive();
 }
@@ -1296,11 +1314,8 @@ function classifyScreenGesture({ pointerCount, moved, durationMs }) {
 }
 
 function workspaceDropTargetIds(workspaces, currentId) {
-  // Omarchy exposes ten numbered workspaces by default. Keep the familiar
-  // first five reachable even while empty, then append every live numbered
-  // workspace reported by Hyprland. The shelf scrolls if a custom setup has
-  // more, while special workspaces and unsafe IDs stay out of the interface.
-  const ids = new Set([1, 2, 3, 4, 5]);
+  // Only actual workspaces on the selected monitor are offered.
+  const ids = new Set();
   for (const item of workspaces || []) {
     const id = Number(item?.id);
     if (Number.isInteger(id) && id >= 1 && id <= 100) ids.add(id);
@@ -1563,7 +1578,7 @@ function screenControlBoxes() {
 // (public/mobile-shortcuts.js). Each combo is one keyboard.combo action: the
 // server presses and releases it in a single call, so nothing stays held.
 const shortcuts = window.PonteShortcuts && $('#shortcut-host') ? window.PonteShortcuts.mountShortcuts($('#shortcut-host'), {
-  send: async request => { if (!await actionResult(request.type, { combo: request.combo })) throw new Error(t('Não foi possível concluir a ação.')); },
+  send: async request => { if (!selectedMonitor()) throw new Error('Escolha um monitor antes.'); if (!await actionResult(request.type, { combo: request.combo, monitor: selectedMonitor().name })) throw new Error(t('Não foi possível concluir a ação.')); },
   openPreset: async request => {
     if ((request.node || '') !== targetNode) throw new Error('TARGET_CHANGED');
     const session = await (await api(request.path, { method: request.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...request.body, ...devSessionSize() }) })).json();
@@ -1572,7 +1587,7 @@ const shortcuts = window.PonteShortcuts && $('#shortcut-host') ? window.PonteSho
   },
   target: () => connected && token ? { id: targetNode, name: targetName() || t('Este PC') } : null,
   storage: (() => { try { return localStorage; } catch { return null; } })(),
-  onStatus: () => document.body.setAttribute('data-shortcuts-open', String(!($('#shortcut-palette')?.hidden ?? true))),
+  onStatus: () => { const open = !($('#shortcut-palette')?.hidden ?? true); document.body.setAttribute('data-shortcuts-open', String(open)); if (open && !$('#screen-windows-panel').hidden) setWindowsPanel(false); },
 }) : null;
 $('#shortcut-host')?.addEventListener('click', () => document.body.setAttribute('data-shortcuts-open', String(!($('#shortcut-palette')?.hidden ?? true))));
 function closeShortcuts() { if (!($('#shortcut-palette')?.hidden ?? true)) shortcuts?.close(); document.body.setAttribute('data-shortcuts-open', 'false'); }
@@ -1698,6 +1713,10 @@ function setScreenStatus(mode,message = '') {
   i18n.write($('#live-note'),message || (mode === 'live' ? t('Ao vivo · {profile}. O ritmo depende da conexão e do monitor.',{profile:t(liveSession?.profileLabel || 'Equilibrado')}) : mode === 'paused' ? t("Transmissão pausada. Toque em iniciar para acompanhar novamente.") : mode === 'snapshot' ? t("Esta é uma foto. Inicie ao vivo para ver as mudanças do monitor.") : t("Veja as mudanças do monitor enquanto esta tela estiver aberta.")));
   $('#live-note').classList.toggle('error',mode === 'reconnecting');
   $('#live-note').hidden = mode === 'live' || mode === 'idle';
+  if (mode !== 'live' && screenImageMonitor && screenImageMonitor !== $('#monitor-select').value) {
+    $('#live-note').textContent = `Último quadro de ${screenImageMonitor}. ${message || ($('#monitor-select').value ? `Aguardando ${$('#monitor-select').value}.` : 'Escolha um monitor.')}`;
+    $('#live-note').hidden = false;
+  }
   updateScreenButtons();
   placeScreenStatus();
 }
@@ -2148,11 +2167,11 @@ function startLive() {
   runLiveSession(session);
 }
 $('#monitor-select').addEventListener('change',() => {
-  const restart = !!liveSession || liveWanted;
+  const restart = !!liveSession || liveWanted || screenIsVisible();
   savePreference(monitorKey(),$('#monitor-select').value);
   screenScale = 1; screenPanX = screenPanY = 0;
-  stopLive(); cancelSnapshot(); clearScreenImage();
-  $('#viewer-monitor-name').textContent = $('#monitor-select').value || t("Monitor do PC");
+  stopLive(); cancelSnapshot();
+  $('#viewer-monitor-name').textContent = screenImageMonitor || $('#monitor-select').value || t("Monitor do PC");
   $('#screen-monitor-select').value = $('#monitor-select').value;
   chosenWorkspace = 'all';
   renderScreenWorkspaces(); renderWindows();
@@ -2241,7 +2260,7 @@ const hold = { timer: null, held: false, dragging: false, semantic: false, lastM
 function clearHold() { clearTimeout(hold.timer); hold.timer = null; hold.held = false; }
 function renderWorkspaceDropShelf(currentId) {
   const shelf = $('#workspace-drop-shelf');
-  const ids = workspaceDropTargetIds(state?.workspaces, currentId);
+  const ids = workspaceDropTargetIds(window.PonteScreenContext.workspaces(state, selectedMonitor()?.name), currentId);
   $('#workspace-drop-targets').innerHTML = ids.map(id => `<button type="button" role="option" class="workspace-drop-target ${id === currentId ? 'current' : ''}" data-drop-workspace="${id}" aria-selected="false" aria-label="${escaped(t('Mover janela para área {workspace}',{workspace:id}))}">${id}</button>`).join('');
   shelf.hidden = false;
   $('#screen-preview').classList.add('workspace-drop-active');
@@ -2575,7 +2594,7 @@ function setWindowsPanel(open) {
   $('#screen-windows-panel').hidden = !open;
   $('#screen-windows-toggle').setAttribute('aria-expanded', String(open));
   if (open) { closeShortcuts(); renderWindows(); }
-  requestAnimationFrame(() => { applyScreenZoom(); placeScreenStatus(); });
+  (window.requestAnimationFrame || (callback => setTimeout(callback, 0)))(() => { applyScreenZoom(); placeScreenStatus(); });
 }
 $('#screen-windows-panel').append(...$('#page-janelas').children);
 $('#page-janelas').remove();

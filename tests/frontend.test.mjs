@@ -157,7 +157,7 @@ test('touch mapping converts zoom and pan into monitor pixels', () => {
   assert.equal(m.classifyScreenGesture({ pointerCount: 1, moved: false, durationMs: 500 }), 'longpress');
   assert.equal(m.classifyScreenGesture({ pointerCount: 1, moved: true, durationMs: 20 }), 'pan');
   assert.equal(m.classifyScreenGesture({ pointerCount: 2, moved: false, durationMs: 20 }), 'pinch');
-  assert.deepEqual(plain(m.workspaceDropTargetIds([{ id: 8 }, { id: 3 }, { id: -1 }, { id: 101 }], 7)), [1, 2, 3, 4, 5, 7, 8]);
+  assert.deepEqual(plain(m.workspaceDropTargetIds([{ id: 8 }, { id: 3 }, { id: -1 }, { id: 101 }], 7)), [3, 7, 8]);
   assert.equal(m.scaleMonitorRegion({ x: 100, y: 100, w: 800, h: 600 }, 4, null, 1920, 1080), null);
   assert.equal(m.regionsClose({ x: 10, y: 10, w: 100, h: 100 }, { x: 12, y: 11, w: 101, h: 99 }), true);
   const oneToOne = plain(m.nativePreviewRegion(390, 220, 1920, 1080, { x: 960, y: 540 }));
@@ -870,7 +870,7 @@ test('scroll buttons step the wheel at the last touch (or the view centre), repe
 });
 
 test('dragging a window onto the workspace shelf moves the captured window without switching view', async () => {
-  const state = { ...powerFixture, activeWindow: { address: '0xabc', workspace: { id: 1 } }, workspaces: [{ id: 1, name: '1', windows: 1 }, { id: 3, name: '3', windows: 0 }] };
+  const state = { ...powerFixture, activeWindow: { address: '0xabc', workspace: { id: 1 } }, workspaces: [{ id: 1, name: '1', windows: 1, monitor: 'HDMI-A-1' }, { id: 3, name: '3', windows: 0, monitor: 'HDMI-A-1' }] };
   const h = powerUiHarness({ state, actionResult: body => body.type === 'mouse.dragStartAt' ? { ok: true, window: { address: '0xabc', workspace: { id: 1 } } } : { ok: true } });
   await flushTicks();
   h.run("navigate('tela');connected=true;state.capabilities={mouse:true,keyboard:true,screenshot:true,live:true,audio:true};screenshotURL='blob:screen';screenMode='live';$('#screen-preview').clientWidth=390;$('#screen-preview').clientHeight=220;$('#screen-image').naturalWidth=1920;$('#screen-image').naturalHeight=1080;applyScreenZoom();$('#screen-image').clientWidth=390;$('#screen-image').clientHeight=219;$('#monitor-select').value='HDMI-A-1'");
@@ -962,6 +962,26 @@ test('a pinch survives the auto quality profile changing the frame resolution, a
   assert.equal(h.run('screenScale'), 3, 'same 16:9 shape from another size keeps zoom');
   h.run("$('#screen-image').naturalWidth=3440;$('#screen-image').naturalHeight=1440;$('#screen-image').dispatchEvent({type:'load'});");
   assert.equal(h.run('screenScale'), 1, 'ultrawide is a different monitor: zoom resets');
+});
+
+test('monitor changes retain an identified still frame and removal stops instead of silently choosing another output', async () => {
+  const h = powerUiHarness({ state: structuredClone(powerFixture) });
+  await flushTicks();
+  h.run("navigate('tela');connected=true;stopLive();liveWanted=false;screenImageMonitor='HDMI-A-1';screenshotURL='blob:old';screenMode='paused';$('#viewer-monitor-name').textContent='HDMI-A-1'");
+  h.el('#screen-monitor-select').value = 'DP-1';
+  h.el('#screen-monitor-select').dispatchEvent({ type: 'change' });
+  assert.equal(h.run('screenshotURL'), 'blob:old');
+  assert.equal(h.el('#viewer-monitor-name').textContent, 'HDMI-A-1');
+  assert.match(h.el('#live-note').textContent, /Último quadro de HDMI-A-1/);
+  h.run("state.monitors=state.monitors.filter(m=>m.name!=='DP-1');monitorSignature='';renderState()");
+  assert.equal(h.el('#monitor-select').value, '');
+  assert.equal(h.run('liveWanted'), false);
+  assert.equal(h.run('liveSession'), null);
+  assert.equal(h.all('[data-screen-workspace]').length, 0);
+  assert.equal(h.run('screenshotURL'), 'blob:old');
+  h.run("state.monitors=[];monitorSignature='';renderState()");
+  assert.equal(h.el('#screen-monitor-select').disabled, true);
+  assert.equal(h.el('#window-count').textContent, '0 WINDOWS');
 });
 
 test('the screen only shows workspaces belonging to the explicitly selected monitor', async () => {

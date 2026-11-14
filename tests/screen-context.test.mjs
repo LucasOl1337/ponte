@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { createDesktop } from '../backend/desktop.mjs';
 const sandbox = {};
-vm.runInNewContext(await readFile(new URL('../public/screen-context.js', import.meta.url), 'utf8'), sandbox);
+const appSource = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+vm.runInNewContext(appSource.slice(0, appSource.indexOf('const i18n =')), sandbox);
 const C = sandbox.PonteScreenContext;
 const state = {
   monitors: [{ id: 2, name: 'MID', x: 1920, activeWorkspace: 42 }, { id: 0, name: 'LEFT', x: 0, activeWorkspace: 3 }, { id: 8, name: 'RIGHT', x: 5360, activeWorkspace: 7 }],

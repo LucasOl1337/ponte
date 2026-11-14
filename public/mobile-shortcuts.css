@@ -13,9 +13,51 @@
 .shortcut-action { border-color: var(--accent, #3d6df2); }
 .shortcut-status:empty { display: none; }
 .shortcut-status { min-height: 1.2em; margin: 0 2px 8px; font-size: 13px; opacity: .85; }
-.shortcut-compose { display: grid; gap: 6px; }
+.shortcut-compose { display: grid; gap: 10px; }
+.shortcut-compose[hidden],.shortcut-catalog[hidden]{display:none}
+.shortcut-heading{display:flex;align-items:center;gap:8px;position:sticky;top:-10px;background:#1b2117;padding:8px 0;z-index:1}
+.shortcut-heading strong{flex:1}
+.shortcut-heading button,.shortcut-editor-actions button,.shortcut-edit{min-height:44px;padding:0 12px;border-radius:8px;background:#303b24;color:inherit}
+.shortcut-row{display:flex;gap:6px;margin-bottom:6px}
+.shortcut-item{flex:1;min-width:0;flex-wrap:wrap}
+.shortcut-group summary{min-height:44px;cursor:pointer;padding:12px 2px;font-size:14px}
+.shortcut-palette input{width:100%;min-height:44px;padding:0 10px;border:1px solid #46513a;border-radius:8px;background:#10150e;color:inherit;font:inherit}
+.shortcut-palette label{display:grid;gap:5px;font-size:13px}
+.shortcut-editor-actions{display:flex;flex-wrap:wrap;gap:8px}
+.shortcut-editor-actions [data-shortcut-save]{background:var(--lime);color:#202718}
+.shortcut-origin{font-size:12px;color:#aeb7a4}
+.shortcut-palette{bottom:calc(88px + env(safe-area-inset-bottom,0px));max-height:55vh;max-width:560px;margin-left:auto}
+.shortcut-palette output{font-size:16px;padding:10px;background:#10150e;border-radius:8px}
 .shortcut-compose summary { min-height: 44px; display: flex; align-items: center; padding: 0 4px; cursor: pointer; }
 .shortcut-mods { display: flex; gap: 6px; }
 .shortcut-mod { min-height: 44px; min-width: 64px; flex: 1; border-radius: 10px; border: 1px solid var(--line, #333); background: transparent; color: inherit; font: inherit; }
 .shortcut-mod[aria-pressed="true"] { background: var(--accent, #3d6df2); color: #fff; }
 .shortcut-palette select { min-height: 44px; width: 100%; padding: 0 10px; border-radius: 10px; background: transparent; color: inherit; border: 1px solid var(--line, #333); font: inherit; }
+.screen-context-bar{display:flex;gap:8px;align-items:center;padding:6px 8px;background:#10150e;flex:none;min-width:0;z-index:8}
+.screen-context-bar label{display:flex;align-items:center;gap:8px;flex:1;min-width:0;font-size:12px;color:#aeb7a4}
+.screen-context-bar select{width:100%;min-width:0;height:44px;padding:0 8px;border:1px solid #46513a;border-radius:10px;background:#1c2317;color:#eef2e7;font:inherit}
+.screen-context-bar button{min-height:44px;padding:0 14px;border-radius:10px;background:#28301f;color:#eef2e7}
+.screen-context-bar button[aria-expanded=true]{background:var(--lime);color:#202718}
+body[data-current-page=tela] .viewer-page .screen-card{display:flex;flex-direction:column}
+.screen-windows-panel{flex:none;max-height:38vh;overflow:auto;padding:8px 12px;background:#161d12;border-bottom:1px solid #46513a;overscroll-behavior:contain}
+.screen-windows-panel[hidden]{display:none}
+.screen-windows-panel .search-field{margin:0 0 6px;min-height:44px}
+.screen-windows-panel .window-workspaces{margin:0 0 6px;gap:6px}
+.screen-windows-panel .workspace{min-height:44px;min-width:44px}
+.screen-windows-panel .section-heading{margin:8px 0}
+.screen-windows-panel .section-heading h2{font-size:14px}
+.screen-windows-panel .window-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px}
+.screen-windows-panel .window-card{padding:8px;min-height:64px}
+.screen-windows-panel .window-details strong{font-size:13px}
+.screen-windows-panel .empty-state{padding:12px}
+.screen-workspace{min-width:44px;height:44px}
+@media(min-width:701px) and (min-height:601px){
+  body[data-current-page=tela] .viewer-page{height:calc(100vh - 130px);min-height:420px}
+  body[data-current-page=tela] .viewer-page .screen-card{height:100%;min-height:0}
+  body[data-current-page=tela] .viewer-page .screen-stage{display:flex;flex-direction:column;flex:1;min-height:0}
+  body[data-current-page=tela] .viewer-page .screen-preview{flex:1;min-height:0;height:auto}
+  .screen-context-bar{grid-column:1/-1}.screen-windows-panel{grid-column:1/-1}
+}
+.screen-fabs .shortcut-palette{top:auto;bottom:calc(88px + env(safe-area-inset-bottom,0px));max-height:55vh}
+@media(orientation:landscape){.screen-fabs .shortcut-palette{bottom:12px;max-height:65vh}}
+.shortcut-mod[aria-pressed=true]{background:var(--lime);color:#202718}
