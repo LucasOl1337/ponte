@@ -59,7 +59,7 @@ async function client(url, hello = {}) {
   ws.send(JSON.stringify({ t: 'hello', v: 1, token: TOKEN, maxFps: 30, ...hello }));
   const until = async (predicate, what, ms = 6000) => {
     const end = Date.now() + ms;
-    while (Date.now() < end) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 20)); }
+    while (Date.now() < end) { const value = await predicate(); if (value) return value; await new Promise(r => setTimeout(r, 20)); }
     throw new Error(`timed out waiting for ${what}`);
   };
   return { ws, texts, frames, framesBefore, until, get closed() { return closed; }, send: value => ws.send(JSON.stringify(value)) };
@@ -116,17 +116,42 @@ test('lab session end to end: hello → ready → keyframe first → a key reach
   assert.ok(seen.includes('ponte-rd-abs:BTN_LEFT=0'));
 });
 
-test('a second session takes over: the first gets taken and is closed with 4001; input then follows the new one', { skip: !canRun }, async t => {
-  const { url, app } = await rdApp(t);
+test('three phones stream and control concurrently; disconnecting one leaves the others working', { skip: !canRun }, async t => {
+  const { url, app, inputLog } = await rdApp(t);
   const first = await client(url);
   await first.until(() => first.frames.length > 0, 'first frames');
-  const second = await client(url);
-  await first.until(() => first.texts.find(m => m.t === 'taken'), 'taken');
-  await first.until(() => first.closed, 'close');
-  assert.equal(first.closed.code, 4001);
+  const second = await client(url, { monitor: 'LAB-2' });
   await second.until(() => second.frames.length > 0 && second.texts.find(m => m.t === 'ready'), 'second ready');
-  await second.until(() => app.rd.sessions.length === 1, 'one session');
-  assert.ok(app.rd.holder && app.rd.sessions[0] === app.rd.holder);
+  const third = await client(url);
+  await third.until(() => third.frames.length > 0, 'third frames');
+  assert.equal(app.rd.sessions.length, 3);
+  assert.equal(first.closed, null);
+  assert.equal(second.closed, null);
+  assert.equal(second.texts.find(m => m.t === 'ready').monitor, 'LAB-2');
+  const before = [first.frames.length, second.frames.length, third.frames.length];
+  first.send({ t: 'key', code: 'KeyA', down: true });
+  second.send({ t: 'key', code: 'KeyB', down: true });
+  third.send({ t: 'key', code: 'KeyC', down: true });
+  for (const event of ['KEY_A=1', 'KEY_B=1', 'KEY_C=1']) {
+    await first.until(async () => (await logEvents(inputLog)).includes(`ponte-rd-keys:${event}`), event);
+  }
+  await first.until(() => first.frames.length > before[0] && second.frames.length > before[1] && third.frames.length > before[2], 'all streams continue');
+  first.ws.terminate();
+  await second.until(() => app.rd.sessions.length === 2, 'only the disconnected session removed');
+  await second.until(async () => (await logEvents(inputLog)).includes('ponte-rd-keys:KEY_A=0'), 'first key released');
+  const events = await logEvents(inputLog);
+  assert.equal(events.includes('ponte-rd-keys:KEY_B=0'), false);
+  assert.equal(events.includes('ponte-rd-keys:KEY_C=0'), false);
+  second.send({ t: 'key', code: 'KeyB', down: false });
+  third.send({ t: 'key', code: 'KeyC', down: false });
+  for (const event of ['KEY_B=0', 'KEY_C=0']) {
+    await second.until(async () => (await logEvents(inputLog)).includes(`ponte-rd-keys:${event}`), event);
+  }
+  const after = [second.frames.length, third.frames.length];
+  await second.until(() => second.frames.length > after[0] && third.frames.length > after[1], 'surviving streams continue');
+  assert.equal(second.closed, null);
+  assert.equal(third.closed, null);
+  assert.ok([first, second, third].every(c => !c.texts.some(m => m.t === 'taken')));
 });
 
 const closedRecords = logs => logs.filter(line => line.startsWith('[rd] session closed ')).map(line => JSON.parse(line.slice('[rd] session closed '.length)));
@@ -222,7 +247,7 @@ test('capture exits log safe reasons before retries and capture keeps failing, w
   assert.equal(restarts.length, 4);
 });
 
-test('a view-only session never steals the holder, and an input-unavailable session owns nothing', async t => {
+test('view-only and input-unavailable sessions cannot send keyboard input', async t => {
   const inputs = [];
   const options = {
     inputMode: 'dry-run', readMonitors: async () => MONITORS, probe: async () => 0, exists: async () => true,
@@ -248,17 +273,17 @@ test('a view-only session never steals the holder, and an input-unavailable sess
     return ws;
   };
   const controller = await open(rd);
-  const holder = rd.holder;
   const viewer = await open(rd, { input: false });
   assert.equal(controller.readyState, 'open');
-  assert.equal(rd.holder, holder);
   assert.equal(rd.sessions.length, 2);
   viewer.emit('message', JSON.stringify({ t: 'key', code: 'KeyA', down: true }), false);
   controller.emit('message', JSON.stringify({ t: 'key', code: 'KeyB', down: true }), false);
   assert.equal(inputs.length, 1);
   assert.equal(inputs[0].keys, 1, 'only the controller feeds the helper');
-  await open(unavailable);
-  assert.equal(unavailable.holder, null);
+  const noInput = await open(unavailable);
+  noInput.emit('message', JSON.stringify({ t: 'key', code: 'KeyC', down: true }), false);
+  assert.equal(inputs.length, 1);
+  assert.equal(inputs[0].keys, 1);
 });
 
 test('target session closed is after helper drain and contains safe received/queued/injected/reason counts', async t => {

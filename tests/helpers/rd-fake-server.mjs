@@ -97,7 +97,6 @@ export async function startFakeRd({ h264, token = 'synthetic-rd-token', fps = 30
   ];
   const received = [];
   const sessions = new Set();
-  let active = null;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://fake');
@@ -126,7 +125,6 @@ export async function startFakeRd({ h264, token = 'synthetic-rd-token', fps = 30
       clearInterval(session.timer);
       const payload = Buffer.alloc(2); payload.writeUInt16BE(code);
       socket.write(frame(8, payload)); session.closed = true; socket.end(); sessions.delete(session);
-      if (active === session) active = null;
     };
     session.sendText = sendText; session.close = close;
     const stream = () => {
@@ -149,15 +147,13 @@ export async function startFakeRd({ h264, token = 'synthetic-rd-token', fps = 30
       received.push(message); log?.(message);
       if (message.t === 'hello') {
         if (message.token !== token) { sendText({ t: 'error', code: 'PAIRING_REQUIRED' }); close(4401); return; }
-        if (active && active !== session) { active.sendText({ t: 'taken' }); active.close(4409); }
-        active = session;
         session.monitor = displays.some(monitor => monitor.name === message.monitor) ? message.monitor : displays[0].name;
         ready(); stream();
       } else if (message.t === 'ping') sendText({ t: 'pong', c: message.c, s: Date.now() });
       else if (message.t === 'monitor' && displays.some(monitor => monitor.name === message.name)) { session.monitor = message.name; ready(); stream(); }
       else if (message.t === 'clip' && message.echo !== false) { /* a real target would set its clipboard */ }
     }));
-    socket.on('close', () => { session.closed = true; clearInterval(session.timer); sessions.delete(session); if (active === session) active = null; });
+    socket.on('close', () => { session.closed = true; clearInterval(session.timer); sessions.delete(session); });
     socket.on('error', () => {});
   });
 

@@ -1215,12 +1215,22 @@ test('end to end with the fake /api/rd: the ffmpeg stream reaches the decoder ke
   await until(() => h.run('session.monitor') === 'LAB-2', 'ready for LAB-2');
   assert.deepEqual(fake.received.filter(message => !['ping', 'clip', 'ack', 'keyframe'].includes(message.t)).map(message => message.t === 'key' ? `${message.code}${message.down ? 'v' : '^'}` : message.t), ['hello', 'KeyAv', 'KeyA^', 'monitor']);
   assert.equal(fake.received[0].token, TOKEN);
-  // A second client takes the target: the first one hears `taken` and stays down.
+  // A second client streams alongside the first, without interrupting its control.
   const other = new WebSocket(`ws://127.0.0.1:${fake.port}/api/rd`);
+  t.after(() => other.close());
   await new Promise(resolve => other.addEventListener('open', resolve));
   other.send(JSON.stringify({ t: 'hello', v: 1, token: TOKEN }));
-  await until(() => h.run('stopped') === 'taken', 'taken');
-  await until(() => h.run('socket') === null, 'closed');
+  await until(() => fake.received.filter(m => m.t === 'hello').length === 2, 'both connected');
+  const before = h.decoder.chunks.length;
+  await until(() => h.decoder.chunks.length > before, 'first stream continues');
+  assert.equal(h.run('stopped'), '');
+  assert.equal(h.run('engaged'), true);
+  h.key('keydown', 'KeyB'); h.key('keyup', 'KeyB');
+  await until(() => fake.received.some(m => m.t === 'key' && m.code === 'KeyB'), 'first still controls');
   other.close();
+  const after = h.decoder.chunks.length;
+  await until(() => h.decoder.chunks.length > after, 'first stream survives second disconnect');
+  h.run("stopped = 'auth'; socket.close()");
+  await until(() => h.run('socket') === null, 'closed');
   h.run('clearInterval = () => {}');
 });

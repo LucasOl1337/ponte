@@ -2,6 +2,8 @@
 
 Ponte controls the current Hyprland graphical session. Start it as your normal desktop user. An installation in a headless SSH session may not have the display, Wayland or D-Bus environment needed for desktop actions.
 
+Multiple phones can connect, stream and control the PC simultaneously. Connecting another phone does not disconnect an existing one. Each connection has its own monitor selection, video adaptation and input helper; disconnecting it releases only its own held keys and buttons. All phones still act on the same desktop, pointer and clipboard.
+
 ## Requirements
 
 The server requires Linux, Node.js 22+, Python 3.12+ and OpenSSL 3. A configured Tailscale connection on both devices is required for the native Android transport. Complete Tailscale authentication yourself before setup.

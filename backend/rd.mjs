@@ -1,7 +1,6 @@
 // Remote-desktop sessions over /api/rd (WebSocket): H.264 access units out,
-// raw keyboard and pointer in, clipboard both ways. One session holds the
-// input of this target at a time; a new one takes over and the previous gets
-// {"t":"taken"}. The message shapes are the contract in the mesh design (§5).
+// raw keyboard and pointer in, clipboard both ways. Sessions run concurrently;
+// each owns its input helper, capture and connection lifecycle.
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { access, constants } from 'node:fs/promises';
@@ -24,7 +23,7 @@ const HELLO_TIMEOUT_MS = 5000;
 const FOLLOW_SETTLE_MS = 250;
 const AUTHED_MAX_MESSAGE = MAX_CLIP_BYTES + 64 * 1024; // a clip may be 1 MiB; before the hello only 64 KiB
 const epochNow = () => performance.timeOrigin + performance.now();
-const INPUT_REASONS = ['invalid_payload', 'ended', 'not_holder', 'view_only', 'input_unavailable', 'early_overflow', 'unknown_code', 'worker_disabled', 'stopped', 'duplicate_down', 'up_without_down', 'helper_noop', 'legacy_ack', 'stdin_error', 'spawn_error', 'helper_exit', 'stop_without_ack', 'stop_timeout', 'tracking_overflow'];
+const INPUT_REASONS = ['invalid_payload', 'ended', 'view_only', 'input_unavailable', 'early_overflow', 'unknown_code', 'worker_disabled', 'stopped', 'duplicate_down', 'up_without_down', 'helper_noop', 'legacy_ack', 'stdin_error', 'spawn_error', 'helper_exit', 'stop_without_ack', 'stop_timeout', 'tracking_overflow'];
 const countReason = (counts, reason) => { counts[reason] = (counts[reason] || 0) + 1; };
 const parseText = text => { try { return JSON.parse(text); } catch { return null; } };
 const newSessionId = () => randomBytes(16).toString('hex');
@@ -176,7 +175,7 @@ export function createRemoteDesktop({
   const clip = clipboard || createClipboard({ env, spawn });
   const sessions = new Set();
   const relays = new Set();
-  let holder = null, closed = false;
+  let closed = false;
   let capsCache = null;
   const metrics = [];
 
@@ -367,8 +366,6 @@ export function createRemoteDesktop({
       this.monitor = pick.name;
       if (this.ended) return;
       if (this.caps.input && this.wantsInput) {
-        if (holder && holder !== this) holder.take();
-        holder = this;
         this.input = createInput({ python, dryRun: inputMode === 'dry-run', logFile: inputLog, mapping, env, spawn, now, log, onStats: () => this.reportInput() });
         this.input.setMonitors(this.monitors);
         this.input.start();
@@ -588,7 +585,7 @@ export function createRemoteDesktop({
       try { m = JSON.parse(text); } catch { return; }
       if (!m || typeof m !== 'object') return;
       if (this.ended) { if (m.t === 'key') countReason(this.keys.discarded, 'ended'); return; }
-      const input = holder === this ? this.input : null;
+      const input = this.input;
       input?.alive();
       const num = value => typeof value === 'number' && Number.isFinite(value);
       switch (m.t) {
@@ -596,7 +593,7 @@ export function createRemoteDesktop({
           if (typeof m.code !== 'string' || m.code.length > 32 || typeof m.down !== 'boolean') countReason(this.keys.discarded, 'invalid_payload');
           else if (!this.wantsInput) countReason(this.keys.discarded, 'view_only');
           else if (!this.caps.input) countReason(this.keys.discarded, 'input_unavailable');
-          else if (!input) countReason(this.keys.discarded, 'not_holder');
+          else if (!input) countReason(this.keys.discarded, 'input_unavailable');
           else input.key(m.code, m.down);
           this.reportInput();
           break;
@@ -643,12 +640,6 @@ export function createRemoteDesktop({
       }
     }
 
-    take() {
-      this.sendJson({ t: 'taken' });
-      this.end('taken');
-      this.ws.close(4001, 'taken');
-    }
-
     end(reason) {
       if (this.ended) return this.endPromise;
       this.ended = true;
@@ -659,7 +650,6 @@ export function createRemoteDesktop({
       this.capture?.stop();
       const stopped = this.input?.stop();
       this.stopClipboard?.();
-      if (holder === this) holder = null;
       const summary = summarize(this.metrics);
       metrics.push(summary);
       if (metrics.length > 20) metrics.shift();
@@ -693,7 +683,6 @@ export function createRemoteDesktop({
   return {
     accept, capabilities,
     get sessions() { return [...sessions]; },
-    get holder() { return holder; },
     metrics,
     async close() {
       closed = true;
