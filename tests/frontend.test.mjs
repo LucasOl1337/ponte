@@ -353,6 +353,42 @@ test('landscape phone: the workspace strip stands beside the button rail and the
   assert.equal(overlaps(stripTop, railRow), false, 'with the typing bar open the row sits under the strip');
 });
 
+// The same phone inside the Android shell: the WebView leaves 331 CSS px of
+// height on the POCO X8 (measured on the device) and 304 on a shorter one.
+// Seven 44px targets, five 6px gaps and the 8px bottom margin need 346px, so
+// "Scroll up" came out 30px tall. Below 360px the rail drops the monitor
+// button, which repeats the Monitor selector of the top bar.
+test('landscape phone with 331px or 304px of usable height: the button rail fits with 44px targets', async () => {
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const start = css.lastIndexOf('@media(orientation:landscape) and (max-height:600px){');
+  const block = css.slice(start, css.indexOf('\n}\n', start));
+  const size = Number(/\.screen-fab,\.screen-mic,\.screen-fabs \.shortcut-super\{width:44px;height:(\d+)px;min-height:44px/.exec(block)[1]);
+  const [bottom, gap] = /\.screen-fabs\{position:fixed;right:10px;bottom:(\d+)px;z-index:45;display:flex;flex-direction:column;align-items:center;gap:(\d+)px/.exec(block).slice(1).map(Number);
+  // The rail as the page builds it: the scroll pair shares one pill, then the
+  // monitor, rotate and keyboard buttons, the shortcuts host and the mic.
+  const line = html.split('\n').find(text => text.includes('class="screen-fabs"'));
+  const count = text => line.split(text).length - 1;
+  assert.equal(count('class="screen-fab"'), 5, 'scroll up, scroll down, monitor, rotate, keyboard');
+  assert.equal(count('id="screen-scroll"') + count('id="shortcut-host"') + count('id="screen-dictate"') + count('id="screen-switch-monitor"'), 4);
+  const targets = count('class="screen-fab"') + 2, groups = targets - 1;
+  const rail = dropped => (targets - dropped) * size + (groups - dropped - 1) * gap + bottom;
+  assert.equal(size, 44);
+  assert.equal(rail(0), 346, 'the full rail, as measured on the phone');
+  assert.ok(rail(0) > 331, 'the full rail does not fit the 331px the Android shell leaves');
+  assert.ok(rail(0) <= 360, 'from 360px up the full rail fits');
+  assert.equal(rail(1), 296);
+  assert.ok(rail(1) <= 304, 'without the monitor button it fits 304px, and so 331px');
+  // The stylesheet drops only that button, only under 360px, after showing it.
+  const shown = block.indexOf('#screen-switch-monitor{display:grid}');
+  const dropped = block.indexOf('@media(max-height:359px){#screen-switch-monitor{display:none}}');
+  assert.ok(shown > 0 && dropped > shown, 'the short-height rule comes after the rule that shows the button');
+  assert.equal(block.split('@media(max-height:359px)').length - 1, 1, 'nothing else changes under 360px: no target shrinks');
+  // Switching monitors stays possible: the selector of the top bar is kept.
+  assert.match(block, /\.screen-monitor-field\{display:flex;order:-1\}/);
+  assert.equal(html.split('id="screen-monitor-select"').length - 1, 1);
+});
+
 test('zoomed pan overscrolls by the control insets so no PC pixel is stuck under a button', () => {
   const m = mappingContext();
   const insets = { top: 58, right: 0, bottom: 75, left: 0 };

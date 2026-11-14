@@ -750,6 +750,11 @@ body[data-screen-keyboard=true] .screen-monitor-field{display:flex;order:-1}
   .screen-scroll .screen-fab,.screen-scroll .screen-fab+.screen-fab{border-radius:0;background:none;box-shadow:none}
   .screen-scroll .screen-fab+.screen-fab{border-top:1px solid var(--line2)}
   #screen-switch-monitor{display:grid}
+  /* Sete alvos de 44px pedem 346px. Dentro do app Android sobram 331px ou
+     menos, e o primeiro botão saía cortado pelo topo. Abaixo de 360px a
+     coluna dispensa o botão de trocar monitor: o seletor Monitor do topo faz
+     a mesma troca e os outros alvos seguem com 44px. */
+  @media(max-height:359px){#screen-switch-monitor{display:none}}
   /* A coluna de botões ocupa a borda direita. A faixa de workspaces vira coluna
      ao lado dela, na margem que a imagem deixa livre, sem ficar sob os botões. */
   body:not([data-screen-composer=true]) .screen-workspaces{right:64px;flex-direction:column;max-width:none;max-height:calc(100% - 16px);overflow-x:hidden;overflow-y:auto}
