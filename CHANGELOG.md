@@ -2,6 +2,14 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.50 (2026-11-14)
+
+- Home now starts with machines from the existing device catalog. A screen-capable machine opens Screen after its identity and state are confirmed. Failed switches keep the previous target. Offline machines remain honest, and unpaired online machines offer Connect rather than claiming screen access.
+- Removed the DailyWork integration from Ponte, including its UI, polling, actions, adapter and exclusive translations. The external DailyWork product is unchanged. Existing controls remain behind one disclosure, without the promotional headline or footer.
+- Preserved the preexisting multi-client RD change from the served working tree in a separate commit. The RD suite passes 75 tests, including three simultaneous real WebSocket clients with synthetic video and isolated input.
+- Validated Home with 51 device/i18n tests, five browser checks in the two-node lab, three viewport captures and native proxy checks. The compact-list viewport-area exception is intentional. Real Redmi confirmation follows deployment, not inferred from lab results.
+- Web/server release only. The installed alpha.49 Android shell remains compatible. `tools/release/directory.mjs` stages a tested release outside the shared checkout and supports guarded activation and rollback without copying secrets or changing the private config.
+
 ## Unreleased
 
 - **The PC keeps every phone reachable over adb, not just the last one.** `./ponte phone ensure` (and the two-minute timer) used to keep one saved address, so connecting the POCO left the Redmi unreachable after its next reboot without anyone noticing. `phone.json` now keeps a list; `ensure` visits each, `--phone IP[:PORT]` picks one for any `phone` command, `phone list` and `phone default` show and change the default, and `doctor` checks each phone. The USB rescue (`adb tcpip 5555`) only runs through a transport whose Tailscale interface holds that phone's address, so plugging one phone in never restarts the adbd of another. Verified on the real Redmi Note 13 Pro+ (Android 15, mobile data, DERP relay): USB plugged, `ensure --phone 100.111.221.82` back on 5555, `phone app` put Ponte in front with the live monitor, alongside the POCO on the same timer.
