@@ -18,6 +18,15 @@ Módulo: `public/mobile-control-layout.js` (script clássico, sem dependências,
 
 Desde a alpha.53 (`public/styles.css`, bloco "Direção visual Fable"), em pé e em janela larga `.screen-fabs` é uma faixa com rótulos no fluxo, sob a imagem, e `#screen-switch-monitor` fica escondido porque os chips de monitor do cabeçalho fazem o papel dele. Com o celular deitado (`orientation:landscape` e até 600px de altura) a doca volta a ser a coluna `position:fixed` descrita acima, com o botão de monitor. Nesse caso `.screen-workspaces` vira coluna a 64px da borda direita, ao lado da doca: deitada ela ficaria sob os botões, e como faixa larga no topo faria `screenFrame` tirar essa banda da imagem. Com a barra de digitação aberta a doca vira linha, a faixa volta a deitar no canto e a barra desce até a borda (a navegação some deitado), o que deixa a linha de botões abaixo da faixa. Um item que o dono moveu (`data-pcl-placed`) continua `position:fixed` nos dois casos.
 
+Desde a alpha.54 o mesmo bloco tem duas faixas de altura curta, medidas no app Android do POCO X8 deitado (806px de largura):
+
+| Altura útil | Quando acontece | O que muda |
+| --- | --- | --- |
+| até 359px | app deitado: 331px, ou 304px com a barra do sistema | `#screen-switch-monitor` sai da coluna, que passa de 346px para 296px; o seletor Monitor do topo faz a troca. Com a barra de digitação aberta, `.screen-workspaces` fica a 256px da borda direita, à esquerda da linha de botões. |
+| até 159px | teclado do celular aberto: cerca de 88px | com `data-keyboard-open`, `.screen-composer` vira grade e o campo divide uma linha com Preencher e Enviar (76px no lugar de 126px). |
+
+Os rótulos da coluna ficam ocultos só à vista (recorte de 1px), para o leitor de tela continuar lendo o nome de cada botão.
+
 ## Contrato
 
 - Sem layout salvo, o módulo não toca em nada: o CSS atual decide. Com o módulo desligado (tela larga sem toque, o PC), estilos inline são removidos e nada salvo é aplicado.

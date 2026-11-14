@@ -2,6 +2,16 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.54 (2026-11-14)
+
+Acabamento da direção Fable depois da prova no POCO X8 com a alpha.53. Só `public/` e testes.
+
+- **Coluna de botões deitada.** Dentro do app Android sobram 331px de altura, ou 304px com a barra do sistema, e os sete alvos de 44px pedem 346px: "Rolar para cima" saía cortado, com 29px à vista em 331 e 2px em 304. Abaixo de 360px a coluna dispensa o botão de trocar monitor e fica com 296px. O seletor Monitor do topo faz a mesma troca e os alvos seguem com 44px.
+- **Barra de digitação deitada.** Com o teclado do celular aberto sobram cerca de 88px e a barra empilhada pede 126px: o campo de texto ficava com 12px à vista. Abaixo de 160px o campo e os botões Preencher e Enviar dividem uma linha (76px). Com a barra aberta e o teclado fechado, a linha de botões cobria os workspaces 1 e 2; abaixo de 360px a faixa fica à esquerda da linha.
+- **Atalho novo.** O nome provisório "Novo atalho" abre selecionado, então digitar substitui em vez de emendar ("testeNovo atalho"). Ao editar um atalho existente nada é selecionado.
+- **Nomes acessíveis.** Deitado, os rótulos da coluna usavam `display:none` e saíam da árvore de acessibilidade. Agora ficam ocultos só à vista. O botão Atalhos ganhou `aria-label`.
+- Prova no lab da bancada, antes e depois, em 806x331, 806x304, 806x88 e 394x467. Com o teclado em pé, Salvar, Enviar e Voltar do editor de atalho ficam abaixo da dobra e chegam por rolagem dentro da folha; isso já era assim na alpha.53 e não mudou. Ficam de fora o idioma padrão da interface e a altura do campo do Dev. A conferência no POCO vem depois da ativação.
+
 ## 0.1.0-alpha.53 (2026-11-14)
 
 - **Direção visual Fable em Início, Tela e Dev.** Tokens novos de cor, raio e altura da barra. Navegação em largura total no celular e trilho lateral de 88px em janela larga. O Início lista as máquinas em linhas com estado e a contagem "N de M online".
