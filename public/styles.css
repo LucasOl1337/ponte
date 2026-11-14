@@ -555,3 +555,29 @@ body[data-keyboard-open=true] .terminal-page{padding-bottom:20px}
    on the right edge (10px + the 46px mic), so the palette stops left of it. */
 .screen-fabs .shortcut-palette{top:calc(8px + env(safe-area-inset-top) + var(--remote-viewport-top,0px));bottom:auto;left:8px;right:8px;max-height:calc(var(--remote-viewport-height,100vh) - var(--screen-composer-h,0px) - 172px - env(safe-area-inset-bottom));max-width:560px;text-align:left}
 @media (orientation:landscape){.screen-fabs .shortcut-palette{right:calc(64px + env(safe-area-inset-right));max-height:calc(var(--remote-viewport-height,100vh) - var(--screen-composer-h,0px) - 24px)}}
+
+/* Home: choose a machine before opening its screen. */
+.home-heading { margin-bottom: 18px; }
+.home-heading h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.15; letter-spacing: -1px; font-weight: 550; }
+.home-heading p { color: var(--muted); font-size: 14px; }
+.home-machines-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.home-machines-heading p { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.home-machines-list { display: grid; gap: 10px; }
+.home-machine { width: 100%; display: flex; align-items: center; gap: 14px; text-align: left; border: 1px solid var(--border); border-radius: 16px; padding: 18px; background: var(--surface); }
+.home-machine.current { border-color: #738952; background: #293123; }
+.home-machine > svg:first-child { color: var(--lime); }
+.home-machine > svg:last-child { width: 18px; height: 18px; color: var(--muted); }
+.home-machine-info { min-width: 0; flex: 1; }
+.home-machine-info strong { display: block; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.home-machine-info > span { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; margin-top: 3px; }
+.home-machine-action { color: var(--lime); font-size: 14px; font-weight: 550; flex-shrink: 0; }
+.home-machine:disabled { opacity: .65; }
+.home-machines-empty { padding: 24px 0; color: var(--muted); font-size: 14px; }
+.home-machines .text-button { margin-top: 12px; font-size: 13px; }
+.home-tools { margin-top: 18px; border-top: 1px solid var(--border); }
+.home-tools > summary { min-height: 52px; padding: 16px 0; font-size: 14px; color: var(--muted); cursor: pointer; }
+.home-tools > .connection-label { margin: 8px 0 18px; }
+@media (max-width: 480px) {
+  .home-machine { padding: 15px 12px; gap: 10px; }
+  .home-machine-action { max-width: 82px; white-space: normal; }
+}

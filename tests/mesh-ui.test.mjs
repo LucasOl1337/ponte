@@ -79,6 +79,70 @@ const ok = value => ({ ok: true, status: 200, json: async () => value });
 const fail = (status, body) => ({ ok: false, status, json: async () => body });
 const buttons = row => (row.querySelector('.device-actions')?.querySelectorAll('button') || []).map(button => [button.textContent, button.getAttribute('class').includes('primary')]);
 
+test('Home puts screen machines first and keeps the target when returning from Screen', async () => {
+  const h = harness(); await flush(); h.run("navigate('inicio')");
+  assert.match(h.el('#home-machines-list').textContent, /pc-teste/);
+  assert.match(h.el('#home-machines-list').textContent, /notebook-teste/);
+  assert.doesNotMatch(h.el('#home-machines-list').textContent, /servidor-teste|celular-teste/);
+  assert.equal(h.el('#home-tools').getAttribute('open'), null);
+  h.el(`[data-home-machine="${NOTEBOOK}"]`).click(); await flush();
+  assert.equal(h.run('targetNode'), NOTEBOOK);
+  assert.equal(h.run('currentPage'), 'tela');
+  assert.equal(h.el('#hostname').textContent, 'notebook-teste');
+  h.run("navigate('inicio')");
+  assert.equal(h.el(`[data-home-machine="${NOTEBOOK}"]`).getAttribute('aria-current'), 'true');
+  assert.match(h.el('#home-machines-status').textContent, /notebook-teste/);
+  h.el(`[data-home-machine="${SELF}"]`).click(); await flush();
+  assert.equal(h.run('targetNode'), '');
+  assert.equal(h.el('#hostname').textContent, 'pc-teste');
+  assert.equal(h.el('#dailywork-card'), null);
+  assert.doesNotMatch(app, /dailywork/i);
+  assert.ok(h.calls.every(call => !JSON.stringify(call).toLowerCase().includes('dailywork')));
+});
+
+test('Home rejects a failed or wrong-machine response without changing selection or page', async () => {
+  let wrong = false;
+  const h = harness({ respond: path => path === `/api/state?node=${NOTEBOOK}` ? wrong ? ok(baseState('pc-teste')) : fail(502, {error:'offline'}) : null });
+  await flush(); h.run("navigate('inicio')");
+  h.el(`[data-home-machine="${NOTEBOOK}"]`).click(); await flush();
+  assert.equal(h.run('targetNode'), ''); assert.equal(h.run('currentPage'), 'inicio');
+  assert.equal(h.el('#hostname').textContent, 'pc-teste');
+  assert.match(h.el('#home-machines-error').textContent, /previous target was kept/);
+  wrong = true;
+  h.el(`[data-home-machine="${NOTEBOOK}"]`).click(); await flush();
+  assert.equal(h.run('targetNode'), ''); assert.equal(h.el('#node-select').value, '');
+  assert.equal(h.el('#hostname').textContent, 'pc-teste');
+});
+
+test('Home disables offline screen machines, explains empty lists and uses existing pairing', async () => {
+  const h = harness(); await flush();
+  const offline = h.el(`[data-home-machine="${SLEEPY}"]`);
+  assert.equal(offline.disabled, true); assert.match(offline.textContent, /Offline/);
+  h.el(`[data-home-machine="${OTHER}"]`).click(); await flush();
+  assert.deepEqual(h.calls.find(c => c.body?.type === 'mesh.pair').body, {type:'mesh.pair',peer:OTHER});
+  h.run('deviceList.devices = []; renderMesh()');
+  assert.match(h.el('#home-machines-list').textContent, /No machine with a screen available/);
+  assert.equal(h.el('#home-machines-connect').disabled, false);
+  h.el('#home-machines-connect').click();
+  assert.equal(h.el('#home-tools').open, true);
+});
+
+test('Home keeps the current target during a pending selection and ignores double taps', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const h = harness({respond: path => path === `/api/state?node=${NOTEBOOK}` ? pending : null});
+  await flush(); h.run("navigate('inicio')");
+  h.el(`[data-home-machine="${NOTEBOOK}"]`).click(); await flush();
+  assert.equal(h.run('targetNode'), '');
+  assert.equal(h.el(`[data-home-machine="${SELF}"]`).disabled, true);
+  assert.match(h.el('#home-machines-status').textContent, /Connecting to machine/);
+  assert.equal(await h.run(`selectMachine('${OTHER}')`), false);
+  release(ok({...baseState('notebook-teste'),node:{id:NOTEBOOK,name:'notebook-teste'}}));
+  await flush();
+  assert.equal(h.run('targetNode'), NOTEBOOK);
+  assert.equal(h.el('#home-machines-list').getAttribute('aria-busy'), 'false');
+});
+
 test('"Your devices" draws devices.list: one row per device, main action by the rule, one line of why, pending requests on top', async () => {
   const h = harness();
   await flush();

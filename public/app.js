@@ -242,6 +242,59 @@ let deviceList = null, devicesLoadedAt = 0, devicesBusy = false, devicesError = 
 let devicesRefreshQueued = null;
 const devicesOpen = new Set();
 const DEVICES_REFRESH_MS = 30000;
+let machineSelection = null, machineSelectionError = '';
+function homeMachines() {
+  return (deviceList?.devices || []).filter(device => device.kind !== 'phone' && (device.can?.screen?.ok || device.can?.pair?.ok || (device.routes || []).some(route => route.via === 'ponte' && ['paired','pending'].includes(route.state))));
+}
+function renderHomeMachines() {
+  const machines = homeMachines();
+  $('#home-machines-refresh').disabled = devicesBusy || machineSelection !== null;
+  $('#home-machines-list').setAttribute('aria-busy', String(machineSelection !== null));
+  $('#home-machines-status').textContent = machineSelection !== null ? t('Conectando à máquina…') : devicesBusy ? t('Atualizando máquinas…') : t('Máquina atual: {name}', {name:targetName() || t('Conectando…')});
+  const error = machineSelectionError || (devicesError ? t('Não foi possível atualizar as máquinas. Tente novamente.') : '');
+  $('#home-machines-error').hidden = !error;
+  $('#home-machines-error').textContent = error;
+  $('#home-machines-list').innerHTML = machines.map(device => {
+    const current = targetNode ? device.id === targetNode : device.self;
+    const available = device.status !== 'offline' && device.can?.screen?.ok;
+    const label = available ? t('Ver tela') : device.status === 'offline' ? t('Offline') : device.can?.pair?.ok ? t('Conectar') : t('Aguardando conexão');
+    const disabled = machineSelection !== null || (!available && !device.can?.pair?.ok);
+    const status = deviceWord('status', device.status);
+    return `<button type="button" class="home-machine${current ? ' current' : ''}" data-home-machine="${escaped(device.id)}" ${disabled ? 'disabled' : ''} ${current ? 'aria-current="true"' : ''} aria-label="${escaped(t('{action}: {name}', {action:label,name:device.name}))}">${icon('monitor')}<span class="home-machine-info"><strong>${escaped(device.name)}</strong><span><i class="device-dot ${escaped(device.status)}" aria-hidden="true"></i>${escaped(status)}${current ? ` · ${h('Atual')}` : ''}</span></span><span class="home-machine-action">${escaped(label)}</span>${icon('arrow')}</button>`;
+  }).join('') || `<p class="home-machines-empty">${escaped(devicesBusy || !deviceList ? t('Procurando máquinas…') : t('Nenhuma máquina com tela disponível. Confira as conexões.'))}</p>`;
+}
+async function selectMachine(id, page = 'tela') {
+  if (machineSelection !== null) return false;
+  const next = id && id !== homeId() ? id : '';
+  const previous = targetNode, requestToken = token;
+  machineSelection = next; machineSelectionError = ''; renderHomeMachines();
+  try {
+    const result = await api(`/state${next ? `?node=${encodeURIComponent(next)}` : ''}`, {home:true, responseJson:true, timeout:10000});
+    if (requestToken !== token || previous !== targetNode) return false;
+    // The relay identifies its target. A fallback response from home must never
+    // be presented as the requested computer, including Windows SSH targets.
+    if (!result || typeof result.hostname !== 'string' || (next && result.node?.id !== next)) throw new Error(t('A máquina não confirmou a conexão.'));
+    if (next !== targetNode) setTargetNode(next, result);
+    else { state = result; setConnection(true); renderState(); }
+    if (page) navigate(page);
+    return true;
+  } catch (error) {
+    if (requestToken === token && previous === targetNode) {
+      machineSelectionError = t('Não foi possível abrir a máquina. O destino anterior foi mantido.');
+      toast(error, true);
+    }
+    return false;
+  } finally { machineSelection = null; renderMesh(); $('#node-select').value = targetNode; }
+}
+$('#home-machines-list').addEventListener('click', event => {
+  const button = event.target.closest('[data-home-machine]');
+  if (!button || button.disabled) return;
+  const device = deviceById(button.dataset.homeMachine);
+  if (device?.can?.screen?.ok && device.status !== 'offline') void selectMachine(device.id);
+  else if (device?.can?.pair?.ok) void meshAction('mesh.pair', {peer:device.id});
+});
+$('#home-machines-refresh').addEventListener('click', () => { machineSelectionError = ''; void loadDevices({force:true, deep:true}); });
+$('#home-machines-connect').addEventListener('click', () => { $('#home-tools').open = true; $('#devices-card').scrollIntoView?.({block:'start'}); void loadDevices({force:true}); });
 const meshSelf = () => deviceList?.home || meshInfo?.self || null;
 const meshPeer = id => (meshInfo?.peers || []).find(peer => peer.id === id) || null;
 const homeId = () => meshSelf()?.id || '';
@@ -367,6 +420,7 @@ function deviceRow(device) {
     + '</div>';
 }
 function renderMesh() {
+  renderHomeMachines();
   const requests = deviceList?.requests || meshInfo?.requests || [];
   const signature = JSON.stringify([meshInfo, deviceList, targetNode, devicesBusy, !!devicesError, devicesShowOffline, [...devicesOpen], i18n.language]);
   if (signature === meshSignature) return;
@@ -401,10 +455,11 @@ function renderMesh() {
   status.hidden = !message;
   i18n.write(status, message);
 }
-function setTargetNode(id) {
+function setTargetNode(id, confirmedState = null) {
   const next = id && id !== homeId() ? id : '';
   if (next === targetNode) return;
   const restart = !!liveSession || liveWanted;
+  resetRemoteInput();
   targetNode = next;
   shortcuts?.refresh();
   // Everything on screen belonged to the other device: start clean there.
@@ -417,7 +472,8 @@ function setTargetNode(id) {
   renderMesh();
   toast(t('Agora controlando {name}.', { name:targetName() }));
   updateTerminalNavigation(); updateDevNavigation();
-  pollState();
+  if (confirmedState) { state = confirmedState; setConnection(true); renderState(); }
+  else pollState();
 }
 async function meshAction(type, payload) {
   try {
@@ -443,20 +499,20 @@ async function deviceTerminal(device) {
     terminalSessions.push(session); selectTerminal(session.id); terminalPaused = false; navigate('terminais');
   } catch (error) { toast(error, true); }
 }
-$('#node-select').addEventListener('change', event => setTargetNode(event.target.value));
+$('#node-select').addEventListener('change', event => { const next = event.target.value; event.target.value = targetNode; void selectMachine(next, null); });
 // Opening the selector refreshes the list behind it (from the caches, fast).
 for (const type of ['focus', 'pointerdown']) $('#node-select').addEventListener(type, () => loadDevices());
 $('#node-badge').addEventListener('click', () => { navigate('inicio'); $('#devices-card').scrollIntoView?.({block:'start'}); });
 $('#devices-refresh').addEventListener('click', async () => { await loadDevices({ force:true, deep:true }); loadFleet(); });
 document.addEventListener('click', async event => {
   const control = event.target.closest('[data-mesh-control]');
-  if (control) { setTargetNode(control.dataset.meshControl); navigate('tela'); return; }
+  if (control) { await selectMachine(control.dataset.meshControl); return; }
   const go = event.target.closest('[data-device-go]');
   if (go) {
     const device = deviceById(go.dataset.deviceId);
     if (!device) return;
     const where = go.dataset.deviceGo;
-    if (where === 'screen') { setTargetNode(device.self ? '' : device.id); navigate('tela'); }
+    if (where === 'screen') { await selectMachine(device.self ? '' : device.id); }
     else if (where === 'terminal') deviceTerminal(device);
     else if (where === 'agents') { setTargetNode(device.self ? '' : device.id); navigate('terminais'); $('#agents-heading')?.scrollIntoView?.({block:'start'}); }
     else if (where === 'sessions') {
