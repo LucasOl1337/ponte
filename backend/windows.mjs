@@ -31,6 +31,7 @@ export const WINDOWS_KEYS = Object.freeze({
 // evdev codes of comboCodes() → virtual keys (Super+… shortcuts).
 const EVDEV_TO_VK = (() => {
   const map = { 125: VK.Super, 29: VK.Ctrl, 56: VK.Alt, 42: VK.Shift, 28: VK.Enter, 57: 0x20, 15: VK.Tab, 1: VK.Escape, 14: VK.BackSpace, 111: VK.Delete,
+    102: VK.Home, 107: VK.End, 104: VK.PageUp, 109: VK.PageDown,
     105: VK.Left, 106: VK.Right, 103: VK.Up, 108: VK.Down, 51: 0xBC, 52: 0xBE, 53: 0xBF, 12: 0xBD, 13: 0xBB, 87: 0x7A, 88: 0x7B, 99: 0x2C };
   'QWERTYUIOP'.split('').forEach((key, i) => { map[16 + i] = key.charCodeAt(0); });
   'ASDFGHJKL'.split('').forEach((key, i) => { map[30 + i] = key.charCodeAt(0); });

@@ -32,6 +32,7 @@ test('keyboard.combo presses Super first and releases every key in reverse withi
   const { calls, desktop } = recorder();
   // evdev: 125 LEFTMETA, 29 LEFTCTRL, 56 LEFTALT, 42 LEFTSHIFT, 33 F, 2 '1', 15 TAB, 57 SPACE, 28 ENTER.
   const expected = {
+    'Ctrl+Alt+Delete': [29, 56, 111], 'Ctrl+Shift+C': [29, 42, 46], 'Home': [102],
     'Super+F': [125, 33], 'Super+W': [125, 17], 'Super+Shift+1': [125, 42, 2], 'Super+Ctrl+Tab': [125, 29, 15],
     'Super+Space': [125, 57], 'Super+Return': [125, 28], 'Super+Ctrl+Alt+Shift+0': [125, 29, 56, 42, 11], 'Super+F12': [125, 88],
   };
@@ -51,7 +52,7 @@ test('keyboard.combo presses Super first and releases every key in reverse withi
 test('keyboard.combo rejects anything outside the canonical Super allowlist before ydotool runs', async () => {
   const { calls, desktop } = recorder();
   const bad = [
-    'Ctrl+Alt+Delete', 'Super', 'Super+', 'super+f', 'Super+f', 'Super+Shift+Ctrl+1', 'Super+Super+F', 'Super+Alt+Ctrl+T',
+    'Ctrl+Alt+Nope', 'Super', 'Super+', 'super+f', 'Super+f', 'Super+Shift+Ctrl+1', 'Super+Super+F', 'Super+Alt+Ctrl+T',
     'Super+F13', 'Super+Enter', 'Super+F;rm -rf ~', 'Super+125', 'Super+__proto__', 'Super+toString', 'Super+constructor',
     ' Super+F', 'Super+F\n', 'Super+Ctrl+Alt+Shift+Ctrl+F', 42, null, undefined, ['Super', 'F'], { combo: 'Super+F' },
   ];
@@ -84,12 +85,12 @@ test('palette catalog: defaults are canonical, custom combos are validated and p
   assert.deepEqual([...S.KEYS].sort(), [...serverKeys].sort(), 'client and server key allowlists match');
   for (const item of S.DEFAULT_SHORTCUTS) { assert.ok(S.isCombo(item.combo), item.combo); assert.doesNotThrow(() => comboCodes(item.combo), item.combo); }
   assert.deepEqual(plain(S.DEFAULT_SHORTCUTS.slice(0, 5).map(item => item.combo)), ['Super+F', 'Super+W', 'Super+Shift+1', 'Super+Shift+2', 'Super+Space']);
-  assert.equal(S.comboOf(['Shift', 'Ctrl'], '1'), 'Super+Ctrl+Shift+1');
-  assert.throws(() => S.comboOf(['Super'], 'F'));
+  assert.equal(S.comboOf(['Shift', 'Ctrl'], '1'), 'Ctrl+Shift+1');
+  assert.equal(S.comboOf(['Super'], 'F'), 'Super+F');
   assert.throws(() => S.comboOf([], 'f'));
-  assert.equal(S.comboLabel('Super+Shift+Return'), 'Super + Shift + ⏎');
+  assert.equal(S.comboLabel('Super+Shift+Return'), 'Super + Shift + Enter');
 
-  const catalog = S.createCatalog({ hidden: ['close', 'nope'], custom: [{ combo: 'Super+Alt+Q', label: 'Meu\u0007 atalho' }, { combo: 'Ctrl+Alt+Delete' }, { combo: 'Super+Alt+Q' }, null] });
+  const catalog = S.createCatalog({ hidden: ['close', 'nope'], custom: [{ combo: 'Super+Alt+Q', label: 'Meu\u0007 atalho' }, { combo: 'Ctrl+Alt+Nope' }, { combo: 'Super+Alt+Q' }, null] });
   assert.equal(catalog.items().some(item => item.id === 'close'), false);
   assert.deepEqual(plain(catalog.config.custom.map(item => [item.combo, item.label])), [['Super+Alt+Q', 'Meu atalho']]);
   assert.throws(() => catalog.add('Super+Shift+Ctrl+1'), /COMBO_NOT_ALLOWED/);
@@ -126,8 +127,8 @@ test('Super button opens a palette; a tap sends one keyboard.combo and never typ
   assert.equal(host.querySelector('.shortcut-palette').hidden, false);
   assert.equal(host.querySelector('[data-shortcut-super]').getAttribute('aria-expanded'), 'true');
   // After Ações, the first group is Principais with the five requested combos, in order.
-  const principais = host.querySelectorAll('.shortcut-group')[1];
-  assert.equal(principais.querySelector('h3').textContent, 'Principais');
+  const principais = host.querySelectorAll('.shortcut-group')[0];
+  assert.equal(principais.querySelector('summary').textContent, 'Principais · 5');
   assert.deepEqual(principais.querySelectorAll('[data-combo]').map(button => button.dataset.combo), ['Super+F', 'Super+W', 'Super+Shift+1', 'Super+Shift+2', 'Super+Space']);
 
   host.querySelector('[data-combo="Super+Shift+1"]').click();
@@ -150,15 +151,51 @@ test('Super button opens a palette; a tap sends one keyboard.combo and never typ
   assert.equal(opened[0].node, 'notebook');
 
   // Compose and save a custom combo; it survives a remount from storage.
+  host.querySelector('[data-shortcut-new]').click();
+  host.querySelector('[data-shortcut-name]').value = 'Meu atalho';
   host.querySelector('[data-mod="Alt"]').click();
   host.querySelector('[data-shortcut-key]').value = 'Q';
   host.querySelector('[data-shortcut-save]').click();
-  assert.deepEqual(JSON.parse(store.get(S.STORAGE_KEY)).custom, [{ combo: 'Super+Alt+Q', label: 'Super + Alt + Q' }]);
+  assert.deepEqual(JSON.parse(store.get(S.STORAGE_KEY)).custom, [{ combo: 'Super+Alt+Q', label: 'Meu atalho' }]);
   const again = makeDocument('<html><body><div id="host"></div></body></html>').getElementById('host');
   S.mountShortcuts(again, { send: async () => {}, target: () => null, storage });
   assert.ok(again.querySelector('[data-combo="Super+Alt+Q"]'));
   // Every sent payload is a combo action; no text/type action ever leaves.
   assert.ok(sent.every(action => action.type === 'keyboard.combo'));
+});
+
+test('editor edits/removes, rejects duplicates and reports storage or send failures honestly', async () => {
+  const S = await loadShortcuts(), store = new Map();
+  const host = makeDocument('<html><body><div id="host"></div></body></html>').getElementById('host');
+  let failStore = false;
+  const ui = S.mountShortcuts(host, { send: async () => { throw Error('offline'); }, storage: {
+    getItem: key => store.get(key), setItem: (key, value) => { if (failStore) throw Error('quota'); store.set(key, value); },
+  } });
+  host.querySelector('[data-edit="fullscreen"]').click();
+  assert.equal(host.querySelector('[data-shortcut-name]').value, 'Tela cheia');
+  host.querySelector('[data-shortcut-name]').value = 'Minha tela';
+  host.querySelector('[data-shortcut-save]').click();
+  assert.equal(ui.catalog.items().filter(item => item.combo === 'Super+F').length, 1);
+  let item = ui.catalog.items().find(item => item.label === 'Minha tela');
+  host.querySelector(`[data-edit="${item.id}"]`).click();
+  host.querySelector('[data-mod="Super"]').click();
+  host.querySelector('[data-mod="Ctrl"]').click();
+  host.querySelector('[data-shortcut-key]').value = 'Home';
+  host.querySelector('[data-shortcut-save]').click();
+  assert.ok(ui.catalog.items().some(item => item.combo === 'Ctrl+Home'));
+  assert.throws(() => ui.catalog.add('Super+W', 'Duplicado'), /DUPLICATE_COMBO/);
+  host.querySelector('[data-combo="Ctrl+Home"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(host.querySelector('[data-shortcut-status]').textContent, /Falhou: offline/);
+  item = ui.catalog.items().find(item => item.combo === 'Ctrl+Home');
+  host.querySelector(`[data-edit="${item.id}"]`).click();
+  failStore = true;
+  host.querySelector('[data-shortcut-remove]').click();
+  assert.match(host.querySelector('[data-shortcut-status]').textContent, /Não foi salvo/);
+  assert.ok(ui.catalog.items().some(item => item.combo === 'Ctrl+Home'));
+  failStore = false;
+  host.querySelector('[data-shortcut-remove]').click();
+  assert.ok(!S.createCatalog(JSON.parse(store.get(S.STORAGE_KEY))).items().some(item => item.combo === 'Ctrl+Home'));
 });
 
 test('palette tap targets are at least 44px', async () => {

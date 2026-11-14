@@ -5,6 +5,7 @@ import { constants, existsSync } from 'node:fs';
 import { ApiError, commandExists, runCommand } from './process.mjs';
 import { message } from './i18n.mjs';
 import { textInputState } from './textinput.mjs';
+import '../public/mobile-shortcuts.js';
 
 const keyCodes = {
   Enter: [28], Escape: [1], BackSpace: [14], Tab: [15], Delete: [111],
@@ -22,28 +23,11 @@ const keyCodes = {
   'Ctrl+S': [29, 31], 'Ctrl+T': [29, 20], 'Ctrl+W': [29, 17], 'Ctrl+Tab': [29, 15], F5: [63],
 };
 export const DESKTOP_KEYS = Object.freeze(Object.keys(keyCodes));
-// System shortcuts (Omarchy/Hyprland binds) as one canonical string:
-// "Super[+Ctrl][+Alt][+Shift]+KEY", modifiers always in that order. Super is
-// mandatory, so this never reaches app chords like Ctrl+Alt+Delete. Each
-// name maps to a fixed evdev code; the request never names a code itself.
-const comboModifiers = Object.freeze({ Super: 125, Ctrl: 29, Alt: 56, Shift: 42 });
-const comboKeys = Object.freeze({
-  ...Object.fromEntries('QWERTYUIOP'.split('').map((key, i) => [key, 16 + i])),
-  ...Object.fromEntries('ASDFGHJKL'.split('').map((key, i) => [key, 30 + i])),
-  ...Object.fromEntries('ZXCVBNM'.split('').map((key, i) => [key, 44 + i])),
-  ...Object.fromEntries('1234567890'.split('').map((key, i) => [key, 2 + i])),
-  Return: 28, Space: 57, Tab: 15, Escape: 1, BackSpace: 14, Delete: 111,
-  Left: 105, Right: 106, Up: 103, Down: 108, Comma: 51, Period: 52, Slash: 53, Minus: 12, Equal: 13,
-  ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`F${i + 1}`, 59 + i])), F11: 87, F12: 88, Print: 99,
-});
-export const COMBO_MODIFIERS = Object.freeze(Object.keys(comboModifiers));
-export const COMBO_KEYS = Object.freeze(Object.keys(comboKeys));
-const comboPattern = /^Super(\+Ctrl)?(\+Alt)?(\+Shift)?\+([A-Za-z0-9]{1,9})$/;
+export const COMBO_MODIFIERS = globalThis.PonteCombo.MODIFIERS;
+export const COMBO_KEYS = globalThis.PonteCombo.KEYS;
 export function comboCodes(combo) {
-  const match = typeof combo === 'string' && combo.length <= 40 ? comboPattern.exec(combo) : null;
-  if (!match || !Object.hasOwn(comboKeys, match[4])) throw new ApiError(400, 'KEY_NOT_ALLOWED');
-  const modifiers = ['Super', match[1] && 'Ctrl', match[2] && 'Alt', match[3] && 'Shift'].filter(Boolean);
-  return [...modifiers.map(name => comboModifiers[name]), comboKeys[match[4]]];
+  try { return globalThis.PonteCombo.codes(combo); }
+  catch { throw new ApiError(400, 'KEY_NOT_ALLOWED'); }
 }
 export const LIGHT_PRESETS = Object.freeze(['lava', 'brasa', 'oceano', 'aurora', 'floresta', 'lua']);
 const workspace = (value) => ({ id: Number(value?.id) || 0, name: String(value?.name ?? '').slice(0, 150) });
@@ -542,6 +526,12 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
         // down) is let go first: a combo never merges with it.
         const codes = comboCodes(value.combo);
         if (dragging) await releaseDrag();
+        if (value.monitor !== undefined) {
+          const monitor = (await readHypr('monitors')).find(m => m.name === value.monitor);
+          if (!monitor || monitor.disabled) throw new ApiError(400, 'INVALID_MONITOR');
+          const id = numberIn(monitor.activeWorkspace?.id, 1, 100, true);
+          await run('hyprctl', ['dispatch', `hl.dsp.focus({ workspace = "${id}" })`]);
+        }
         await pressKeys(codes); return { ok: true, combo: value.combo };
       }
       case 'workspace.focus': {

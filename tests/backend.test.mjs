@@ -192,7 +192,7 @@ test('state normalizes live desktop output and marks degraded integrations', asy
   const state = await response.json();
   assert.deepEqual(state.activeWindow, {...window,monitor:null});
   assert.deepEqual(state.volume, { value: 0.67, muted: true });
-  assert.deepEqual(state.monitors, [{ name: 'DP-1', width: 1920, height: 1080, focused: true, dpmsStatus: true, activeWorkspace: null }]);
+  assert.deepEqual(state.monitors, [{ name: 'DP-1', width: 1920, height: 1080, focused: true, x: 0, y: 0, disabled: false, dpmsStatus: true, activeWorkspace: null }]);
   assert.deepEqual(state.workspaces, [{ id: 3, name: '3', windows: 1, monitor: null }]);
   assert.ok(state.wakeOnLan && typeof state.wakeOnLan.instructions === 'string');
   const degraded = createDesktop({ runner: async () => { throw new Error('private internal failure'); }, exists: async () => false });
@@ -341,7 +341,7 @@ test('a Super shortcut goes through /api/action with the bearer token as one pre
   const ok = await f.action({ type: 'keyboard.combo', combo: 'Super+Shift+1' });
   assert.equal(ok.status, 200);
   assert.deepEqual(f.calls.filter(call => call.command === 'ydotool').map(call => call.args), [['key', '--key-delay', '1', '125:1', '42:1', '2:1', '2:0', '42:0', '125:0']]);
-  const bad = await f.action({ type: 'keyboard.combo', combo: 'Ctrl+Alt+Delete' });
+  const bad = await f.action({ type: 'keyboard.combo', combo: 'Ctrl+Alt+Nope' });
   assert.equal(bad.status, 400);
   assert.equal((await bad.json()).errorCode, 'KEY_NOT_ALLOWED');
   assert.equal(f.calls.filter(call => call.command === 'ydotool').length, 1);

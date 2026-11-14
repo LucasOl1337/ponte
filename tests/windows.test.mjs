@@ -17,6 +17,7 @@ test('phone actions become agent input ops, monitor points made absolute', () =>
   assert.deepEqual(translateAction({ type: 'mouse.scroll', dy: -3 }, monitors), [{ op: 'wheel', dy: -3 }]);
   assert.deepEqual(translateAction({ type: 'keyboard.text', text: 'olá', enter: true }, monitors), [{ op: 'text', text: 'olá' }, { op: 'keys', vks: [0x0D] }]);
   assert.deepEqual(translateAction({ type: 'keyboard.key', key: 'Copy' }, monitors), [{ op: 'keys', vks: [0x11, 0x43] }]);
+  assert.deepEqual(translateAction({ type: 'keyboard.combo', combo: 'Ctrl+Home' }, monitors), [{ op: 'keys', vks: [0x11, 0x24] }]);
   assert.deepEqual(translateAction({ type: 'keyboard.combo', combo: 'Super+Shift+S' }, monitors), [{ op: 'keys', vks: [0x5B, 0x10, 0x53] }]);
   assert.deepEqual(translateAction({ type: 'mouse.drag', pressed: false }, monitors), [{ op: 'button', button: 'left', down: false }]);
   for (const bad of [{ type: 'mouse.clickAt', monitor: 'DISPLAY1', x: 1920, y: 0, button: 'left' }, { type: 'mouse.clickAt', monitor: 'NOPE', x: 1, y: 1, button: 'left' },
