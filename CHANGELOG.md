@@ -2,6 +2,13 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.51 (2026-11-14)
+
+- **Tela por monitor, com Janelas no contexto.** Seletor explícito por posição/output, workspaces pelo vínculo do compositor, busca/filtro de janelas na Tela e alias `#janelas`. Monitor removido interrompe controle e conserva o último quadro identificado. Escolher preview não envia foco ao PC, ações explícitas validam o monitor esperado.
+- **Atalhos editáveis sem Super obrigatório.** Contrato único UI/backend, nome e combinação visíveis, busca e grupos, edição/remoção, persistência com erro honesto e deduplicação. Combinações usam o monitor selecionado e liberam teclas em falha.
+- Prova em lab/bancada: 3 monitores com áreas não contíguas, remoção/nenhum, foco contextual, Super+F, Ctrl+Shift+C e portão visual 390x844/1366x768/900x1000. Editor permanece rolável em paisagem e viewport reduzido. IME físico aguarda observação coordenada no Redmi, sem input no desktop humano.
+- Integração sobre alpha.50 preserva Início por máquinas e RD multi-client. Assets compatíveis com APK alpha.49, sem mudança no shell ou configuração privada.
+
 ## 0.1.0-alpha.50 (2026-11-14)
 
 - Home now starts with machines from the existing device catalog. A screen-capable machine opens Screen after its identity and state are confirmed. Failed switches keep the previous target. Offline machines remain honest, and unpaired online machines offer Connect rather than claiming screen access.
@@ -11,9 +18,6 @@ All notable changes to Ponte. The project is an experimental alpha; entries desc
 - Web/server release only. The installed alpha.49 Android shell remains compatible. `tools/release/directory.mjs` stages a tested release outside the shared checkout and supports guarded activation and rollback without copying secrets or changing the private config.
 
 ## Unreleased
-
-- **Tela por monitor, com Janelas no contexto.** Seletor explícito por posição/output, workspaces pelo vínculo do compositor, busca/filtro de janelas na Tela e alias `#janelas`. Monitor removido interrompe controle e conserva o último quadro identificado. Escolher preview não envia foco ao PC, ações explícitas validam o monitor esperado.
-- **Atalhos editáveis sem Super obrigatório.** Contrato único UI/backend, nome e combinação visíveis, busca e grupos, edição/remoção, persistência com erro honesto e deduplicação. Combinações usam o monitor selecionado e liberam teclas em falha. Prova em lab/bancada: 3 monitores com áreas não contíguas, remoção/nenhum, foco contextual, Super+F, Ctrl+Shift+C e portão visual 390x844/1366x768/900x1000. Sem input no desktop humano ou aparelho reservado. Assets compatíveis com APK alpha.49.
 
 - **The PC keeps every phone reachable over adb, not just the last one.** `./ponte phone ensure` (and the two-minute timer) used to keep one saved address, so connecting the POCO left the Redmi unreachable after its next reboot without anyone noticing. `phone.json` now keeps a list; `ensure` visits each, `--phone IP[:PORT]` picks one for any `phone` command, `phone list` and `phone default` show and change the default, and `doctor` checks each phone. The USB rescue (`adb tcpip 5555`) only runs through a transport whose Tailscale interface holds that phone's address, so plugging one phone in never restarts the adbd of another. Verified on the real Redmi Note 13 Pro+ (Android 15, mobile data, DERP relay): USB plugged, `ensure --phone 100.111.221.82` back on 5555, `phone app` put Ponte in front with the live monitor, alongside the POCO on the same timer.
 - `tests/ctl.test.mjs` used the owner's real DailyWork descriptor from `~/.config`, so `ctl volume` timed out whenever DailyWork was slow. The fixture now injects a synthetic DailyWork.
