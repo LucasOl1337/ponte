@@ -381,12 +381,58 @@ test('landscape phone with 331px or 304px of usable height: the button rail fits
   assert.ok(rail(1) <= 304, 'without the monitor button it fits 304px, and so 331px');
   // The stylesheet drops only that button, only under 360px, after showing it.
   const shown = block.indexOf('#screen-switch-monitor{display:grid}');
-  const dropped = block.indexOf('@media(max-height:359px){#screen-switch-monitor{display:none}}');
-  assert.ok(shown > 0 && dropped > shown, 'the short-height rule comes after the rule that shows the button');
-  assert.equal(block.split('@media(max-height:359px)').length - 1, 1, 'nothing else changes under 360px: no target shrinks');
+  const short = block.indexOf('@media(max-height:359px){');
+  const shortBlock = block.slice(short, block.indexOf('\n  }', short));
+  assert.ok(shown > 0 && short > shown, 'the short-height rule comes after the rule that shows the button');
+  assert.match(shortBlock, /#screen-switch-monitor\{display:none\}/);
+  assert.equal(block.split('@media(max-height:359px)').length - 1, 1);
+  assert.doesNotMatch(shortBlock.slice(shortBlock.indexOf('{') + 1), /(^|[;{])(min-|max-)?(width|height):\d/, 'no target shrinks under 360px');
   // Switching monitors stays possible: the selector of the top bar is kept.
   assert.match(block, /\.screen-monitor-field\{display:flex;order:-1\}/);
   assert.equal(html.split('id="screen-monitor-select"').length - 1, 1);
+  // Typing bar open, keyboard closed: the bar is 173px tall, so 158px (331)
+  // or 131px (304) stay above it. The button row (five 44px targets) sat at
+  // y106 or y79, on top of a workspace strip that ends at y116. Boxes are the
+  // ones measured in the lab at 806x331 and 806x304.
+  const overlaps = (a, b) => a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
+  const rowWidth = 5 * size + 3 * gap, rowLeft = 806 - 10 - rowWidth;
+  assert.equal(rowWidth, 238);
+  for (const top of [106, 79]) {
+    const row = { left: rowLeft, top, width: rowWidth, height: size };
+    assert.equal(overlaps({ left: 698, top: 64, width: 100, height: 52 }, row), true, `at the right edge the strip is under the row (row at y${top})`);
+  }
+  const [, right, room] = /body\[data-screen-composer=true\] \.screen-workspaces\{right:(\d+)px;max-width:calc\(100% - (\d+)px\)\}/.exec(shortBlock).map(Number);
+  assert.ok(806 - right <= rowLeft - 8, 'the strip ends at least 8px left of the button row');
+  assert.equal(room, right + 8, 'a long strip stops 8px from the left edge instead of running off it');
+});
+
+// Lying down with the phone keyboard open the WebView keeps about 88px (POCO
+// X8). The stacked typing bar needs 126px, so its text field went off the top
+// with 12px showing. Under 160px the field and the two buttons share one row.
+test('landscape phone with the keyboard open: the typing bar fits the 88px left and keeps its field in view', async () => {
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const start = css.lastIndexOf('@media(orientation:landscape) and (max-height:600px){');
+  const block = css.slice(start, css.indexOf('\n}\n', start));
+  const at = block.indexOf('@media(max-height:159px){');
+  const tiny = block.slice(at, block.indexOf('\n  }', at));
+  const open = 'body\\[data-screen-composer=true\\]\\[data-keyboard-open=true\\] ';
+  assert.match(tiny, new RegExp(`${open}\\.screen-composer\\{display:grid;grid-template-columns:minmax\\(0,1fr\\) auto;`));
+  assert.match(tiny, new RegExp(`${open}\\.screen-composer>\\.screen-composer-row\\{grid-column:1\\}`));
+  assert.match(tiny, new RegExp(`${open}\\.screen-composer>\\.screen-composer-actions\\{grid-column:2;padding-top:0\\}`));
+  assert.match(tiny, new RegExp(`${open}\\.screen-composer-row textarea\\{max-height:44px\\}`));
+  // Heights from the base rules: 6px padding top and bottom, a 44px field and
+  // 44px buttons, 6px above the buttons, a 16px hint with 4px above it.
+  assert.match(css, /\.screen-composer\{position:fixed;left:0;right:0;bottom:0;z-index:60;[^}]*padding:6px 8px calc\(6px \+ env\(safe-area-inset-bottom\)\)\}/);
+  assert.match(css, /\.screen-composer-row textarea\{[^}]*min-height:44px;max-height:96px/);
+  assert.match(css, /\.screen-composer-action\{flex:1;min-height:44px;/);
+  const stacked = 6 + 44 + 6 + 44 + 4 + 16 + 6, oneRow = 6 + 44 + 4 + 16 + 6;
+  assert.equal(stacked, 126);
+  assert.ok(stacked > 88, 'stacked, the bar is taller than what the keyboard leaves');
+  assert.equal(oneRow, 76);
+  assert.ok(oneRow <= 88, 'on one row it fits');
+  assert.ok(stacked <= 160, 'from 160px up the stacked bar fits, so the rule stops there');
+  // The key row is already gone at this height, so nothing else adds to it.
+  assert.match(css, /@media\(max-height:300px\)\{\.screen-key-row\{display:none\}\}/);
 });
 
 // Lying down the rail shows icons only. On the phone the accessibility tree
