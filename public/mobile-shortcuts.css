@@ -37,3 +37,46 @@
 .screen-fabs .shortcut-palette{top:auto;bottom:calc(88px + env(safe-area-inset-bottom,0px));max-height:55vh}
 @media(orientation:landscape){.screen-fabs .shortcut-palette{bottom:12px;max-height:65vh}}
 .shortcut-mod[aria-pressed=true]{background:var(--lime);color:#202718}
+
+/* Direção visual Fable: a paleta é uma folha que sobe do rodapé no celular e um
+   painel acima da doca em janela larga. Os alvos seguem com 44px. */
+.screen-fabs .shortcut-palette{left:0;right:0;bottom:calc(var(--nav-h,67px) + env(safe-area-inset-bottom,0px));max-width:none;max-height:62vh;margin:0;padding:0 16px 16px;border:0;border-top:1px solid var(--line2);border-radius:20px 20px 0 0;background:var(--surface);box-shadow:0 -12px 32px rgba(0,0,0,.5);color:var(--text);font-size:16px;font-weight:400;line-height:1.4;text-align:left}
+body[data-keyboard-open=true] .screen-fabs .shortcut-palette{bottom:0}
+.shortcut-heading{top:0;gap:4px;margin:0 -8px;padding:10px 0 6px 8px;background:var(--surface)}
+.shortcut-heading strong{font-size:16px;font-weight:600}
+.shortcut-heading button{min-width:44px;padding:0 12px;border-radius:12px;background:none;color:var(--muted);font-size:14px;font-weight:600}
+.shortcut-heading [data-shortcut-new]{color:var(--lime)}
+.shortcut-heading button:hover,.shortcut-edit:hover{background:var(--surface2)}
+.shortcut-status{margin:0 0 8px;font-size:14px;color:var(--muted);opacity:1}
+.shortcut-palette label{gap:6px;font-size:14px;color:var(--muted)}
+.shortcut-palette input,.shortcut-palette select{height:44px;margin:0;padding:0 12px;border:1px solid var(--line2);border-radius:12px;background:var(--bg);color:var(--text);font-size:16px}
+.shortcut-palette output{padding:8px 12px;border-radius:10px;background:var(--lime-1);color:var(--lime);font:14px ui-monospace,monospace}
+.shortcut-catalog>label{margin-bottom:4px}
+.shortcut-group{display:block;margin:0}
+.shortcut-group summary{padding:12px 0;font-size:14px;color:var(--muted)}
+.shortcut-row{gap:0;min-width:0;margin:0;border-top:1px solid var(--border)}
+.shortcut-item{flex-wrap:nowrap;min-height:52px;padding:6px 8px 6px 0;border:0;border-radius:0;background:none;font-size:16px}
+.shortcut-item>span{min-width:0;overflow-wrap:anywhere}
+.shortcut-item:active{background:var(--surface2)}
+.shortcut-item kbd{flex:none;padding:4px 8px;border-radius:8px;background:var(--surface2);color:var(--muted);font-size:12px;opacity:1}
+.shortcut-item.shortcut-action{width:100%;margin-top:0;border-top:1px solid var(--border)}
+.shortcut-edit{flex:none;align-self:center;border-radius:12px;background:none;color:var(--lime);font-size:14px;font-weight:600}
+.shortcut-origin{margin:12px 0 0;color:var(--faint)}
+.shortcut-compose{gap:12px}
+.shortcut-mods{gap:8px}
+.shortcut-mod{min-width:0;border-color:var(--line2);border-radius:12px;background:var(--bg);font-size:14px;font-weight:500}
+.shortcut-mod[aria-pressed=true]{border-color:var(--lime);background:var(--lime-1);color:var(--lime);font-weight:600}
+.shortcut-editor-actions{flex-wrap:nowrap;align-items:center}
+.shortcut-editor-actions button{flex:none;border-radius:12px;background:none;color:var(--lime);font-size:14px;font-weight:600}
+.shortcut-editor-actions [data-shortcut-save]{flex:1;min-height:48px;background:var(--lime);color:var(--ink);font-size:16px}
+.shortcut-editor-actions [data-shortcut-send]{border:1px solid var(--line2);background:var(--surface2);color:var(--text)}
+.shortcut-editor-actions [data-shortcut-cancel]{color:var(--muted)}
+@media(orientation:landscape) and (max-height:600px){
+  .screen-fabs .shortcut-palette{left:auto;right:64px;bottom:8px;width:440px;max-width:calc(100vw - 80px);max-height:calc(100vh - 16px);border:1px solid var(--line2);border-radius:16px}
+}
+@media(min-width:701px) and (min-height:601px){
+  .screen-fabs .shortcut-palette{left:auto;right:24px;bottom:96px;width:440px;max-height:calc(100vh - 128px);border:1px solid var(--line2);border-radius:16px;box-shadow:0 12px 32px rgba(0,0,0,.5)}
+}
+@media(min-width:960px) and (min-height:601px){
+  .screen-fabs .shortcut-palette{right:328px}
+}
