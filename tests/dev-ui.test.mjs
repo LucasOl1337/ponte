@@ -82,6 +82,11 @@ test('Dev lists agent sessions first, renders the ansi read, and every bar key s
   h.run("navigate('dev')"); await flush();
   assert.deepEqual(h.el('#dev-session').querySelectorAll('option').map(option => option.textContent), ['Claude 1', 'Terminal 2']);
   assert.equal(h.run('devId'), claude.id);
+  // Sessions are listed in the open, counted against the ceiling of four live terminals.
+  assert.equal(h.el('#dev-missions').tagName, 'SECTION');
+  assert.equal(h.el('#dev-missions-count').textContent, '2 of 4 active');
+  assert.deepEqual(h.el('#dev-mission-list').querySelectorAll('[data-dev-session]').map(row => row.querySelector('strong').textContent), ['Claude 1', 'Terminal 2']);
+  assert.deepEqual(h.el('#dev-mission-list').querySelectorAll('.selected').map(row => row.dataset.devSession), [claude.id]);
   assert.ok(h.calls.some(call => call.path === `/api/terminals/${claude.id}?format=ansi`));
   assert.equal(h.el('#dev-output').innerHTML.includes('hello'), true);
   assert.equal(h.el('#dev-size').textContent, '51×41');

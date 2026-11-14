@@ -1187,6 +1187,19 @@ test('monitor button opens the explicit selector without changing destination or
   await flushTicks();
   assert.equal(h.el('#monitor-select').value, 'DP-1');
   assert.ok(h.calls.some(call => call.path.startsWith('/api/stream?monitor=DP-1')));
+  // One chip per monitor mirrors the select and switches through its change event.
+  const chips = h.el('#screen-monitors').querySelectorAll('[data-screen-monitor]');
+  assert.deepEqual(chips.map(chip => chip.dataset.screenMonitor), JSON.parse(h.run('JSON.stringify(window.PonteScreenContext.monitors(state).map(monitor => monitor.name))')), 'chips follow the physical order of the monitors');
+  assert.equal(chips.length, 2);
+  assert.deepEqual(chips.filter(chip => chip.getAttribute('aria-pressed') === 'true').map(chip => chip.dataset.screenMonitor), ['DP-1']);
+  h.calls.length = 0;
+  chips.find(chip => chip.dataset.screenMonitor === 'HDMI-A-1').click();
+  await flushTicks();
+  assert.equal(h.el('#screen-monitor-select').value, 'HDMI-A-1');
+  assert.equal(h.el('#monitor-select').value, 'HDMI-A-1');
+  assert.ok(h.calls.some(call => call.path.startsWith('/api/stream?monitor=HDMI-A-1')));
+  assert.equal(h.calls.some(call => call.path === '/api/action'), false, 'a chip never moves the desktop focus');
+  assert.deepEqual(h.el('#screen-monitors').querySelectorAll('[data-screen-monitor]').filter(chip => chip.getAttribute('aria-pressed') === 'true').map(chip => chip.dataset.screenMonitor), ['HDMI-A-1']);
   const rotate = h.el('#screen-rotate');
   assert.equal(rotate.getAttribute('aria-pressed'), 'false');
   rotate.click();
