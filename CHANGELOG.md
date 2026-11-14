@@ -2,6 +2,14 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.53 (2026-11-14)
+
+- **Direção visual Fable em Início, Tela e Dev.** Tokens novos de cor, raio e altura da barra. Navegação em largura total no celular e trilho lateral de 88px em janela larga. O Início lista as máquinas em linhas com estado e a contagem "N de M online".
+- **Tela.** Cabeçalho com a máquina e os totais, um chip por monitor na ordem física e a doca com rótulos sob a imagem. O chip ajusta `#screen-monitor-select` e dispara o mesmo `change`, então a troca segue pelo caminho de antes e não mexe no foco do desktop. A partir de 960px as janelas do monitor ficam numa coluna ao lado da imagem. No celular deitado a doca volta a flutuar e o seletor de monitor reaparece. A folha de atalhos sobe do rodapé e o editor tem Salvar como ação principal.
+- **Dev.** Máquina, Harness, Modelo e Diretório numa grade 2×2. As sessões deixam de ficar recolhidas: aparecem sob o formulário no celular e na coluna da esquerda em janela larga, com a conta contra o teto de quatro terminais vivos. Store, idempotência, rascunho e retomada não mudam.
+- Nenhuma capacidade saiu: imagem ao vivo, zoom, workspaces, janelas, atalhos, Organizar botões, Terminais e Voz seguem. Só mudam `public/` e testes; servidor, shell do APK e configuração privada ficam como na alpha.52.
+- Prova no lab de quatro máquinas e na bancada: capturas antes e depois em 390x844, 1366x768 e 900x1000, régua da si-tela em 1366x768 e 900x1000 com as exceções previstas registradas, e a suíte completa. Nenhuma missão foi enviada a modelo; a sessão do Dev nas capturas é fixture do lab. A conferência no Redmi vem depois da ativação.
+
 ## 0.1.0-alpha.52 (2026-11-14)
 
 - **Dev por missões e sessões.** Composer principal de texto/voz revisável, máquina, harness, modelo/provedor e diretório explícitos antes de iniciar. Catálogo vem da configuração real do destino, com validação no servidor e sem fallback para outra máquina. Preferências e rascunho sobrevivem ao retorno e reload.

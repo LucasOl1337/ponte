@@ -1,8 +1,8 @@
 # Atalhos e janelas na Tela
 
-Escolha o monitor na barra superior. O nome combina posição física, quando disponível, e output. A ordem vem de `x/y` do compositor, nunca dos números dos workspaces. Abrir o seletor ou mudar o monitor só altera o preview, sem enviar foco ao PC.
+Escolha o monitor nos chips do cabeçalho da Tela, um por monitor, com a contagem de janelas de cada um. O chip ajusta `#screen-monitor-select` e dispara o `change` dele, então há um só caminho de troca. Com o celular deitado ou o teclado aberto os chips dão lugar ao próprio seletor, que mostra posição física, quando disponível, e output. A ordem vem de `x/y` do compositor, nunca dos números dos workspaces. Escolher ou mudar o monitor só altera o preview, sem enviar foco ao PC.
 
-**Janelas** abre busca por título/aplicativo e filtros de workspace do monitor escolhido. Escolher uma janela envia seu endereço e o monitor esperado. Se ela mudou de monitor entre leitura e ação, o servidor recusa e pede nova escolha. O antigo `#janelas` abre este painel em `#tela`.
+**Janelas** abre busca por título/aplicativo e filtros de workspace do monitor escolhido. Em janela de 960px ou mais o painel já vem aberto, numa coluna ao lado da imagem. Escolher uma janela envia seu endereço e o monitor esperado. Se ela mudou de monitor entre leitura e ação, o servidor recusa e pede nova escolha. O antigo `#janelas` abre este painel em `#tela`.
 
 ## Criar e usar atalhos
 

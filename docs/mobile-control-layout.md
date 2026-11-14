@@ -16,6 +16,8 @@ Módulo: `public/mobile-control-layout.js` (script clássico, sem dependências,
 
 `.screen-fabs` segue a área segura e o teclado só por CSS: `bottom:calc(96px + env(safe-area-inset-bottom))`, `body[data-keyboard-open=true]` sobe acima de `--remote-viewport-top + --screen-composer-h`, e em paisagem vira fileira. `app.js` lê `.screen-fabs` em `screenControlBoxes()` para o pan não esconder a imagem atrás dos botões, e observa o mesmo seletor no `ResizeObserver`.
 
+Desde a alpha.53 (`public/styles.css`, bloco "Direção visual Fable"), em pé e em janela larga `.screen-fabs` é uma faixa com rótulos no fluxo, sob a imagem, e `#screen-switch-monitor` fica escondido porque os chips de monitor do cabeçalho fazem o papel dele. Com o celular deitado (`orientation:landscape` e até 600px de altura) a doca volta a ser a coluna `position:fixed` descrita acima, com o botão de monitor. Um item que o dono moveu (`data-pcl-placed`) continua `position:fixed` nos dois casos.
+
 ## Contrato
 
 - Sem layout salvo, o módulo não toca em nada: o CSS atual decide. Com o módulo desligado (tela larga sem toque, o PC), estilos inline são removidos e nada salvo é aplicado.
