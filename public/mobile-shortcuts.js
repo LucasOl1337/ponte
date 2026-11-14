@@ -169,7 +169,7 @@
       const mods = MODIFIERS.map(name => `<button type="button" class="shortcut-mod" data-mod="${name}" aria-pressed="${draft.has(name)}">${name}</button>`).join('');
       const keys = KEYS.map(key => `<option value="${key}">${escape(KEY_LABELS[key] || key)}</option>`).join('');
       host.innerHTML =
-        `<button type="button" class="shortcut-super" data-shortcut-super aria-expanded="${!!open}" aria-controls="shortcut-palette">⌘ Atalhos</button>` +
+        `<button type="button" class="shortcut-super" data-shortcut-super aria-expanded="${!!open}" aria-controls="shortcut-palette"><span class="shortcut-glyph" aria-hidden="true">⌘</span> <span>Atalhos</span></button>` +
         `<div id="shortcut-palette" class="shortcut-palette" role="dialog" aria-label="Atalhos do sistema"${open ? '' : ' hidden'}>` +
         `<div class="shortcut-heading"><strong>Atalhos</strong><button type="button" data-shortcut-new>Novo</button><button type="button" data-shortcut-close aria-label="Fechar atalhos">Fechar</button></div>` +
         `<p class="shortcut-status" data-shortcut-status aria-live="polite"></p>` +

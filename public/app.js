@@ -889,11 +889,47 @@ function renderVisiblePage() {
   settleLights(state.lights && state.lights.last);
   // The first state (and a language change) fills every page so nothing is
   // empty when navigated to; after that only the visible page is refreshed.
-  if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderScreenWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
+  if (!renderedAllOnce) { renderedAllOnce = true; renderWorkspaces(); renderScreenHead(); renderScreenWorkspaces(); renderWindows(); renderPowerMonitors(); renderLights(); renderSession(); return; }
   if (currentPage === 'inicio') { renderWorkspaces(); renderPowerMonitors(); renderLights(); renderSession(); }
-  else if (currentPage === 'tela') { renderScreenWorkspaces(); if (!$('#screen-windows-panel').hidden) renderWindows(); }
+  else if (currentPage === 'tela') { renderScreenHead(); renderScreenWorkspaces(); if (!$('#screen-windows-panel').hidden) renderWindows(); }
   if (currentPage === 'inicio') { loadStartProjects(); loadDevices(); renderFleet(); loadFleet(); }
 }
+// The screen header: which machine, how much is open on it, and one chip per
+// monitor in physical order. #screen-monitor-select stays the source of the
+// choice: a chip only fires that select's own change event.
+let screenHeadSignature = '';
+function renderScreenHead() {
+  const context = window.PonteScreenContext, monitors = context.monitors(state), selected = $('#monitor-select').value;
+  const chips = monitors.map(monitor => ({ name: monitor.name, label: context.label(state, monitor.name).split(' · ')[0], windows: context.windows(state, monitor.name).length }));
+  const spaces = monitors.reduce((sum, monitor) => sum + context.workspaces(state, monitor.name).length, 0);
+  const windows = chips.reduce((sum, chip) => sum + chip.windows, 0);
+  const signature = JSON.stringify([targetName(), connected, chips, spaces, selected, i18n.language]);
+  if (signature === screenHeadSignature) return;
+  screenHeadSignature = signature;
+  $('#screen-machine-name').textContent = targetName() || t('Conectando…');
+  $('#screen-machine-dot').className = `device-dot${connected ? ' online' : ''}`;
+  $('#screen-totals').textContent = monitors.length ? `${i18n.plural('{count} área','{count} áreas',spaces)} · ${i18n.plural('{count} janela','{count} janelas',windows)}` : '';
+  $('#screen-monitors').innerHTML = chips.map(chip => {
+    const count = i18n.plural('{count} janela','{count} janelas',chip.windows);
+    return `<button type="button" class="screen-monitor" data-screen-monitor="${escaped(chip.name)}" aria-pressed="${chip.name === selected}" aria-label="${escaped(`${t('Monitor {monitor}',{monitor:`${chip.label} · ${chip.name}`})}, ${count}`)}"><strong>${escaped(chip.label)}</strong><small>${escaped(count)}</small></button>`;
+  }).join('');
+}
+$('#screen-monitors').addEventListener('click', event => {
+  const chip = event.target.closest('[data-screen-monitor]'), select = $('#screen-monitor-select');
+  if (!chip || select.disabled || select.value === chip.dataset.screenMonitor) return;
+  select.value = chip.dataset.screenMonitor;
+  select.dispatchEvent(new CustomEvent('change'));
+});
+$('#screen-machine').addEventListener('click', () => navigate('inicio'));
+// The windows column follows the window's width: open when there is room for
+// it beside the picture, closed again when the window narrows. Opening it would
+// close an open shortcut sheet, so a sheet in use keeps the panel as it is.
+const screenWide = window.matchMedia?.('(min-width:960px) and (min-height:601px)');
+screenWide?.addEventListener?.('change', event => {
+  if (currentPage !== 'tela') return;
+  if (event.matches && !($('#shortcut-palette')?.hidden ?? true)) return;
+  setWindowsPanel(event.matches);
+});
 // Workspaces come from the compositor's monitor association, never an ID range.
 function renderScreenWorkspaces() {
   const monitor = selectedMonitor();
@@ -950,6 +986,8 @@ function navigate(page) {
   setPageLocation(page);
   $$('.page').forEach(element => { element.hidden = element.dataset.page !== page; });
   if (page !== 'tela' && controlLayout?.editing()) controlLayout.cancel();
+  // A wide window has a column for the monitor's windows: it opens with them.
+  if (nextScreen && !wasScreen && screenWide?.matches) setWindowsPanel(true);
   if (!nextScreen) { closeScreenComposer(); closeShortcuts(); }
   renderVisiblePage();
   // Usage is applied on entry, not while the user is tapping the same row.
@@ -2177,7 +2215,7 @@ $('#monitor-select').addEventListener('change',() => {
   $('#viewer-monitor-name').textContent = screenImageMonitor || $('#monitor-select').value || t("Monitor do PC");
   $('#screen-monitor-select').value = $('#monitor-select').value;
   chosenWorkspace = 'all';
-  renderScreenWorkspaces(); renderWindows();
+  renderScreenHead(); renderScreenWorkspaces(); renderWindows();
   setScreenStatus('idle');
   if (restart) startLive();
 });
