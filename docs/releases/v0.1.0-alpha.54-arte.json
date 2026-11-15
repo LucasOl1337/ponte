@@ -1,0 +1,31 @@
+{
+  "product": "Ponte",
+  "version": "v0.1.0-alpha.54",
+  "date": "15 NOV 2026",
+  "brand": "LucasOL",
+  "eyebrow": "Destaques da atualização",
+  "sections": [
+    {
+      "category": "novidades",
+      "items": [
+        {"title": "Missões no Dev", "benefit": "Máquina, harness e modelo explícitos, com rascunho e sessão para continuar depois."},
+        {"title": "Atalhos do seu jeito", "benefit": "Crie e edite combinações com nome próprio, sem exigir a tecla Super."}
+      ]
+    },
+    {
+      "category": "melhorias",
+      "items": [
+        {"title": "Máquinas no Início", "benefit": "Estado e acesso disponível na mesma lista. A Tela só muda após confirmar o destino."},
+        {"title": "Monitor, janelas e sessões à vista", "benefit": "Direção visual Fable em Início, Tela e Dev, com controles rotulados e listas compactas."}
+      ]
+    },
+    {
+      "category": "correcoes",
+      "items": [
+        {"title": "Preencher sem enviar", "benefit": "Digite sem disparar Enter. Enviar continua sendo uma ação separada."},
+        {"title": "Controles que cabem em paisagem", "benefit": "Coluna inteira e campo de texto visível com o teclado aberto, conferidos no POCO."}
+      ]
+    }
+  ],
+  "footer": "Notas: github.com/LucasOl1337/ponte/releases/tag/v0.1.0-alpha.54"
+}
