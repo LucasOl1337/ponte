@@ -22,12 +22,30 @@ Para nomes amigáveis, preserve as demais propriedades do seu config e use o for
 
 O destino deve existir nessa lista local. Não são aceitos `user@host`, endereços avulsos ou opções SSH digitadas como destino. `ssh:ALIAS` desambigua nomes repetidos. `ssh.hosts` também permite declarar um alias vindo do config SSH de sistema.
 
+## App: aparelho, tela e áreas
+
+Com sessão gráfica e PyGObject (GTK 4 + libadwaita, os mesmos do Gliff), `./ponte rd` e o item **Ponte Remoto** do menu abrem o app em vez do Zenity. Ele usa as cores do Omarchy como o Gliff (`colors.toml` do tema atual).
+
+1. **Aparelho.** Computadores (PC e notebook segundo a lista de aparelhos do Ponte, mais aliases com nome em `ssh.hosts`) ficam em cima, online primeiro; servidores e o resto do `~/.ssh/config` ficam recolhidos em *Outros destinos SSH*. Este computador não aparece. Cada computador online é conferido em segundo plano (o mesmo preflight do `--check` e a lista de telas) e mostra `2 telas · pronto` ou o motivo da falha.
+2. **Tela.** Com mais de uma tela e nenhuma escolha lembrada para aquele alias, aparece o mapa das telas como no Hyprland, com a área em uso de cada uma. A escolha fica em `$XDG_STATE_HOME/ponte/rd-app.json` e da próxima vez conecta direto.
+3. **Sessão.** O Gliff abre com `--output` da tela escolhida e, no topo da tela local que mostra a janela dele, fica uma pílula: aparelho e área atual. Passando o mouse ela abre:
+   - as **telas** do outro computador; clicar reabre o Gliff naquela tela (o Gliff 0.4 escolhe a saída só ao conectar, então trocar de tela é reconectar, cerca de 1 a 2 s);
+   - as **áreas 1–10 daquela tela**, como a barra do Omarchy 4.5 (bloco de dez por monitor, lido de `~/.local/state/omarchy/monitor-workspaces` do outro lado), com ponto nas que têm janela; áreas de outro bloco que estão nessa tela vêm depois. Sem esse arquivo, 1–5 e as áreas abertas da tela;
+   - o menu: trocar de aparelho, reconectar o vídeo, **Seguir a tela da área escolhida** (ligado: Super+N ou um clique que leva a outra tela traz aquela tela para a janela), manter a barra aberta e desconectar.
+
+A pílula é uma superfície layer-shell (`gtk4-layer-shell`), sem regra no `hyprland.lua`. Ela some quando a janela do Gliff não está numa área visível e acompanha o monitor onde ela está; o app só lê o Hyprland local (`j/clients`, `j/monitors`) para isso. Sem layer-shell (X11, outro compositor) vira uma janela pequena comum. Fechar a janela do Gliff encerra a sessão e o app.
+
+**Canal de controle.** Telas e áreas vêm de `desktop/rd_remote.py`, que roda no outro computador pelo mesmo alias e as mesmas opções SSH do preflight. O comando remoto é fixo (`python3 -u -c ...` que executa a primeira linha do stdin); o código vai pelo stdin, nunca pelo shell remoto. Depois disso o canal só aceita duas ordens: focar uma área (inteiro de 1 a 1000) e focar uma tela que o Hyprland lista naquele momento. Os despachos usam a sintaxe Lua do Hyprland 0.56 (`hl.dsp.focus`) e, se recusada, a clássica. O estado chega pelos eventos de `.socket2.sock`, sem polling de `hyprctl`. Exige `python3` no outro computador. Com `--server-bin` privado o canal fica desligado, porque acharia o compositor da sessão e não o do wrapper: só vídeo e menu.
+
+`PONTE_RD_PICKER=zenity ./ponte rd` mantém o seletor antigo. `--check`, `--list` e `--headless` seguem pelo caminho de linha de comando. `python3 desktop/rd_app.py --demo [devices|screens|bar]` mostra a interface com dados sintéticos, sem SSH nem Gliff.
+
 ## Dependências e conexão
 
 - **Gliff 0.4.x**, testado com **0.4.1**, nas duas máquinas. Instale pelo upstream, por exemplo `omarchy pkg add gliff` no canal Omarchy que oferece o pacote. Se indisponível, siga [a instalação upstream](https://github.com/omacom/gliff#install), sem baixar binários de terceiros.
 - OpenSSH e autenticação por chave/agente já funcionando para o alias.
 - Hyprland com sessão ativa no computador controlado. Não é cliente genérico RDP, Windows ou macOS.
-- `zenity` para a lista gráfica. Sem ele, um terminal interativo oferece seleção textual. Sem interface nem terminal, a CLI pede um destino explícito.
+- `python-gobject`, `gtk4`, `libadwaita` e `gtk4-layer-shell` para o app; `python3` no computador controlado para o canal de telas e áreas.
+- `zenity` para o seletor antigo (`PONTE_RD_PICKER=zenity` ou sem GTK). Sem ele, um terminal interativo oferece seleção textual. Sem interface nem terminal, a CLI pede um destino explícito.
 
 O cliente Gliff declara Hyprland nas duas pontas. O funcionamento de um cliente em compositor aninhado de bancada é evidência de teste, não garantia geral de suporte a outros desktops. A GPU/video pipeline é a do upstream. NVIDIA pode usar CPU. Não há ganho de desempenho numérico prometido neste corte.
 
@@ -42,7 +60,7 @@ O preflight verifica versão local, config efetivo SSH, login, `gliff-server --v
 ./ponte rd notebook --video cpu        # opção explícita do upstream
 ```
 
-`Shift+Esc` devolve os atalhos ao computador local. Reconexão e controle de vídeo são do Gliff. Fechar sua janela encerra a sessão do cliente. Para trocar de computador, abra Ponte Remoto novamente. O botão `+` do Gliff não pode contornar a seleção: o transporte desta janela aceita somente seu alias selecionado.
+`Shift+Esc` devolve os atalhos ao computador local. Reconexão e controle de vídeo são do Gliff. Fechar sua janela encerra a sessão do cliente. Para trocar de computador, use o menu da pílula (ou abra Ponte Remoto novamente). O botão `+` do Gliff não pode contornar a seleção: o transporte desta janela aceita somente seu alias selecionado.
 
 **`--headless` não é uma barreira de segurança.** Ele cria uma saída privada na sessão Hyprland existente, que ainda pode compartilhar teclado/foco com outras saídas. Agentes não devem usá-lo contra o desktop humano como se fosse bancada isolada.
 
@@ -84,6 +102,7 @@ O wrapper deve validar seu runtime/compositor de forma fail-closed e suportar `-
 
 ```sh
 python3 -m unittest discover -s desktop/tests -p test_rd.py
+python3 -m unittest desktop.tests.test_rd_session
 node --test tests/rd-gliff.test.mjs
 node --test --test-name-pattern='^rd ' tests/cli.test.mjs
 ```

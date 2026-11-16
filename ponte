@@ -1443,6 +1443,14 @@ def rd_main(argv):
         print(f"{verb} the app menu: {result['path']}" + (' (search "Ponte Remoto").' if args.install else '.'))
         return
     try:
+        # The app lists Ponte's own device names and kinds next to the SSH aliases.
+        config = load_config(paths()[0])
+        data = absolute(os.environ.get('OMARCHY_REMOTE_DATA', config['dataDir']), 'dataDir')
+        os.environ.setdefault('PONTE_RD_ORIGIN', local_origin(config))
+        os.environ.setdefault('PONTE_RD_TOKEN_FILE', str(data / 'token'))
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
         from desktop.rd import open_remote
         open_remote(args, paths()[0], rd_open)
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:

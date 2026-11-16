@@ -224,6 +224,21 @@ def command(gliff, item, args):
     return result
 
 
+def gliff_env(directory, ssh, alias):
+    """Environment for one Gliff window: its own empty config (no upstream tabs
+    for other hosts), the Omarchy theme by reference, and the child-only SSH
+    policy restricted to the selected alias."""
+    original = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config')))
+    theme = original / 'omarchy'
+    if theme.is_dir() and not (Path(directory) / 'omarchy').exists():
+        (Path(directory) / 'omarchy').symlink_to(theme, target_is_directory=True)
+    env = dict(os.environ, XDG_CONFIG_HOME=directory, PONTE_RD_SSH=ssh, PONTE_RD_ALIAS=alias,
+               PATH=str(ROOT / 'desktop/rd-bin') + os.pathsep + os.environ.get('PATH', ''))
+    # The session app preloads gtk4-layer-shell for its own bar; Gliff must not inherit it.
+    env.pop('LD_PRELOAD', None)
+    return env
+
+
 def launch(item, args):
     gliff, ssh = preflight(item, args)
     argv = command(gliff, item, args)
@@ -234,12 +249,7 @@ def launch(item, args):
     # Ephemeral config prevents upstream tabs from reconnecting other personal hosts.
     # The selected alias is also enforced by the child-only SSH wrapper.
     with tempfile.TemporaryDirectory(prefix='ponte-gliff-') as directory, tempfile.TemporaryFile() as log:
-        env = dict(os.environ, XDG_CONFIG_HOME=directory, PONTE_RD_SSH=ssh, PONTE_RD_ALIAS=item['alias'],
-                   PATH=str(ROOT / 'desktop/rd-bin') + os.pathsep + os.environ.get('PATH', ''))
-        original = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config')))
-        theme = original / 'omarchy'
-        if theme.is_dir():
-            (Path(directory) / 'omarchy').symlink_to(theme, target_is_directory=True)
+        env = gliff_env(directory, ssh, item['alias'])
         print(f"Ponte Remoto: {item['name']} via SSH {item['alias']} (Gliff). Shift+Esc releases keyboard capture.", flush=True)
         result = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stderr=log, check=False)
         if result.returncode:
@@ -247,6 +257,37 @@ def launch(item, args):
             log.seek(max(0, log.tell() - 3000))
             detail = clean_label(log.read().decode('utf-8', errors='replace'))
             raise ValueError(f'Gliff exited with code {result.returncode}: {detail}. Retry the same destination, or choose --engine legacy explicitly.')
+
+
+def app_available():
+    """The GTK app (picker + session bar) needs a graphical session and PyGObject
+    with GTK 4 and libadwaita. PONTE_RD_PICKER=zenity keeps the plain picker."""
+    if os.environ.get('PONTE_RD_PICKER', '').lower() == 'zenity':
+        return False
+    if not (os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')):
+        return False
+    probe = subprocess.run([sys.executable, '-c', "import gi;gi.require_version('Gtk','4.0');gi.require_version('Adw','1');"
+                            "from gi.repository import Adw"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=10, check=False)
+    return probe.returncode == 0
+
+
+def run_app(args, config_file, legacy_open):
+    argv = [sys.executable, str(ROOT / 'desktop/rd_app.py')]
+    if args.device:
+        argv.append(args.device)
+    argv += ['--config', str(config_file), '--server-bin', args.server_bin]
+    if args.no_clipboard:
+        argv.append('--no-clipboard')
+    if args.video:
+        argv += ['--video', args.video]
+    if args.monitor:
+        argv += ['--monitor', args.monitor]
+    code = subprocess.run(argv, stdin=subprocess.DEVNULL, check=False).returncode
+    if code == 10:
+        return legacy_open(args)
+    if code:
+        raise ValueError(f'Ponte Remoto closed with code {code}.')
 
 
 def open_remote(args, config_file, legacy_open):
@@ -263,6 +304,10 @@ def open_remote(args, config_file, legacy_open):
         return
     if args.check and not args.device:
         raise ValueError('--check requires a device from ./ponte rd --list.')
+    if not args.check and not args.headless and app_available():
+        if args.device:
+            resolve(items, args.device)  # unknown names fail here, before any window
+        return run_app(args, config_file, legacy_open)
     selected = resolve(items, args.device) if args.device else choose(items)
     if selected == 'legacy':
         if args.headless or args.no_clipboard or args.video or args.server_bin != 'gliff-server':
