@@ -40,22 +40,27 @@ def fetch_ponte_devices(origin, token_file, timeout=4):
     return [item for item in devices or [] if isinstance(item, dict)]
 
 
+# SSH route kinds from Ponte, best first: a key needs nothing from anyone.
+ROUTE_RANK = {'key': 0, 'hop': 1, 'tailscale-ssh': 2}
+
+
 def merge_devices(destinations, ponte_devices):
     """SSH destinations, named and grouped with what Ponte knows about them.
 
     Returns (computers, others): computers are PCs and notebooks (or aliases the
     operator named in ssh.hosts), the ones Gliff is for; others are the rest of
     ~/.ssh/config. This machine itself is left out."""
-    by_alias, self_aliases = {}, set()
+    by_alias, route_kind, self_aliases = {}, {}, set()
     for device in ponte_devices:
-        aliases = [route.get('alias') for route in device.get('routes') or []
-                   if isinstance(route, dict) and route.get('via') == 'ssh' and isinstance(route.get('alias'), str)]
+        routes = [route for route in device.get('routes') or []
+                  if isinstance(route, dict) and route.get('via') == 'ssh' and isinstance(route.get('alias'), str)]
         if device.get('self'):
-            self_aliases.update(aliases)
+            self_aliases.update(route['alias'] for route in routes)
             continue
-        for alias in aliases:
-            by_alias.setdefault(alias, device)
-    computers, others = [], []
+        for route in routes:
+            by_alias.setdefault(route['alias'], device)
+            route_kind.setdefault(route['alias'], route.get('kind'))
+    computers, others, rows = [], [], {}
     for item in destinations:
         if any(alias in self_aliases for alias in item['aliases']):
             continue
@@ -70,11 +75,40 @@ def merge_devices(destinations, ponte_devices):
         else:
             entry['kind'] = 'computer' if labelled else 'other'
             entry['status'] = 'unknown'
-        (computers if entry['kind'] in COMPUTER_KINDS or labelled else others).append(entry)
+        if device:
+            # One row per machine: lol and lol-ts are two ways into the same PC.
+            # Keep the route that opens on its own (a key) over Tailscale SSH,
+            # which stops for a check in the browser.
+            entry['rank'] = ROUTE_RANK.get(next((route_kind[a] for a in item['aliases'] if a in route_kind), None), 1)
+            kept = rows.get(id(device))
+            if kept is not None:
+                if entry['rank'] >= kept['rank']:
+                    kept.setdefault('also', []).append(item['alias'])
+                    continue
+                entry['also'] = kept.get('also', []) + [kept['alias']]
+                for group in (computers, others):
+                    if kept in group:
+                        group.remove(kept)
+            rows[id(device)] = entry
+        # A name in ssh.hosts makes an unknown alias a computer, but what Ponte
+        # knows about the machine (a server) wins over the name.
+        computer = entry['kind'] in COMPUTER_KINDS or (labelled and not device)
+        (computers if computer else others).append(entry)
     order = {'online': 0, 'unknown': 1, 'offline': 2}
     computers.sort(key=lambda entry: (order.get(entry['status'], 1), entry['name'].casefold()))
     others.sort(key=lambda entry: entry['name'].casefold())
     return computers, others
+
+
+def probe_summary(error):
+    """A few words for the device row; the full preflight text goes in the tooltip."""
+    text = str(error or '')
+    known = (('gliff-server or Hyprland is unavailable', 'sem Gliff ou Hyprland lá'),
+             ('unsupported gliff-server version', 'Gliff lá é de outra versão'),
+             ('Gliff is not installed', 'Gliff não instalado aqui'),
+             ('RemoteCommand', 'alias SSH com RemoteCommand'),
+             ('No legacy fallback', 'SSH não conectou'))
+    return next((short for needle, short in known if needle in text), text[:60] or 'falhou')
 
 
 # ---- Screens and workspaces -----------------------------------------------

@@ -340,8 +340,8 @@ class LocalWindowTests(unittest.TestCase):
 class DeviceTests(unittest.TestCase):
     def test_merge_groups_computers_and_hides_this_machine(self):
         destinations = [
-            {'id': 'ssh:lol', 'name': 'lol', 'alias': 'lol', 'aliases': ['lol'], 'engine': 'gliff'},
             {'id': 'ssh:lol-ts', 'name': 'lol-ts', 'alias': 'lol-ts', 'aliases': ['lol-ts'], 'engine': 'gliff'},
+            {'id': 'ssh:lol', 'name': 'lol', 'alias': 'lol', 'aliases': ['lol', 'pc'], 'engine': 'gliff'},
             {'id': 'ssh:notebook', 'name': 'notebook', 'alias': 'notebook', 'aliases': ['notebook'], 'engine': 'gliff'},
             {'id': 'ssh:vps', 'name': 'vps', 'alias': 'vps', 'aliases': ['vps'], 'engine': 'gliff'},
             {'id': 'ssh:casa', 'name': 'PC da sala', 'alias': 'casa', 'aliases': ['casa'], 'engine': 'gliff'},
@@ -349,15 +349,22 @@ class DeviceTests(unittest.TestCase):
         ]
         ponte = [
             {'name': 'notebook-omarchy', 'kind': 'notebook', 'self': True, 'routes': [{'via': 'ssh', 'alias': 'notebook'}]},
-            {'name': 'lol', 'kind': 'pc', 'status': 'online', 'routes': [{'via': 'ssh', 'alias': 'lol'}, {'via': 'ssh', 'alias': 'lol-ts'}]},
+            {'name': 'lol', 'kind': 'pc', 'status': 'online', 'routes': [{'via': 'ssh', 'alias': 'lol', 'kind': 'key'},
+                                                                         {'via': 'ssh', 'alias': 'lol-ts', 'kind': 'tailscale-ssh'}]},
             {'name': 'Hostinger', 'kind': 'server', 'status': 'online', 'routes': [{'via': 'ssh', 'alias': 'vps'}]},
             {'name': 'PC Isa', 'kind': 'pc', 'status': 'offline', 'routes': [{'via': 'ssh', 'alias': 'isa'}]},
         ]
         computers, others = rs.merge_devices(destinations, ponte)
         self.assertEqual([(c['name'], c['alias'], c['status']) for c in computers],
-                         [('lol', 'lol', 'online'), ('lol', 'lol-ts', 'online'), ('PC da sala', 'casa', 'unknown'),
-                          ('PC Isa', 'isa', 'offline')])
+                         [('lol', 'lol', 'online'), ('PC da sala', 'casa', 'unknown'), ('PC Isa', 'isa', 'offline')])
+        # One row per machine: the key route wins over Tailscale SSH, which asks the browser.
+        self.assertEqual(computers[0]['also'], ['lol-ts'])
         self.assertEqual([o['name'] for o in others], ['Hostinger'])
+        # A name in ssh.hosts does not turn a server Ponte knows into a computer.
+        named_vps = [dict(destinations[3], name='Hostinger VPS')]
+        self.assertEqual(rs.merge_devices(named_vps, ponte)[0], [])
+        self.assertEqual(rs.probe_summary('vps: gliff-server or Hyprland is unavailable. Install upstream gliff'),
+                         'sem Gliff ou Hyprland lá')
         # Without Ponte answering, only named aliases count as computers.
         computers, others = rs.merge_devices(destinations, [])
         self.assertEqual([c['alias'] for c in computers], ['casa'])

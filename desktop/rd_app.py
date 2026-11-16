@@ -533,13 +533,14 @@ class Picker(Adw.ApplicationWindow):
         if status:
             parts.append(status)
         busy = False
+        row.set_tooltip_text(probe['error'] if probe and probe.get('error') else None)
         if probe is None:
             pass
         elif probe.get('pending'):
             parts.append('verificando…')
             busy = True
         elif probe.get('error'):
-            parts.append(probe['error'][:90])
+            parts.append(rs.probe_summary(probe['error']))
         else:
             count = len(probe['state']['monitors'])
             parts.append(f"{count} tela{'s' if count != 1 else ''} · pronto")
