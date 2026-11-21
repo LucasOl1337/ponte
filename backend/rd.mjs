@@ -156,7 +156,7 @@ async function evdevInstalled(python, env) {
 // Under `node --test` input is always dry-run and capture always lab: a test
 // must never create a real uinput device on a developer's desktop.
 export function createRemoteDesktop({
-  env = process.env, readMonitors, node = {}, spawn = spawnChild, clipboard, log = console,
+  env = process.env, readMonitors, wakeMonitor = async () => {}, node = {}, spawn = spawnChild, clipboard, log = console,
   captureMode = env.PONTE_RD_CAPTURE === 'lab' ? 'lab' : 'gsr', labScene = env.PONTE_RD_LAB_SCENE === 'desktop' ? 'desktop' : 'pattern',
   inputMode = env.PONTE_RD_INPUT === 'dry-run' ? 'dry-run' : env.PONTE_RD_INPUT === 'off' ? 'off' : 'uinput',
   inputLog = env.PONTE_RD_INPUT_LOG, mapping = env.PONTE_RD_ABS === 'output' ? 'output' : 'layout',
@@ -364,6 +364,9 @@ export function createRemoteDesktop({
       const pick = this.monitors.find(m => m.name === this.requestedMonitor) || this.monitors.find(m => m.focused) || this.monitors[0];
       if (!pick) throw Object.assign(new Error('no monitor'), { code: 'MONITORS_UNAVAILABLE' });
       this.monitor = pick.name;
+      // A monitor in DPMS standby has no KMS plane: gpu-screen-recorder then
+      // exits 51 ("display not found") four times and the page stays black.
+      await this.wake(pick);
       if (this.ended) return;
       if (this.caps.input && this.wantsInput) {
         this.input = createInput({ python, dryRun: inputMode === 'dry-run', logFile: inputLog, mapping, env, spawn, now, log, onStats: () => this.reportInput() });
@@ -385,7 +388,15 @@ export function createRemoteDesktop({
 
     // Show another monitor: the encoder restarts and the next keyframe carries a
     // fresh `ready`, which is how the page learns the new name and size.
-    showMonitor(target) {
+    async wake(target) {
+      if (!target || target.dpmsStatus !== false) return;
+      try { await wakeMonitor(target.name); target.dpmsStatus = true; log.info?.(`[rd] woke ${target.name} from standby`); }
+      catch (error) { log.error?.(`[rd] wake ${target.name} failed: ${error.code || error.message}`); }
+    }
+
+    async showMonitor(target) {
+      await this.wake(target);
+      if (this.ended) return;
       this.input?.release();
       this.input?.setMonitors(this.monitors);
       this.monitor = target.name;
@@ -402,7 +413,7 @@ export function createRemoteDesktop({
       if (this.ended || !this.follow) return;
       const focused = (name && this.monitors.find(item => item.name === name)) || this.monitors.find(item => item.focused);
       if (!focused || focused.name === this.monitor) return;
-      this.showMonitor(focused);
+      this.showMonitor(focused).catch(error => log.error?.(`[rd] show monitor failed: ${error.message}`));
     }
 
     // Walking through workspaces fires one event per step; only the monitor the
@@ -540,6 +551,8 @@ export function createRemoteDesktop({
       this.failures++;
       log.error?.(`[rd] capture exited ${JSON.stringify({ sessionId: this.id, failures: this.failures, code: info.code ?? null, signal: info.signal ?? null, errorCode: info.error?.code ?? null })}`);
       if (this.failures > 3) { log.error?.('[rd] capture keeps failing'); refuse(this.ws, 'CAPTURE_FAILED', 1011); return; }
+      // The screen may have gone to standby while streaming: wake it during the back-off.
+      readMonitors().then(list => { this.monitors = list; return this.wake(list.find(m => m.name === this.monitor)); }).catch(() => {});
       setTimeout(() => { if (!this.ended) { this.metrics.restarts++; this.capture.restart({}); } }, 300 * this.failures).unref?.();
     }
 
@@ -625,7 +638,7 @@ export function createRemoteDesktop({
           // A hand-picked monitor cancels a focus change still settling, but
           // leaves following on for the next one.
           clearTimeout(this.followTimer);
-          this.showMonitor(target);
+          this.showMonitor(target).catch(error => log.error?.(`[rd] show monitor failed: ${error.message}`));
           break;
         }
         case 'follow': {

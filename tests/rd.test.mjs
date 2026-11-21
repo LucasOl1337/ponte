@@ -185,6 +185,19 @@ function inputRig(t, options = {}) {
   return { rd, logs, open };
 }
 
+test('a monitor in standby is woken before the capture starts', async t => {
+  const woken = [], order = [];
+  const sleeping = MONITORS.map((m, i) => ({ ...m, dpmsStatus: i === 0 ? false : true, focused: i === 0 }));
+  const rig = inputRig(t, {
+    inputMode: 'off', readMonitors: async () => sleeping,
+    wakeMonitor: async name => { woken.push(name); order.push('wake'); },
+    makeCapture: options => { const c = syntheticCapture(options); const start = c.start.bind(c); c.start = p => { order.push('capture'); return start(p); }; return c; },
+  });
+  await rig.open();
+  assert.deepEqual(woken, [sleeping[0].name]);
+  assert.deepEqual(order.slice(0, 2), ['wake', 'capture']);
+});
+
 test('capture exits log safe reasons before retries and capture keeps failing, without changing recovery', async t => {
   const errors = [], restarts = [];
   let exit, capture;

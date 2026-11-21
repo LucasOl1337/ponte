@@ -253,7 +253,14 @@ export async function createApp(options = {}) {
     if (!Array.isArray(list)) throw new ApiError(503, 'HYPRLAND_INVALID_RESPONSE');
     return list;
   };
-  const rd = options.rd || createRemoteDesktop({ env, readMonitors, node: () => ({ id: mesh.id, name: mesh.name }), ...options.rdOptions });
+  // Same toggle the power actions use: Hyprland 0.56 only exposes a dpms toggle.
+  const wakeMonitor = async (name) => {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(name)) return;
+    const list = await readMonitors();
+    if (list.find(m => m.name === name)?.dpmsStatus !== false) return;
+    await runCommand('hyprctl', ['dispatch', `hl.dsp.dpms({ monitor = "${name}" })`], { env, timeout: 3000 });
+  };
+  const rd = options.rd || createRemoteDesktop({ env, readMonitors, wakeMonitor, node: () => ({ id: mesh.id, name: mesh.name }), ...options.rdOptions });
   // /api/fleet* and the fleet.* actions share one dispatcher.
   async function fleetCall(type, value = {}) {
     const fresh = value.fresh === true;
