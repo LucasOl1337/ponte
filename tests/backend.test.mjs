@@ -513,6 +513,11 @@ test('live region is validated, clamped to the monitor, and captured at scale 1'
   assert.equal(resolveLiveCapture(monitor, 0.5, { x: 1915, y: 1075, w: 400, h: 400 }).geometry, null, 'a sliver after clamping falls back');
   const clamped = resolveLiveCapture(monitor, 0.5, { x: 1800, y: 900, w: 400, h: 400 });
   assert.deepEqual(clamped.region, { x: 1800, y: 900, w: 120, h: 180 });
+  // A HiDPI panel: Hyprland's layout is pixels / scale, grim -s brings the crop back to pixels.
+  const notebook = { name: 'eDP-1', x: 2560, y: 0, width: 1920, height: 1200, scale: 1.5 };
+  assert.deepEqual(resolveLiveCapture(notebook, 0.5, { x: 300, y: 150, w: 960, h: 600 }), {
+    scale: 1.5, output: null, geometry: '2760,100 640x400', region: { x: 300, y: 150, w: 960, h: 600 },
+  });
   assert.equal(clamped.geometry, '4360,1980 120x180');
   assert.equal(clamped.scale, 1);
   assert.throws(() => resolveLiveCapture(monitor, 0.5, { x: -1, y: 0, w: 10, h: 10 }), error => error.status === 400 && error.code === 'INVALID_REGION');
@@ -1116,6 +1121,21 @@ test('the virtual pointer is set to a flat profile and every placement is verifi
   assert.equal(calls.filter(call => call.command === 'hyprctl' && call.args[0] === 'eval').length, 2);
   const state0 = await desktop.getState();
   assert.ok(!state0.warningCodes.includes('POINTER_INACCURATE'));
+  await desktop.close();
+});
+
+test('a tap on a scaled monitor lands on the same pixel the phone showed', async () => {
+  let cursor = { x: 0, y: 0 };
+  const runner = async (command, args) => {
+    if (command === 'hyprctl' && args[1] === 'monitors') return JSON.stringify([{ name: 'eDP-1', x: 2560, y: 0, width: 1920, height: 1200, scale: 1.5, focused: true }]);
+    if (command === 'hyprctl' && args[1] === 'devices') return JSON.stringify({ mice: [] });
+    if (command === 'hyprctl' && args[0] === 'cursorpos') return `${cursor.x}, ${cursor.y}\n`;
+    if (command === 'ydotool' && args[0] === 'mousemove' && args.includes('--absolute')) cursor = { x: Number(args.at(-2)), y: Number(args.at(-1)) };
+    return 'ok';
+  };
+  const desktop = createDesktop({ runner, exists: async () => true });
+  await desktop.action({ type: 'mouse.clickAt', monitor: 'eDP-1', x: 1500, y: 900, button: 'left' });
+  assert.deepEqual(cursor, { x: 2560 + 1000, y: 600 }, 'pixel 1500,900 is layout 1000,600 on a 1.5 panel');
   await desktop.close();
 });
 

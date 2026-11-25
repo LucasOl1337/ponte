@@ -483,6 +483,8 @@ body[data-keyboard-open=true] .terminal-page{padding-bottom:20px}
 .node-choice select{min-height:44px;max-width:100%;background:var(--lime-dim);color:var(--lime);border:1px solid #4d5e36;border-radius:12px;font:inherit;font-size:13px;font-weight:600;padding:8px 10px;cursor:pointer;text-overflow:ellipsis}
 .topbar .node-choice:not([hidden])~.language-choice{margin-left:8px}
 .node-badge{position:absolute;top:12px;left:10px;z-index:5;max-width:calc(100% - 190px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 12px 6px 22px;border-radius:999px;background:rgba(51,62,36,.92) radial-gradient(circle at 11px 50%,var(--lime) 3px,transparent 4px);color:var(--lime);font-size:12px;font-weight:600;border:1px solid #4d5e36}
+/* The workspace strip spans the whole top edge; the device pill sits under it so every workspace stays tappable. */
+.screen-preview:has(.screen-workspaces:not(:empty)) .node-badge{top:66px}
 .mesh-list{display:grid;gap:8px;margin-top:10px}
 .mesh-list:empty{display:none}
 .mesh-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:14px;background:var(--surface2)}

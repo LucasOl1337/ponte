@@ -2,6 +2,14 @@
 
 All notable changes to Ponte. The project is an experimental alpha; entries describe what was built and how it was verified, not promises.
 
+## 0.1.0-alpha.55 (2026-11-25)
+
+Correções pedidas depois de usar o Ponte no notebook (tela 1920x1200 com escala 1.5).
+
+- **Toque no lugar certo em tela com escala.** O Hyprland dá o tamanho do monitor em pixels, mas a posição do cursor e o recorte do `grim -g` em unidades de layout (pixels / escala). O toque somava pixels ao layout: num monitor 1.5 o clique caía 1,5x mais longe do canto, para baixo e para a direita, e fora da tela perto das bordas. Agora o ponto é dividido pela escala do monitor (`pixelToLayout`), o zoom recorta a região certa e volta em pixels (`grim -s escala`), e o foco de workspace novo põe o cursor no centro real. No PC (escala 1) nada muda.
+- **Pílula do aparelho fora da faixa de workspaces.** Controlando outro aparelho, a pílula com o nome dele ficava por cima dos primeiros workspaces e impedia o toque neles. Com a faixa visível, a pílula desce para baixo dela.
+- Prova: teste de clique num monitor eDP-1 1920x1200 @1.5 (pixel 1500,900 → layout 1000,600) e de recorte do zoom; conferência no POCO depois da ativação.
+
 ## 0.1.0-alpha.54 (2026-11-14)
 
 Acabamento da direção Fable depois da prova no POCO X8 com a alpha.53. Só `public/` e testes.

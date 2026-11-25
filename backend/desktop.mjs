@@ -43,6 +43,19 @@ const numberIn = (value, min, max, integer = false) => {
   return value;
 };
 
+// Hyprland reports a monitor's size in pixels but its position, the cursor and
+// grim -g in layout (logical) units: a 1920x1200 panel at scale 1.5 spans
+// 1280x800 of layout. Phone coordinates are pixels, so they are divided by the
+// monitor scale before they meet the layout.
+export function monitorScale(monitor) {
+  const scale = Number(monitor?.scale);
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+export function pixelToLayout(monitor, x, y) {
+  const scale = monitorScale(monitor);
+  return { x: (Number(monitor?.x) || 0) + Math.floor(x / scale), y: (Number(monitor?.y) || 0) + Math.floor(y / scale) };
+}
+
 export function resolveLiveCapture(monitor, scale, region, { minEdge = 8 } = {}) {
   const mx = Number(monitor?.x) || 0;
   const my = Number(monitor?.y) || 0;
@@ -59,10 +72,14 @@ export function resolveLiveCapture(monitor, scale, region, { minEdge = 8 } = {})
   const h = Math.max(0, Math.min(h0, mh - y));
   const nearlyFull = w >= mw * 0.98 && h >= mh * 0.98 && x <= mw * 0.02 && y <= mh * 0.02;
   if (nearlyFull || w < minEdge || h < minEdge) return { scale, output: monitor.name, geometry: null, region: null };
+  const factor = monitorScale(monitor);
+  const lx = Math.floor(x / factor), ly = Math.floor(y / factor);
+  const lw = Math.max(1, Math.round(w / factor)), lh = Math.max(1, Math.round(h / factor));
   return {
-    scale: 1,
+    // grim -s is the output scale here, so the crop comes back in pixels.
+    scale: factor,
     output: null,
-    geometry: `${mx + x},${my + y} ${w}x${h}`,
+    geometry: `${mx + lx},${my + ly} ${lw}x${lh}`,
     region: { x, y, w, h },
   };
 }
@@ -113,7 +130,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
     const width = Number(monitor.width), height = Number(monitor.height);
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new ApiError(400, 'INVALID_MONITOR');
     numberIn(x, 0, width - 1, true); numberIn(y, 0, height - 1, true);
-    return { x: (Number(monitor.x) || 0) + x, y: (Number(monitor.y) || 0) + y };
+    return pixelToLayout(monitor, x, y);
   };
   let dragTimer;
   let dragging = false;
@@ -547,7 +564,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
           const target = workspaces.find(ws => Number(ws.id) === id);
           if (target && target.monitor !== value.monitor) throw new ApiError(409, 'WORKSPACE_MONITOR_CHANGED');
           if (!target) {
-            await placePointer({ x: (Number(monitor.x) || 0) + Math.floor(Number(monitor.width) / 2), y: (Number(monitor.y) || 0) + Math.floor(Number(monitor.height) / 2) });
+            await placePointer(pixelToLayout(monitor, Number(monitor.width) / 2, Number(monitor.height) / 2));
           }
         }
         // Hyprland 0.56+ uses Lua dispatch expressions. Only the bounded integer
@@ -696,7 +713,7 @@ export function createDesktop({ runner = runCommand, exists = commandExists, env
       monitor: selected.name,
       region: capture.region,
       capture: (captureSignal) => {
-        const args = ['-c', '-t', 'jpeg', '-q', String(quality), '-s', capture.geometry ? '1' : capture.scale.toFixed(2)];
+        const args = ['-c', '-t', 'jpeg', '-q', String(quality), '-s', capture.geometry ? String(capture.scale) : capture.scale.toFixed(2)];
         if (capture.geometry) args.push('-g', capture.geometry);
         else args.push('-o', capture.output);
         args.push('-');
